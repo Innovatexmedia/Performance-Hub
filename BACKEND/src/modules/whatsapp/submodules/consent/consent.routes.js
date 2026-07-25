@@ -4,8 +4,9 @@
  * Mounted at: whatsappRouter.use('/consent', consentRoutes)
  * → all endpoints live under /api/whatsapp/consent/...
  *
- * Route order: the static "/verify/:phoneNumber" path is declared BEFORE
- * "/:id" so Express does not treat "verify" as an :id value.
+ * Route order: static paths ("/stats", "/verify/:phoneNumber") are
+ * declared BEFORE "/:id" so Express does not treat "stats"/"verify" as an
+ * :id value.
  */
 import { Router } from 'express';
 import { authenticate } from '../../../../shared/middlewares/auth.middleware.js';
@@ -27,7 +28,12 @@ const router = Router();
 
 router.use(withContext);
 
-// ── Verify (static path — MUST be before /:id) ────────────────────────────────
+// ── Static paths (MUST be before /:id) ─────────────────────────────────────────
+router.get('/stats',
+  authenticate, requireRole(ROLE_MIN.READ),
+  consentController.stats,
+);
+
 router.get('/verify/:phoneNumber',
   authenticate, requireRole(ROLE_MIN.VERIFY),
   validateVerify, consentController.verify,

@@ -106,19 +106,17 @@ export const templateApprovalRepository = {
     );
   },
 
-  submitToProvider(tenantId, id, { now, historyEntry }) {
-    return transition(
-      tenantId,
-      id,
-      {
-        approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
-        status: TEMPLATE_STATUS.SUBMITTED,
-        submittedForApprovalAt: now,
-        'providerMetadata.providerStatus': PROVIDER_STATUS.UNDER_REVIEW,
-        isActive: false,
-      },
-      historyEntry,
-    );
+  submitToProvider(tenantId, id, { now, historyEntry, providerTemplateId, providerStatus, rawResponse }) {
+    const set = {
+      approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
+      status: TEMPLATE_STATUS.SUBMITTED,
+      submittedForApprovalAt: now,
+      'providerMetadata.providerStatus': providerStatus || PROVIDER_STATUS.UNDER_REVIEW,
+      isActive: false,
+    };
+    if (providerTemplateId) set['providerMetadata.providerTemplateId'] = providerTemplateId;
+    if (rawResponse) set['providerMetadata.rawResponse'] = rawResponse;
+    return transition(tenantId, id, set, historyEntry);
   },
 
   providerApproved(tenantId, id, { now, providerTemplateId, historyEntry }) {

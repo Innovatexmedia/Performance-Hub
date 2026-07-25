@@ -10,12 +10,30 @@ export const MESSAGE_DIRECTION_VALUES = Object.freeze(
   Object.values(MESSAGE_DIRECTION),
 );
 
+/**
+ * MessageStatus (12) -- SOURCE: DEVELOPER_HANDOFF.md entity list, exact
+ * values and Title Case. Previously only had 5 lowercase values
+ * (queued/sent/delivered/read/failed) -- missing Draft, Pending Approval,
+ * Scheduled, Replied, Cancelled, and critically Blocked by Opt-Out /
+ * Blocked by Template Not Approved, both required for the opt-out guard
+ * DEVELOPER_HANDOFF.md's action table explicitly names for sendMessage.
+ * Every reference to these values goes through this constant object
+ * (MESSAGE_STATUS.SENT etc.), never a hardcoded string literal -- confirmed
+ * by grepping every consumer -- so realigning the values here is safe.
+ */
 export const MESSAGE_STATUS = Object.freeze({
-  QUEUED: 'queued',
-  SENT: 'sent',
-  DELIVERED: 'delivered',
-  READ: 'read',
-  FAILED: 'failed',
+  DRAFT: 'Draft',
+  PENDING_APPROVAL: 'Pending Approval',
+  SCHEDULED: 'Scheduled',
+  QUEUED: 'Queued',
+  SENT: 'Sent',
+  DELIVERED: 'Delivered',
+  READ: 'Read',
+  REPLIED: 'Replied',
+  FAILED: 'Failed',
+  CANCELLED: 'Cancelled',
+  BLOCKED_BY_OPT_OUT: 'Blocked by Opt-Out',
+  BLOCKED_BY_TEMPLATE_NOT_APPROVED: 'Blocked by Template Not Approved',
 });
 export const MESSAGE_STATUS_VALUES = Object.freeze(Object.values(MESSAGE_STATUS));
 

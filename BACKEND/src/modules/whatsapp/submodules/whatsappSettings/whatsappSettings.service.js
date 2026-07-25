@@ -5,7 +5,20 @@
  *   • Create / get / update settings (one document per tenant)
  *   • Section-specific updates (provider, business-profile, messaging, …)
  *   • Provider configuration validation
- *   • Connection test (simulated; real provider ping is pluggable)
+ *   • WhatsApp Mode (panelMode) governance:
+ *       - NATIVE      -> provider is locked server-side to META_CLOUD.
+ *       - THIRD_PARTY -> provider is a user choice among THIRD_PARTY_PROVIDER_VALUES
+ *                        (architecture only -- no working adapter yet).
+ *   • providerMode governance: NEVER accepted from a client request. It is
+ *     derived exclusively by the backend --
+ *       - reset to SIMULATION ("unverified") whenever `provider` changes
+ *       - flipped to LIVE only inside testConnection(), only after a real
+ *         successful Meta Graph API response
+ *     This is what templateApproval.service.js's submit-to-provider gate
+ *     relies on to decide whether to actually call Meta -- see
+ *     `provider === META_CLOUD && providerMode !== 'SIMULATION'` there.
+ *   • Connection test (real Graph API call for META_CLOUD; "coming soon"
+ *     for every other provider, which has no adapter implemented yet)
  *   • Synchronisation stamps
  *   • Reset to defaults
  *   • Credential stripping — accessToken / appSecret / verifyToken are NEVER
@@ -14,12 +27,15 @@
  *     obtain credentials WITHOUT going through the HTTP layer
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import config from '../../../../config/config.js';
 import { whatsappSettingsRepository } from './whatsappSettings.repository.js';
 import {
   DEFAULT_SETTINGS,
   SENSITIVE_FIELDS,
   PROVIDER,
   PROVIDER_MODE,
+  PANEL_MODE,
+  THIRD_PARTY_PROVIDER_VALUES,
   GRAPH_API_VERSION_PATTERN,
   SYNC_ENTITY,
 } from './whatsappSettings.constants.js';
@@ -77,12 +93,28 @@ function sanitize(doc) {
   const o = doc.toObject ? doc.toObject() : { ...doc };
   const { _id, ...rest } = o;
   const safe = { id: String(_id ?? o.id), ...rest };
+
+  // Capture presence flags BEFORE stripping. `safe` is built with a
+  // shallow spread of `o` above -- nested objects are NOT cloned, so
+  // safe.meta and o.meta are literally the same object in memory.
+  // unsetPath() below does `delete cur[key]`, which mutates that shared
+  // object in place. Computing hasAccessToken/hasAppSecret/hasVerifyToken
+  // from o.meta AFTER that delete (as this used to do) reads a field that
+  // was just wiped a few lines earlier -- so these flags were always
+  // `false`, on every response, regardless of whether a token was ever
+  // actually saved. That's what made the Settings UI perpetually ask for
+  // credentials that were genuinely already persisted in the database.
+  const hasAccessToken = !!(o.meta && o.meta.accessToken);
+  const hasAppSecret   = !!(o.meta && o.meta.appSecret);
+  const hasVerifyToken = !!(o.meta && o.meta.verifyToken);
+
   for (const path of SENSITIVE_FIELDS) unsetPath(safe, path);
+
   // Surface a boolean so the UI knows a token exists without exposing it.
   if (safe.meta) {
-    safe.meta.hasAccessToken = !!(o.meta && o.meta.accessToken);
-    safe.meta.hasAppSecret   = !!(o.meta && o.meta.appSecret);
-    safe.meta.hasVerifyToken = !!(o.meta && o.meta.verifyToken);
+    safe.meta.hasAccessToken = hasAccessToken;
+    safe.meta.hasAppSecret   = hasAppSecret;
+    safe.meta.hasVerifyToken = hasVerifyToken;
   }
   return safe;
 }
@@ -96,6 +128,75 @@ function validateProviderConfig(provider, meta = {}) {
   }
 }
 
+/**
+ * The ONE place `provider` / `panelMode` / `providerMode` are ever resolved.
+ * Used by both the generic PATCH /settings (updateSettings) and the
+ * PATCH /settings/provider section endpoint (updateSection), so there is no
+ * second path a client can use to smuggle in a provider or providerMode
+ * value the backend didn't derive itself.
+ *
+ * Rules (Architecture Decision, Option B):
+ *   - providerMode is NEVER read from `patch`. Full stop. It's only ever
+ *     written here as a *reset* (see below) or inside testConnection().
+ *   - panelMode NATIVE  -> provider is forced to META_CLOUD. An explicit,
+ *     conflicting `patch.provider` is a 400, not a silent override --
+ *     that's a client bug (locked dropdown sent an unexpected value), not
+ *     something to paper over.
+ *   - panelMode THIRD_PARTY -> provider may be set to any of
+ *     THIRD_PARTY_PROVIDER_VALUES. If omitted, the existing provider is
+ *     left as-is (it may still legitimately be META_CLOUD until the user
+ *     actively picks a third-party provider).
+ *   - Whenever the resolved `provider` differs from the existing one
+ *     (including as a side effect of a panelMode flip), providerMode resets
+ *     to SIMULATION ("unverified") and the meta connection-state fields
+ *     reset too -- a previous provider's verified/live state must never
+ *     silently carry over to a different provider.
+ *
+ * Returns a flat object of ONLY the fields that actually need to change
+ * (dot-notation for nested meta.* keys), suitable for merging into a Mongo
+ * $set. Returns {} if nothing provider-related changed.
+ */
+function resolveProviderFields(existing, patch = {}) {
+  const result = {};
+
+  const requestedPanelMode = patch.panelMode;
+  const resolvedPanelMode = requestedPanelMode || existing.panelMode || PANEL_MODE.NATIVE;
+  if (requestedPanelMode && requestedPanelMode !== existing.panelMode) {
+    result.panelMode = requestedPanelMode;
+  }
+
+  let resolvedProvider = existing.provider;
+
+  if (resolvedPanelMode === PANEL_MODE.NATIVE) {
+    if (patch.provider && patch.provider !== PROVIDER.META_CLOUD) {
+      throw new AppError(
+        400,
+        'Provider is fixed to Native Meta Cloud API while WhatsApp Mode is Native InnovateX Panel.',
+      );
+    }
+    resolvedProvider = PROVIDER.META_CLOUD;
+  } else if (resolvedPanelMode === PANEL_MODE.THIRD_PARTY) {
+    if (patch.provider) {
+      if (!THIRD_PARTY_PROVIDER_VALUES.includes(patch.provider)) {
+        throw new AppError(400, `provider must be one of: ${THIRD_PARTY_PROVIDER_VALUES.join(', ')}`);
+      }
+      resolvedProvider = patch.provider;
+    }
+    // else: leave existing.provider as-is (may still be META_CLOUD if the
+    // tenant just switched into THIRD_PARTY mode and hasn't picked yet).
+  }
+
+  if (resolvedProvider !== existing.provider) {
+    result.provider = resolvedProvider;
+    result.providerMode = PROVIDER_MODE.SIMULATION;
+    result['meta.connected'] = false;
+    result['meta.connectedAt'] = null;
+    result['meta.lastVerifiedAt'] = null;
+  }
+
+  return result;
+}
+
 // ── Service ────────────────────────────────────────────────────────────────────
 
 export const whatsappSettingsService = {
@@ -107,10 +208,27 @@ export const whatsappSettingsService = {
       throw new AppError(409, 'Settings already exist for this tenant. Use PATCH to update.');
     }
 
-    if (data.provider) validateProviderConfig(data.provider, data.meta || {});
+    // providerMode is never client-settable, even on create.
+    const { providerMode: _ignoredProviderMode, ...safeData } = data;
+
+    if (safeData.provider) validateProviderConfig(safeData.provider, safeData.meta || {});
 
     // Deep-merge supplied values onto defaults so omitted fields are filled.
-    const merged = deepMerge(DEFAULT_SETTINGS, data);
+    const merged = deepMerge(DEFAULT_SETTINGS, safeData);
+    // Re-derive provider/panelMode consistency the same way any later PATCH
+    // would (e.g. a caller explicitly creating with panelMode: THIRD_PARTY
+    // and no provider should not end up with provider: META_CLOUD + a live
+    // providerMode leaking through from DEFAULT_SETTINGS).
+    const providerFields = resolveProviderFields(DEFAULT_SETTINGS, {
+      provider: safeData.provider,
+      panelMode: safeData.panelMode,
+    });
+    Object.assign(merged, providerFields, {
+      provider: providerFields.provider ?? merged.provider,
+      panelMode: providerFields.panelMode ?? merged.panelMode,
+      providerMode: providerFields.providerMode ?? DEFAULT_SETTINGS.providerMode,
+    });
+
     const created = await whatsappSettingsRepository.create({
       ...merged,
       tenantId:  ctx.tenantId,
@@ -134,16 +252,40 @@ export const whatsappSettingsService = {
         updatedBy: ctx.userId,
       });
     }
-    return sanitize(settings);
+    const safe = sanitize(settings);
+    // Computed fresh on every read, NOT the stored meta.webhookUrl value --
+    // this is OUR receiving endpoint, not something a tenant should type
+    // in. Always reflects whatever API_BASE_URL is currently configured,
+    // so it can't go stale if the backend's public URL changes (e.g. a new
+    // ngrok tunnel after a restart).
+    safe.meta.webhookUrl = `${config.API_BASE_URL}/api/whatsapp/webhooks/meta/${ctx.tenantId}`;
+    return safe;
   },
 
   // ── Generic update (whole document, deep) ──────────────────────────────────
 
   async updateSettings(ctx, patch = {}) {
-    await this._ensureExists(ctx);
-    if (patch.provider) validateProviderConfig(patch.provider, patch.meta || {});
+    const existing = await this._ensureExists(ctx);
 
-    const setOps = flatten(patch);
+    // provider / panelMode go through resolveProviderFields exclusively;
+    // providerMode is never accepted from the client under any endpoint.
+    const {
+      providerMode: _ignoredProviderMode,
+      provider: _ignoredProvider,
+      panelMode: _ignoredPanelMode,
+      ...restPatch
+    } = patch;
+
+    const providerFields = resolveProviderFields(existing, patch);
+    const finalProvider = providerFields.provider ?? existing.provider;
+    if (patch.provider || patch.meta) {
+      if (finalProvider === PROVIDER.META_CLOUD) {
+        validateProviderConfig(finalProvider, patch.meta || {});
+      }
+    }
+
+    const setOps = flatten(restPatch);
+    Object.assign(setOps, providerFields); // provider-derived fields win over anything in restPatch
     setOps.updatedBy = ctx.userId;
     const updated = await whatsappSettingsRepository.update(ctx.tenantId, setOps);
     return sanitize(updated);
@@ -152,15 +294,34 @@ export const whatsappSettingsService = {
   // ── Section-specific updates ───────────────────────────────────────────────
 
   async updateSection(ctx, section, sectionPatch = {}) {
-    await this._ensureExists(ctx);
+    const existing = await this._ensureExists(ctx);
 
-    // Provider section can change top-level provider + providerMode + meta.
+    // Provider section can change top-level provider + panelMode + meta.
+    // providerMode is deliberately NOT destructured from sectionPatch here --
+    // it is never accepted from a client, only derived (see
+    // resolveProviderFields) or set inside testConnection().
     if (section === 'provider') {
-      const { provider, providerMode, meta } = sectionPatch;
-      if (provider) validateProviderConfig(provider, meta || {});
-      const setOps = {};
-      if (provider)     setOps.provider = provider;
-      if (providerMode) setOps.providerMode = providerMode;
+      const { meta } = sectionPatch;
+
+      const providerFields = resolveProviderFields(existing, sectionPatch);
+      const finalProvider = providerFields.provider ?? existing.provider;
+
+      if (finalProvider === PROVIDER.META_CLOUD && meta) {
+        validateProviderConfig(finalProvider, meta);
+      }
+
+      // Duplicate-connection prevention: a phoneNumberId can only belong to
+      // ONE tenant. The unique partial index on the model is the final
+      // guarantee (holds even under a race), but this pre-check gives a
+      // clear, friendly error instead of a raw MongoDB E11000 leaking out.
+      if (meta?.phoneNumberId) {
+        const dup = await whatsappSettingsRepository.findByPhoneNumberId(meta.phoneNumberId, ctx.tenantId);
+        if (dup) {
+          throw new AppError(409, 'This WhatsApp number is already connected to another workspace. Each number can only be connected to one workspace at a time.');
+        }
+      }
+
+      const setOps = { ...providerFields };
       if (meta) Object.assign(setOps, flatten({ meta }));
       setOps.updatedBy = ctx.userId;
       const updated = await whatsappSettingsRepository.update(ctx.tenantId, setOps);
@@ -177,8 +338,11 @@ export const whatsappSettingsService = {
   // ── Connection test ────────────────────────────────────────────────────────
 
   /**
-   * Simulated connection test. For a real Meta Cloud ping, replace the
-   * simulated block with a Graph API call using the stored credentials.
+   * Real Graph API ping for META_CLOUD -- the only implemented provider.
+   * On success this is the SOLE place providerMode is ever set to LIVE.
+   * Every other provider is a real, stored enum value with no adapter
+   * implemented yet, so this returns a clear "coming soon" error rather
+   * than faking a successful connection.
    */
   async testConnection(ctx) {
     const settings = await whatsappSettingsRepository.findByTenant(ctx.tenantId);
@@ -186,45 +350,60 @@ export const whatsappSettingsService = {
 
     const { provider, meta } = settings;
 
-    if (provider === PROVIDER.SIMULATION) {
-      const now = new Date();
-      await whatsappSettingsRepository.update(ctx.tenantId, {
-        'meta.connected': true,
-        'meta.connectedAt': now,
-        'meta.lastVerifiedAt': now,
-        updatedBy: ctx.userId,
-      });
-      return { connected: true, provider, mode: settings.providerMode, message: 'Simulation provider is always reachable' };
+    if (provider !== PROVIDER.META_CLOUD) {
+      throw new AppError(
+        501,
+        `${provider} isn't connected yet — support for this provider is coming soon. Native Meta Cloud API is the only fully working integration right now.`,
+      );
     }
 
-    if (provider === PROVIDER.META_CLOUD) {
-      const missing = [];
-      if (!meta?.phoneNumberId)     missing.push('phoneNumberId');
-      if (!meta?.businessAccountId) missing.push('businessAccountId');
-      if (!meta?.accessToken)       missing.push('accessToken');
-      if (missing.length) {
-        throw new AppError(400, `Cannot test connection — missing: ${missing.join(', ')}`);
-      }
-      // Future: real Graph API verification call here.
-      const now = new Date();
-      await whatsappSettingsRepository.update(ctx.tenantId, {
-        'meta.connected': true,
-        'meta.connectedAt': now,
-        'meta.lastVerifiedAt': now,
-        updatedBy: ctx.userId,
-      });
-      return { connected: true, provider, message: 'Credentials present — verification stamped (live ping pluggable)' };
+    const missing = [];
+    if (!meta?.phoneNumberId)     missing.push('phoneNumberId');
+    if (!meta?.businessAccountId) missing.push('businessAccountId');
+    if (!meta?.accessToken)       missing.push('accessToken');
+    if (missing.length) {
+      throw new AppError(400, `Cannot test connection — missing: ${missing.join(', ')}`);
     }
 
-    // Other providers: presence check on access token.
-    if (!meta?.accessToken) {
-      throw new AppError(400, `Cannot test connection — ${provider} requires an accessToken`);
+    const graphApiVersion = meta.graphApiVersion || 'v21.0';
+    const url = `https://graph.facebook.com/${graphApiVersion}/${meta.phoneNumberId}?fields=display_phone_number,verified_name`;
+
+    let graphResponse;
+    try {
+      graphResponse = await fetch(url, {
+        headers: { Authorization: `Bearer ${meta.accessToken}` },
+      });
+    } catch (networkError) {
+      throw new AppError(502, `Could not reach Meta's Graph API — ${networkError.message}`);
     }
+
+    const graphJson = await graphResponse.json().catch(() => ({}));
+
+    if (!graphResponse.ok) {
+      const metaMessage = graphJson?.error?.message || `HTTP ${graphResponse.status}`;
+      throw new AppError(400, `Meta rejected these credentials — ${metaMessage}`);
+    }
+
     const now = new Date();
     await whatsappSettingsRepository.update(ctx.tenantId, {
-      'meta.connected': true, 'meta.lastVerifiedAt': now, updatedBy: ctx.userId,
+      'meta.connected': true,
+      'meta.connectedAt': now,
+      'meta.lastVerifiedAt': now,
+      'meta.displayPhoneNumber': graphJson.display_phone_number || '',
+      'meta.verifiedName': graphJson.verified_name || '',
+      // The ONLY line in the entire codebase that sets providerMode to LIVE.
+      providerMode: PROVIDER_MODE.LIVE,
+      updatedBy: ctx.userId,
     });
-    return { connected: true, provider, message: 'Credentials present' };
+
+    return {
+      connected: true,
+      provider,
+      mode: PROVIDER_MODE.LIVE,
+      displayPhoneNumber: graphJson.display_phone_number || '',
+      verifiedName: graphJson.verified_name || '',
+      message: 'Connected — credentials verified against Meta\'s Graph API. This integration is now live.',
+    };
   },
 
   // ── Synchronisation ────────────────────────────────────────────────────────
@@ -271,8 +450,12 @@ export const whatsappSettingsService = {
 
   /**
    * Returns provider configuration INCLUDING credentials for internal use by
-   * other modules (Campaigns, Broadcasts, Messages, …). This is the single
-   * source of truth so no module hardcodes credentials.
+   * other modules (Campaigns, Broadcasts, Messages, Template Approval, …).
+   * This is the single source of truth so no module hardcodes credentials.
+   *
+   * `providerMode` here is trustworthy precisely because nothing but
+   * testConnection() (and the reset-on-provider-change logic above) is ever
+   * allowed to write it.
    *
    * NEVER pass the result of this method directly into an HTTP response.
    */
@@ -283,6 +466,7 @@ export const whatsappSettingsService = {
     return {
       provider:     o.provider,
       providerMode: o.providerMode,
+      panelMode:    o.panelMode,
       meta:         o.meta,        // full credentials — internal callers only
       messaging:    o.messaging,
       limits:       o.limits,
@@ -292,16 +476,17 @@ export const whatsappSettingsService = {
 
   // ── Internal ───────────────────────────────────────────────────────────────
 
+  /** Returns the tenant's settings doc, auto-provisioning one if missing. */
   async _ensureExists(ctx) {
-    const existing = await whatsappSettingsRepository.findByTenant(ctx.tenantId);
+    let existing = await whatsappSettingsRepository.findByTenant(ctx.tenantId);
     if (!existing) {
-      // Auto-provision so PATCH on a fresh tenant doesn't 404.
-      await whatsappSettingsRepository.create({
+      existing = await whatsappSettingsRepository.create({
         ...DEFAULT_SETTINGS,
         tenantId:  ctx.tenantId,
         createdBy: ctx.userId,
         updatedBy: ctx.userId,
       });
     }
+    return existing;
   },
 };

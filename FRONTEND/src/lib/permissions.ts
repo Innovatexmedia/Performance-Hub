@@ -97,6 +97,7 @@ export const qualificationPermissions = {
 };
 
 /**
+/**
  * Campaign (marketing) permissions -- mirrors the SPEC-TRIMMED
  * campaign.routes.js exactly: only POST / (create) requires a role floor
  * (tenant_admin+). Update/delete/regenerate-link do not exist as routes
@@ -150,6 +151,22 @@ export const genericTemplatePermissions = {
   canEditOrDelete: (role: AuthRole | null | undefined, scope: 'tenant' | 'global') =>
     scope === 'global' ? role === 'super_admin' : atLeast(role, 'tenant_admin'),
   canDuplicate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+};
+
+/**
+ * Consent permissions -- mirrors consent.constants.js's ROLE_MIN exactly
+ * (see consent.routes.js, which applies each floor per-endpoint):
+ *
+ *   CREATE, READ, VERIFY, OPT_IN, OPT_OUT, HISTORY -> sales_user+
+ *   BLOCK, UNBLOCK                                  -> tenant_admin+
+ */
+export const consentPermissions = {
+  canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canOptIn: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canOptOut: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canBlock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+  canUnblock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+};
 };
 
 /**

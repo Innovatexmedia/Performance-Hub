@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { authApi } from '@/lib/authApi';
 import { ApiError, setAuthHandlers } from '@/lib/apiClient';
+import { connectSocket, disconnectSocket } from '@/lib/socket';
 import type { AuthUser, LoginPayload, RegisterPayload } from '@/types/auth';
 
 export type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated';
@@ -43,6 +44,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const { user, accessToken } = await authApi.refresh();
       set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocket(() => useAuthStore.getState().accessToken);
     } catch {
       // No valid session cookie -- this is the normal logged-out state, not an error.
       set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
@@ -54,6 +56,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const { user, accessToken } = await authApi.login(payload);
       set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocket(() => useAuthStore.getState().accessToken);
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to sign in. Please try again.';
@@ -67,6 +70,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     try {
       const { user, accessToken } = await authApi.register(payload);
       set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocket(() => useAuthStore.getState().accessToken);
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to create account. Please try again.';
@@ -81,6 +85,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     } catch {
       // Best-effort -- clear local session regardless of network/server errors.
     }
+    disconnectSocket();
     set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
   },
 
@@ -92,5 +97,8 @@ export const useAuthStore = create<AuthState>((set) => ({
 setAuthHandlers({
   getAccessToken: () => useAuthStore.getState().accessToken,
   onTokenRefreshed: (accessToken) => useAuthStore.setState({ accessToken }),
-  onRefreshFailed: () => useAuthStore.setState({ user: null, accessToken: null, status: 'unauthenticated' }),
+  onRefreshFailed: () => {
+    disconnectSocket();
+    useAuthStore.setState({ user: null, accessToken: null, status: 'unauthenticated' });
+  },
 });

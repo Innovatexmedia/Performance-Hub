@@ -4,6 +4,13 @@ import { TEMPLATE_STATUS } from './templates.constants.js';
 /**
  * Template repository — the only layer that touches the WhatsAppTemplate
  * collection. Every query is tenant-scoped.
+ *
+ * NOTE: there used to be an `updateApprovalStatus` method here, called only
+ * by templates.service.js's now-deleted `updateApprovalState`. That was the
+ * ungated write path for `approvalStatus` -- removed along with its only
+ * caller. All approval-status writes now go exclusively through
+ * templateApprovalRepository (templateApproval.repository.js), which is
+ * the only layer templateApproval.service.js's guarded transitions use.
  */
 export const templatesRepository = {
   createTemplate(data) {
@@ -93,16 +100,6 @@ export const templatesRepository = {
     return WhatsAppTemplate.findOneAndUpdate(
       { _id: id, tenantId },
       { $inc: { usageCount: 1 }, $set: { lastUsedAt: new Date() } },
-      { new: true },
-    );
-  },
-
-  updateApprovalStatus(tenantId, id, approvalStatus, { set = {}, historyEntry } = {}) {
-    const update = { $set: { approvalStatus, ...set } };
-    if (historyEntry) update.$push = { approvalHistory: historyEntry };
-    return WhatsAppTemplate.findOneAndUpdate(
-      { _id: id, tenantId },
-      update,
       { new: true },
     );
   },

@@ -11,6 +11,8 @@ import {
   PROVIDER,
   PROVIDER_MODE_VALUES,
   PROVIDER_MODE,
+  PANEL_MODE_VALUES,
+  PANEL_MODE,
   AI_PROVIDER_VALUES,
   AI_PROVIDER,
   BUSINESS_VERTICAL_VALUES,
@@ -32,6 +34,11 @@ const metaSchema = new Schema(
     connected:         { type: Boolean, default: false },
     connectedAt:       { type: Date, default: null },
     lastVerifiedAt:    { type: Date, default: null },
+    // Populated from Meta's real Graph API response during Test Connection
+    // -- NOT a user-typed field. Confirms the phoneNumberId actually
+    // resolves to a real, working WhatsApp Business number.
+    displayPhoneNumber: { type: String, default: '' },
+    verifiedName:       { type: String, default: '' },
   },
   { _id: false },
 );
@@ -152,6 +159,7 @@ const limitsSchema = new Schema(
 
 const advancedSchema = new Schema(
   {
+    // DEPRECATED -- see whatsappSettings.constants.js DEFAULT_SETTINGS.advanced.
     simulationMode:  { type: Boolean, default: true },
     developerMode:   { type: Boolean, default: false },
     debugMode:       { type: Boolean, default: false },
@@ -164,8 +172,14 @@ const whatsappSettingsSchema = new Schema(
   {
     tenantId: { type: String, required: true, unique: true },
 
-    provider:     { type: String, enum: PROVIDER_VALUES, default: PROVIDER.SIMULATION },
+    // Schema-level defaults kept in sync with DEFAULT_SETTINGS: panelMode
+    // NATIVE means provider is automatically META_CLOUD (Architecture
+    // Decision, Option B). providerMode starts "unverified" (SIMULATION)
+    // until a real Test Connection succeeds -- it is never client-settable
+    // (enforced in whatsappSettings.service.js / .validator.js, not here).
+    provider:     { type: String, enum: PROVIDER_VALUES, default: PROVIDER.META_CLOUD },
     providerMode: { type: String, enum: PROVIDER_MODE_VALUES, default: PROVIDER_MODE.SIMULATION },
+    panelMode:    { type: String, enum: PANEL_MODE_VALUES, default: PANEL_MODE.NATIVE },
 
     meta:            { type: metaSchema, default: () => ({}) },
     businessProfile: { type: businessProfileSchema, default: () => ({}) },
@@ -187,5 +201,25 @@ const whatsappSettingsSchema = new Schema(
 
 // One settings doc per tenant.
 whatsappSettingsSchema.index({ tenantId: 1 }, { unique: true });
+
+// Prevent two tenants from connecting the SAME WhatsApp Business phone
+// number -- a given phoneNumberId can only route to one tenant's inbox,
+// otherwise inbound messages would be ambiguous and one tenant could
+// effectively hijack another's number.
+//
+// partialFilterExpression, NOT sparse: meta.phoneNumberId defaults to ''
+// (empty string), not null/undefined. A sparse index only excludes
+// documents where the field is MISSING -- every unconfigured tenant would
+// still have the literal value '', so a plain sparse+unique index would
+// let the FIRST unconfigured tenant through and then fail for every
+// tenant created after it. The partial filter explicitly only enforces
+// uniqueness on documents where a real, non-empty phoneNumberId is set.
+whatsappSettingsSchema.index(
+  { 'meta.phoneNumberId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: { 'meta.phoneNumberId': { $type: 'string', $ne: '' } },
+  },
+);
 
 export const WhatsAppSettings = mongoose.model('WhatsAppSettings', whatsappSettingsSchema);

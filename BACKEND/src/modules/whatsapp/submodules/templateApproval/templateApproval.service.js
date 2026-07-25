@@ -6,10 +6,13 @@
  * WhatsAppTemplate model via templateApprovalRepository.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { emitToTenant } from '../../../../realtime/socket.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE } from '../../../leads/activities/activity.model.js';
-import { ROLES } from '../../../auth/constants/roles.js';
+import { hasRole, ROLES } from '../../../auth/constants/roles.js';
 import { templateApprovalRepository } from './templateApproval.repository.js';
+import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
+import { PROVIDER, PROVIDER_STATUS } from '../templates/templates.constants.js';
 import {
   APPROVAL_STATUS,
   APPROVAL_ACTION,
@@ -45,6 +48,135 @@ async function logActivity(ctx, template, type, message, meta = {}) {
   );
 }
 
+/**
+ * Meta's real Template API only supports 3 categories -- our model has 10
+ * (BOOKING, PAYMENT, FOLLOW_UP, REMINDER, SUPPORT, SALES, CUSTOM don't
+ * exist on Meta's side at all). Non-Meta categories fall back to UTILITY,
+ * Meta's generic catch-all -- the ORIGINAL category stays as-is in our own
+ * database for internal organization, only the submission payload maps it.
+ */
+function toMetaCategory(category) {
+  if (category === 'MARKETING' || category === 'UTILITY' || category === 'AUTHENTICATION') return category;
+  return 'UTILITY';
+}
+
+/**
+ * Meta's real template `name` field only accepts lowercase letters,
+ * digits, and underscores -- NOT hyphens, spaces, or uppercase. Our
+ * internal `slug` (templates.service.js#slugify) is hyphen-separated
+ * (e.g. "innovatex-media"), which Meta's Graph API rejects outright as an
+ * "Invalid parameter" on the `name` field. Rather than changing slug
+ * generation (which also drives URL routing and uniqueness checks
+ * elsewhere), this derives a separate, Meta-safe name just for the
+ * submission payload.
+ */
+function toMetaTemplateName(slug) {
+  return (
+    String(slug || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 512) || 'template'
+  );
+}
+
+function buildMetaComponents(template) {
+  const components = [];
+
+  if (template.header?.type && template.header.type !== 'NONE') {
+    if (template.header.type === 'TEXT') {
+      components.push({ type: 'HEADER', format: 'TEXT', text: template.header.text || '' });
+    } else {
+      // IMAGE/VIDEO/DOCUMENT headers require an already-uploaded Meta media
+      // handle, not a raw mediaUrl -- that's a separate media-upload flow
+      // this integration doesn't implement yet. Submitting a non-text
+      // header would fail against Meta's real API, so it's intentionally
+      // left out of the payload rather than sending something Meta would
+      // reject anyway.
+      components.push({ type: 'HEADER', format: template.header.type, example: undefined });
+    }
+  }
+
+  components.push({ type: 'BODY', text: template.body });
+
+  if (template.footer) {
+    components.push({ type: 'FOOTER', text: template.footer });
+  }
+
+  if (Array.isArray(template.buttons) && template.buttons.length > 0) {
+    components.push({
+      type: 'BUTTONS',
+      buttons: template.buttons.map((b) => {
+        const base = { type: b.type, text: b.text };
+        if (b.type === 'URL') return { ...base, url: b.value };
+        if (b.type === 'PHONE_NUMBER') return { ...base, phone_number: b.value };
+        if (b.type === 'COPY_CODE') return { ...base, example: [b.value] };
+        return base; // QUICK_REPLY, FLOW, CUSTOM -- no extra field
+      }),
+    });
+  }
+
+  return components;
+}
+
+/**
+ * submitTemplateToMeta -- the real Graph API call. Returns
+ * { providerTemplateId, metaStatus, rawResponse } on success, or throws
+ * a clear AppError on failure (invalid credentials, Meta rejecting the
+ * payload shape, name collision, etc.) -- never silently swallowed.
+ */
+async function submitTemplateToMeta(ctx, template) {
+  const config = await whatsappSettingsService.getProviderConfig(ctx);
+  const { accessToken, businessAccountId, graphApiVersion = 'v21.0' } = config?.meta || {};
+
+  if (!accessToken || !businessAccountId) {
+    throw new AppError(400, 'WhatsApp is not connected to Meta yet -- configure it in WhatsApp Settings before submitting templates.');
+  }
+
+  const payload = {
+    name: toMetaTemplateName(template.slug), // was `template.slug` directly -- hyphens made Meta reject every submission
+    category: toMetaCategory(template.category),
+    language: template.languageCode,
+    components: buildMetaComponents(template),
+  };
+
+  const url = `https://graph.facebook.com/${graphApiVersion}/${businessAccountId}/message_templates`;
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (networkError) {
+    throw new AppError(502, `Could not reach Meta's Graph API -- ${networkError.message}`);
+  }
+
+  const json = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    // Meta's top-level error.message is often generic ("Invalid parameter").
+    // error_user_msg / error_data.details usually name the actual offending
+    // field -- surface those when present so failures are self-diagnosing
+    // instead of needing a manual trace every time.
+    const metaMessage =
+      json?.error?.error_user_msg ||
+      json?.error?.error_data?.details ||
+      json?.error?.message ||
+      `HTTP ${response.status}`;
+    throw new AppError(400, `Meta rejected this template -- ${metaMessage}`);
+  }
+
+  return {
+    providerTemplateId: json.id || null,
+    // Meta returns 'status' on the created template resource -- typically
+    // "PENDING" while under their real review.
+    metaStatus: json.status === 'APPROVED' ? PROVIDER_STATUS.APPROVED : PROVIDER_STATUS.UNDER_REVIEW,
+    rawResponse: json,
+  };
+}
+
 export const templateApprovalService = {
   /** Throws unless `to` is a permitted successor of `from`. */
   validateTransition(fromStatus, toStatus) {
@@ -54,8 +186,17 @@ export const templateApprovalService = {
     }
   },
 
-  /** Throws if the approver is the same user who submitted the template. */
+  /**
+   * Throws if the approver is the same user who submitted the template --
+   * EXCEPT for tenant_owner (and super_admin), who are explicitly allowed
+   * to do every step of the workflow per the role table (a solo owner
+   * running their own tenant submits AND approves their own templates;
+   * there's no one else to do it). The separation-of-duties rule still
+   * applies at the manager tier (tenant_admin / sales_manager /
+   * marketing_manager) -- a manager should still get a second reviewer.
+   */
   validateApprover(template, ctx) {
+    if (hasRole(ctx.role, ROLES.TENANT_OWNER)) return;
     if (template.submittedBy && ctx.userId && String(template.submittedBy) === String(ctx.userId)) {
       throw new AppError(403, 'Approver must be different from the submitter');
     }
@@ -185,13 +326,28 @@ export const templateApprovalService = {
 
     const now = new Date();
     const entry = buildHistoryEntry(from, to, APPROVAL_ACTION.SUBMIT_TO_PROVIDER, '', ctx.userId, now);
+
+    // Only attempt a real Meta submission when the tenant is actually
+    // configured for it -- same fallback pattern as resolveProvider() on
+    // the messaging side. A tenant still in Simulation Mode (or using a
+    // different provider) keeps the old local-only behavior; nothing here
+    // silently pretends a submission happened when it didn't.
+    let metaResult = null;
+    const settingsConfig = await whatsappSettingsService.getProviderConfig(ctx).catch(() => null);
+    if (settingsConfig?.provider === PROVIDER.META_CLOUD && settingsConfig?.providerMode !== 'SIMULATION') {
+      metaResult = await submitTemplateToMeta(ctx, template); // throws with a clear message on real failure -- not caught here on purpose
+    }
+
     const updated = await templateApprovalRepository.submitToProvider(ctx.tenantId, id, {
       now,
       historyEntry: entry,
+      providerTemplateId: metaResult?.providerTemplateId,
+      providerStatus: metaResult?.metaStatus,
+      rawResponse: metaResult?.rawResponse,
     });
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_SUBMITTED_TO_PROVIDER,
-      'Template submitted to provider', { from, to });
+      metaResult ? 'Template submitted to Meta for real review' : 'Template submitted to provider (simulated)', { from, to });
     return toTemplateDTO(updated);
   },
 
@@ -232,6 +388,14 @@ export const templateApprovalService = {
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_PROVIDER_APPROVED,
       'Template approved by provider', { from, to, providerTemplateId: payload.providerTemplateId });
+
+    // Push to any open Template Approval tab for this tenant so it updates
+    // without a manual refresh -- same channel message.service.js already
+    // uses for the Inbox (see realtime/socket.js).
+    emitToTenant(ctx.tenantId, 'whatsapp:template', {
+      templateId: String(updated._id ?? updated.id),
+      template: toTemplateDTO(updated),
+    });
     return toTemplateDTO(updated);
   },
 
@@ -257,6 +421,11 @@ export const templateApprovalService = {
         to,
         providerRejectionReason: payload.providerRejectionReason || null,
       });
+
+    emitToTenant(ctx.tenantId, 'whatsapp:template', {
+      templateId: String(updated._id ?? updated.id),
+      template: toTemplateDTO(updated),
+    });
     return toTemplateDTO(updated);
   },
 
@@ -276,6 +445,11 @@ export const templateApprovalService = {
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_PAUSED,
       'Template paused by provider (quality drop)', { from, to });
+
+    emitToTenant(ctx.tenantId, 'whatsapp:template', {
+      templateId: String(updated._id ?? updated.id),
+      template: toTemplateDTO(updated),
+    });
     return toTemplateDTO(updated);
   },
 
@@ -295,6 +469,11 @@ export const templateApprovalService = {
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_DISABLED,
       'Template disabled by provider', { from, to });
+
+    emitToTenant(ctx.tenantId, 'whatsapp:template', {
+      templateId: String(updated._id ?? updated.id),
+      template: toTemplateDTO(updated),
+    });
     return toTemplateDTO(updated);
   },
 

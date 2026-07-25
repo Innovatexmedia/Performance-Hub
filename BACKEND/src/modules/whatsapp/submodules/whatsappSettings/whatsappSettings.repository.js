@@ -43,4 +43,19 @@ export const whatsappSettingsRepository = {
   deleteByTenant(tenantId) {
     return WhatsAppSettings.findOneAndDelete({ tenantId });
   },
+
+  /**
+   * findByPhoneNumberId -- the ONE deliberately cross-tenant query in this
+   * repository. Every other method is tenant-scoped by design; this one
+   * exists specifically to check whether phoneNumberId is already claimed
+   * by a DIFFERENT tenant, for duplicate-connection prevention.
+   * excludeTenantId lets a tenant re-save their own already-connected
+   * number without it flagging itself as a duplicate.
+   */
+  findByPhoneNumberId(phoneNumberId, excludeTenantId) {
+    return WhatsAppSettings.findOne({
+      'meta.phoneNumberId': phoneNumberId,
+      tenantId: { $ne: excludeTenantId },
+    });
+  },
 };

@@ -6,7 +6,7 @@ import { body, param, validationResult } from 'express-validator';
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import {
   PROVIDER_VALUES,
-  PROVIDER_MODE_VALUES,
+  PANEL_MODE_VALUES,
   AI_PROVIDER_VALUES,
   BUSINESS_VERTICAL_VALUES,
   GRAPH_API_VERSION_PATTERN,
@@ -22,10 +22,19 @@ export const handleValidation = (req, _res, next) => {
   next();
 };
 
+// NOTE: `providerMode` is deliberately NOT validated/accepted anywhere in
+// this file anymore. It is never client-settable -- the backend derives it
+// exclusively (see whatsappSettings.service.js#resolveProviderFields and
+// #testConnection). Even if a client sends it, the service never reads it
+// from the request body, so leaving a validation rule for it here would
+// just validate a value that's silently ignored, which is confusing.
+// `panelMode` IS a real, validated, user-facing field (Architecture
+// Decision, Option B) -- it governs `provider` server-side.
+
 // ── Create / full update ───────────────────────────────────────────────────────
 export const validateCreateSettings = [
   body('provider').optional().isIn(PROVIDER_VALUES).withMessage(`provider must be one of: ${PROVIDER_VALUES.join(', ')}`),
-  body('providerMode').optional().isIn(PROVIDER_MODE_VALUES).withMessage('Invalid providerMode'),
+  body('panelMode').optional().isIn(PANEL_MODE_VALUES).withMessage('Invalid panelMode'),
   body('meta.graphApiVersion').optional().matches(GRAPH_API_VERSION_PATTERN).withMessage('graphApiVersion must look like v21.0'),
   body('meta.webhookUrl').optional({ values: 'falsy' }).isURL().withMessage('webhookUrl must be a valid URL'),
   body('businessProfile.email').optional({ values: 'falsy' }).isEmail().withMessage('Invalid business email'),
@@ -41,11 +50,12 @@ export const validateUpdateSettings = validateCreateSettings;
 // ── Provider section ───────────────────────────────────────────────────────────
 export const validateProviderSection = [
   body('provider').optional().isIn(PROVIDER_VALUES).withMessage('Invalid provider'),
-  body('providerMode').optional().isIn(PROVIDER_MODE_VALUES).withMessage('Invalid providerMode'),
+  body('panelMode').optional().isIn(PANEL_MODE_VALUES).withMessage('Invalid panelMode'),
   body('meta.graphApiVersion').optional().matches(GRAPH_API_VERSION_PATTERN).withMessage('graphApiVersion must look like v21.0'),
   body('meta.webhookUrl').optional({ values: 'falsy' }).isURL().withMessage('webhookUrl must be a valid URL'),
   body('meta.phoneNumberId').optional().isString().trim(),
   body('meta.businessAccountId').optional().isString().trim(),
+  body('meta.connected').optional().isBoolean().withMessage('meta.connected must be a boolean'),
   handleValidation,
 ];
 

@@ -23,6 +23,7 @@ export function toLeadListDTO(doc) {
     name: l.name,
     email: l.email,
     phone: l.phone,
+    whatsapp_number: l.whatsapp_number,
     company: l.company,
     status: l.status,
     lead_temperature: l.lead_temperature,
@@ -30,6 +31,8 @@ export function toLeadListDTO(doc) {
     source: l.source,
     assigned_user_id: l.assigned_user_id,
     value: l.value,
+    consent_status: l.consent_status,
+    opt_out_status: l.opt_out_status,
     created_at: l.created_at,
     last_contacted_at: l.last_contacted_at,
   };

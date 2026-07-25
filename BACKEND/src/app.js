@@ -32,19 +32,10 @@ import automationRoutes from './modules/automations/automation.routes.js';
 import nurtureRoutes from './modules/nurture/nurture.routes.js';
 import templateRoutes from './modules/templates/template.routes.js';
 import integrationRoutes from './modules/integrations/integration.routes.js';
-import contactsRoutes from './modules/whatsapp/submodules/contacts/contacts.routes.js';
-import templatesRoutes from './modules/whatsapp/submodules/templates/templates.routes.js';
-import { templateApprovalRoutes, templateApprovalWebhookRoutes } from './modules/whatsapp/submodules/templateApproval/templateApproval.routes.js';
-import campaignsRoutes from './modules/whatsapp/submodules/campaigns/campaigns.routes.js';
-import broadcastsRoutes  from './modules/whatsapp/submodules/broadcasts/broadcasts.routes.js';
-import nurturesRoutes  from './modules/whatsapp/submodules/nurtures/nurtures.routes.js';
-import aiReplyAssistantRoutes from './modules/whatsapp/submodules/aiReplyAssistant/aiReplyAssistant.routes.js';
-import automationRulesRoutes   from './modules/whatsapp/submodules/automationRules/automationRules.routes.js';
-import deliveryLogsRoutes      from './modules/whatsapp/submodules/deliveryLogs/deliveryLogs.routes.js';
-import consentRoutes           from './modules/whatsapp/submodules/consent/consent.routes.js';
-import whatsappAnalyticsRoutes  from './modules/whatsapp/submodules/whatsappAnalytics/whatsappAnalytics.routes.js';
-import whatsappSettingsRoutes   from './modules/whatsapp/submodules/whatsappSettings/whatsappSettings.routes.js';
-import teamRoutes from './modules/team/team.routes.js';
+// WhatsApp submodules (contacts, templates, template-approval, campaigns,
+// broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
+// analytics, settings) are composed entirely inside whatsappRouter --
+// see src/modules/whatsapp/whatsapp.routes.js. No direct imports needed here.
 
 
 // ── Middleware Imports ────────────────────────────────────────────────────────
@@ -97,7 +88,17 @@ app.use(compression());
 | Body Parsers
 |--------------------------------------------------------------------------
 */
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({
+  limit: '1mb',
+  // Captures the exact raw bytes alongside the parsed body. Needed for
+  // src/modules/whatsapp/webhooks/metaWebhook -- verifying Meta's
+  // X-Hub-Signature-256 header requires HMAC-ing the ORIGINAL request
+  // bytes; re-serializing req.body with JSON.stringify() would not
+  // reliably reproduce the same bytes (key order, whitespace). Every
+  // other route is unaffected -- req.body is still parsed exactly as
+  // before, this only adds req.rawBody alongside it.
+  verify: (req, _res, buf) => { req.rawBody = buf; },
+}));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 /*
@@ -145,23 +146,17 @@ app.use('/api/automations', automationRoutes);
 app.use('/api/nurture', nurtureRoutes);
 app.use('/api/templates', templateRoutes);
 app.use('/api/integrations', integrationRoutes);
-app.use('/api/whatsapp/contacts', contactsRoutes);
-app.use('/api/whatsapp/templates', templatesRoutes);
-app.use('/api/team', teamRoutes);
-// Template approval actions share the /api/whatsapp/templates/:id namespace.
-// Declared AFTER templatesRoutes so static routes (/categories, /languages) win first.
-app.use('/api/whatsapp/templates', templateApprovalRoutes);
-// Provider webhooks: unauthenticated, verified by provider signature in production.
-app.use('/api/whatsapp/template-approval', templateApprovalWebhookRoutes);
-app.use('/api/whatsapp/campaigns', campaignsRoutes);
-app.use('/api/whatsapp/broadcasts',  broadcastsRoutes);
-app.use('/api/whatsapp/nurtures',  nurturesRoutes);
-app.use('/api/whatsapp/ai', aiReplyAssistantRoutes);
-app.use('/api/whatsapp/automationRules', automationRulesRoutes);
-app.use('/api/whatsapp/deliveryLogs', deliveryLogsRoutes);
-app.use('/api/whatsapp/consent', consentRoutes);
-app.use('/api/whatsapp/analytics', whatsappAnalyticsRoutes);
-app.use('/api/whatsapp/settings', whatsappSettingsRoutes);
+
+// NOTE: the WhatsApp submodules (contacts, templates, template-approval,
+// campaigns, broadcasts, nurtures, ai, automation-rules, delivery-logs,
+// consent, analytics, settings) are NOT mounted here individually.
+// whatsappRouter (mounted above at '/api/whatsapp') already composes every
+// one of them internally with the correct kebab-case paths and applies
+// authenticate + resolveTenant + withContext once, globally, before
+// delegating to each submodule. Mounting them again here was dead/duplicate
+// code -- two of them (automationRules, deliveryLogs) even used mismatched
+// camelCase paths that do not match the canonical ones inside whatsappRouter.
+// See src/modules/whatsapp/whatsapp.routes.js for the real mount list.
 /*
 |--------------------------------------------------------------------------
 | 404 Handler — MUST come after all routes

@@ -1,5 +1,5 @@
 import { useAuthStore } from '@/store/authStore';
-import { leadPermissions, dealPermissions, bookingPermissions, callPermissions, qualificationPermissions, campaignPermissions, paymentPermissions, automationPermissions, isSuperAdmin } from '@/lib/permissions';
+import { leadPermissions, dealPermissions, bookingPermissions, callPermissions, qualificationPermissions, campaignPermissions, paymentPermissions, automationPermissions, consentPermissions, isSuperAdmin } from '@/lib/permissions';
 
 /**
  * usePermissions -- reads the CURRENT user's real role from authStore and
@@ -56,6 +56,14 @@ export function usePermissions() {
       canCreate: automationPermissions.canCreate(role),
       canToggle: automationPermissions.canToggle(role),
       canSimulate: automationPermissions.canSimulate(role),
+    },
+    consent: {
+      canCreate: consentPermissions.canCreate(role),
+      canOptIn: consentPermissions.canOptIn(role),
+      canOptOut: consentPermissions.canOptOut(role),
+      canBlock: consentPermissions.canBlock(role),
+      canUnblock: consentPermissions.canUnblock(role),
+    },
     },
   };
 }

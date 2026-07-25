@@ -1,5 +1,6 @@
 // Shared utilities (adjust paths if your shared utils live elsewhere).
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { hasRole, ROLES } from '../../../auth/constants/roles.js';
 
 // Reused activity system from the Lead module (extended with logEntity).
 import { activityService } from '../../../leads/activities/activity.service.js';
@@ -9,7 +10,6 @@ import { templatesRepository } from './templates.repository.js';
 import {
   TEMPLATE_STATUS,
   APPROVAL_STATUS,
-  APPROVAL_STATUS_VALUES,
   PROVIDER_STATUS,
   HEADER_TYPE,
   BUTTON_TYPE_VALUES,
@@ -30,19 +30,23 @@ import {
 
 const ENTITY_TYPE = 'whatsapp_template';
 
-const APPROVED_STATES = [
-  APPROVAL_STATUS.INTERNALLY_APPROVED,
-  APPROVAL_STATUS.PROVIDER_APPROVED,
-  APPROVAL_STATUS.ACTIVE,
-];
-const REJECTED_STATES = [
-  APPROVAL_STATUS.REJECTED_INTERNALLY,
-  APPROVAL_STATUS.PROVIDER_REJECTED,
-];
-const SUBMITTED_STATES = [
-  APPROVAL_STATUS.SUBMITTED_FOR_INTERNAL_REVIEW,
-  APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
-];
+/**
+ * NOTE: this module intentionally does NOT own any approval-state
+ * transition logic anymore. There used to be an `updateApprovalState` /
+ * `approveTemplate` / `rejectTemplate` set of methods here that wrote
+ * `approvalStatus` directly with no transition validation and no role
+ * check -- a second, ungated path to the same field that
+ * templateApproval.service.js governs properly (ALLOWED_TRANSITIONS,
+ * PROVIDER_CONTROLLED_STATUSES, ROLE_MIN, approver != submitter, etc.).
+ * That let any authenticated user set a template's approvalStatus straight
+ * to PROVIDER_APPROVED via a plain PATCH /templates/:id, skipping every
+ * guard on the real /templates/:id/approve endpoint.
+ *
+ * All approval transitions now go exclusively through
+ * templateApproval.service.js via its own routes. This module only reads
+ * approvalStatus (for the usable-for-sending guard below) and otherwise
+ * treats it as someone else's field.
+ */
 
 function toTemplateDTO(doc) {
   if (!doc) return null;
@@ -231,7 +235,12 @@ export const templatesService = {
       slug,
       variables: variablesFromTemplateData(data),
       status: data.status || TEMPLATE_STATUS.DRAFT,
-      approvalStatus: data.approvalStatus || APPROVAL_STATUS.DRAFT,
+      // approvalStatus is ALWAYS DRAFT on create, regardless of what the
+      // client sent -- a template only ever enters the real approval
+      // workflow through templateApproval's submit-review endpoint. Letting
+      // a client set an arbitrary initial approvalStatus here was the same
+      // class of bug as the PATCH bypass: skipping the guarded workflow.
+      approvalStatus: APPROVAL_STATUS.DRAFT,
       version: 1,
       usageCount: 0,
       isActive: false,
@@ -281,8 +290,20 @@ export const templatesService = {
       throw new AppError(409, 'Archived templates are read-only');
     }
 
-    // Approval transitions go through the approval-state machine.
-    const { approvalStatus, approvalComment, ...content } = patch;
+    // approvalStatus is NOT settable through this endpoint, full stop.
+    // Approval transitions (submit-review / approve / reject / etc.) go
+    // exclusively through templateApproval's dedicated, role-gated,
+    // transition-validated endpoints under /templates/:id/{submit-review,
+    // approve,reject,...}. Rejecting clearly here beats silently ignoring
+    // it -- a caller who expected this to work needs to know it won't.
+    if (patch.approvalStatus !== undefined || patch.approvalComment !== undefined) {
+      throw new AppError(
+        400,
+        'approvalStatus cannot be set via this endpoint. Use the Template Approval workflow endpoints (submit-review / approve / reject / request-changes / submit-provider).',
+      );
+    }
+
+    const content = { ...patch };
 
     if (Object.keys(content).length) {
       const merged = {
@@ -311,10 +332,6 @@ export const templatesService = {
       const updated = await templatesRepository.updateTemplate(ctx.tenantId, id, set);
       await logTemplate(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_UPDATED,
         'Template updated', { fields: Object.keys(content) });
-    }
-
-    if (approvalStatus !== undefined) {
-      await this.updateApprovalState(ctx, id, approvalStatus, approvalComment);
     }
 
     return this.getTemplate(ctx, id);
@@ -373,6 +390,35 @@ export const templatesService = {
     if (existing.status === TEMPLATE_STATUS.ARCHIVED) {
       throw new AppError(409, 'Archived templates are read-only and cannot be activated');
     }
+
+    // Approval gate: a template created by a non-owner must go through real
+    // approval (approvalStatus reaching INTERNALLY_APPROVED or further)
+    // before it can be activated -- the tenant owner can bypass this and
+    // activate directly, matching standard "owner override" authority.
+    // Without this, any authenticated user could activate any DRAFT
+    // template just by calling this endpoint directly, regardless of
+    // whether the tenant owner had reviewed it at all.
+    //
+    // NOTE: this list uses ONLY the canonical APPROVAL_STATUS values from
+    // templateApproval.constants.js. It used to also check
+    // APPROVAL_STATUS.ACTIVE, which never existed in that canonical enum
+    // (ACTIVE is a TEMPLATE_STATUS, not an approval status) -- a leftover
+    // from the old, separate templates.constants.js APPROVAL_STATUS this
+    // module no longer defines.
+    const isOwner = hasRole(ctx.role, ROLES.TENANT_OWNER);
+    const APPROVED_ENOUGH = [
+      APPROVAL_STATUS.INTERNALLY_APPROVED,
+      APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
+      APPROVAL_STATUS.PROVIDER_APPROVED,
+      APPROVAL_STATUS.PAUSED, // reactivating a previously-approved template
+    ];
+    if (!isOwner && !APPROVED_ENOUGH.includes(existing.approvalStatus)) {
+      throw new AppError(
+        403,
+        'This template has not been approved by the tenant owner yet. Submit it for review first.',
+      );
+    }
+
     const updated = await templatesRepository.activateTemplate(ctx.tenantId, id);
     await logTemplate(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_ACTIVATED, 'Template activated');
     return toTemplateDTO(updated);
@@ -397,63 +443,6 @@ export const templatesService = {
     return toTemplateDTO(updated);
   },
 
-  // ---- approval state machine --------------------------------------------
-  async updateApprovalState(ctx, id, approvalStatus, comment = '') {
-    if (!APPROVAL_STATUS_VALUES.includes(approvalStatus)) {
-      throw new AppError(400, `Invalid approvalStatus: ${approvalStatus}`);
-    }
-    const existing = await templatesRepository.findById(ctx.tenantId, id);
-    if (!existing) throw new AppError(404, 'Template not found');
-
-    const now = new Date();
-    const set = {};
-    if (comment) set.approvalComments = comment;
-
-    let logType = ACTIVITY_TYPE.WHATSAPP_TEMPLATE_UPDATED;
-    let logMessage = `Approval status set to ${approvalStatus}`;
-
-    if (APPROVED_STATES.includes(approvalStatus)) {
-      set.approvedAt = now;
-      set.lastApprovedAt = now;
-      if (approvalStatus === APPROVAL_STATUS.PROVIDER_APPROVED) set.status = TEMPLATE_STATUS.APPROVED;
-      logType = ACTIVITY_TYPE.WHATSAPP_TEMPLATE_APPROVED;
-      logMessage = 'Template approved';
-    } else if (REJECTED_STATES.includes(approvalStatus)) {
-      set.rejectedAt = now;
-      set.status = TEMPLATE_STATUS.REJECTED;
-      logType = ACTIVITY_TYPE.WHATSAPP_TEMPLATE_REJECTED;
-      logMessage = 'Template rejected';
-    } else if (SUBMITTED_STATES.includes(approvalStatus)) {
-      set.submittedForApprovalAt = now;
-      set.status = TEMPLATE_STATUS.SUBMITTED;
-    }
-
-    const historyEntry = {
-      status: approvalStatus,
-      comment: comment || '',
-      updatedBy: ctx.userId,
-      updatedAt: now,
-    };
-
-    const updated = await templatesRepository.updateApprovalStatus(ctx.tenantId, id, approvalStatus, {
-      set,
-      historyEntry,
-    });
-
-    await logTemplate(ctx, updated, logType, logMessage, { approvalStatus, comment });
-    return toTemplateDTO(updated);
-  },
-
-  approveTemplate(ctx, id, { comment = '', toProvider = false } = {}) {
-    const target = toProvider ? APPROVAL_STATUS.PROVIDER_APPROVED : APPROVAL_STATUS.INTERNALLY_APPROVED;
-    return this.updateApprovalState(ctx, id, target, comment);
-  },
-
-  rejectTemplate(ctx, id, { comment = '', internal = false } = {}) {
-    const target = internal ? APPROVAL_STATUS.REJECTED_INTERNALLY : APPROVAL_STATUS.PROVIDER_REJECTED;
-    return this.updateApprovalState(ctx, id, target, comment);
-  },
-
   // ---- provider sync (simulated transport) --------------------------------
   async syncTemplate(ctx, id) {
     const existing = await templatesRepository.findById(ctx.tenantId, id);
@@ -464,7 +453,7 @@ export const templatesService = {
       providerTemplateId:
         existing.providerMetadata?.providerTemplateId ||
         `${existing.provider}_${String(existing._id)}`,
-      providerStatus: PROVIDER_STATUS.SYNCED,
+      providerStatus: 'SYNCED',
       providerError: null,
       syncedAt: now,
       rawResponse: { simulated: true, provider: existing.provider, syncedAt: now.toISOString() },
@@ -472,7 +461,7 @@ export const templatesService = {
 
     const updated = await templatesRepository.updateSyncStatus(ctx.tenantId, id, providerMetadata);
     await logTemplate(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_SYNCED,
-      `Template synced with ${existing.provider}`, { providerStatus: PROVIDER_STATUS.SYNCED });
+      `Template synced with ${existing.provider}`, { providerStatus: 'SYNCED' });
 
     return toTemplateDTO(updated);
   },

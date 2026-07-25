@@ -23,23 +23,27 @@ export const TEMPLATE_STATUS = Object.freeze({
 });
 export const TEMPLATE_STATUS_VALUES = Object.freeze(Object.values(TEMPLATE_STATUS));
 
-export const APPROVAL_STATUS = Object.freeze({
-  DRAFT: 'DRAFT',
-  SUBMITTED_FOR_INTERNAL_REVIEW: 'SUBMITTED_FOR_INTERNAL_REVIEW',
-  INTERNALLY_APPROVED: 'INTERNALLY_APPROVED',
-  CHANGES_REQUESTED: 'CHANGES_REQUESTED',
-  REJECTED_INTERNALLY: 'REJECTED_INTERNALLY',
-  SUBMITTED_TO_PROVIDER: 'SUBMITTED_TO_PROVIDER',
-  PROVIDER_APPROVED: 'PROVIDER_APPROVED',
-  PROVIDER_REJECTED: 'PROVIDER_REJECTED',
-  ACTIVE: 'ACTIVE',
-  PAUSED: 'PAUSED',
-  ARCHIVED: 'ARCHIVED',
-  // Extended by the templateApproval module
-  REJECTED: 'REJECTED',
-  DISABLED: 'DISABLED',
-});
-export const APPROVAL_STATUS_VALUES = Object.freeze(Object.values(APPROVAL_STATUS));
+/**
+ * APPROVAL_STATUS -- re-exported, NOT redefined.
+ *
+ * This used to be a second, independent enum defined right here in this
+ * file, with different values than templateApproval.constants.js's
+ * APPROVAL_STATUS (ACTIVE, ARCHIVED, CHANGES_REQUESTED,
+ * REJECTED_INTERNALLY existed here but not there; REJECTED and DISABLED
+ * existed there but not here). Both enums back the SAME `approvalStatus`
+ * field on the SAME WhatsAppTemplate document -- two independent sources
+ * of truth for one piece of state is exactly how a value like
+ * PROVIDER_APPROVED could get written by a path that bypassed the real
+ * transition/role rules entirely (see templates.service.js history).
+ *
+ * templateApproval.constants.js is authoritative: it owns
+ * ALLOWED_TRANSITIONS, PROVIDER_CONTROLLED_STATUSES, and role minimums for
+ * every value in this enum. Re-exporting here (rather than importing
+ * directly in templates.model.js) keeps this file's public surface
+ * unchanged for anything already doing
+ * `import { APPROVAL_STATUS } from './templates.constants.js'`.
+ */
+export { APPROVAL_STATUS, APPROVAL_STATUS_VALUES } from '../templateApproval/templateApproval.constants.js';
 
 export const PROVIDER = Object.freeze({
   META_CLOUD: 'META_CLOUD',

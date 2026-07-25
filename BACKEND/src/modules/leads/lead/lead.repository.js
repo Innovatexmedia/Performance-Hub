@@ -62,6 +62,29 @@ export const leadRepository = {
     return Lead.findOne({ tenant_id: tenantId, phone, archived: false });
   },
 
+  /**
+   * findByWhatsAppNumber -- used by the inbound Meta webhook to find an
+   * existing lead for a raw, digits-only WhatsApp number (e.g. Meta sends
+   * "919876543210", no '+', no spaces). An exact match against `phone`
+   * (like findByPhone above) would cause duplicate lead creation on every
+   * message from an already-known contact whose stored format differs
+   * (e.g. "+91 98765 43210"). Matches on the last 10 digits against BOTH
+   * phone and whatsapp_number -- a pragmatic, well-established technique,
+   * not full E.164 normalization, but handles the common real-world case
+   * without a data migration.
+   */
+  findByWhatsAppNumber(tenantId, rawPhone) {
+    const digits = String(rawPhone || '').replace(/\D/g, '');
+    if (digits.length < 6) return null; // too short to safely match on
+    const last10 = digits.slice(-10);
+    const pattern = new RegExp(`${last10}$`);
+    return Lead.findOne({
+      tenant_id: tenantId,
+      archived: false,
+      $or: [{ phone: pattern }, { whatsapp_number: pattern }],
+    });
+  },
+
   /** Aggregate lead counts grouped by owner (for least-loaded assignment). */
   countByOwner(tenantId) {
     return Lead.aggregate([

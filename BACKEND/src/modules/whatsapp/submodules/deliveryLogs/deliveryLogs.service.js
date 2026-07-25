@@ -17,6 +17,7 @@
  * No changes needed here when a new source module or provider is added.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { emitToTenant } from '../../../../realtime/socket.js';
 import { deliveryLogsRepository } from './deliveryLogs.repository.js';
 import {
   DELIVERY_STATUS,
@@ -163,6 +164,11 @@ export const deliveryLogsService = {
     }
     const set = buildStatusSet(status, extra);
     const updated = await deliveryLogsRepository.updateStatus(ctx.tenantId, id, { set });
+
+    emitToTenant(ctx.tenantId, 'whatsapp:deliveryLog', {
+      deliveryLogId: String(updated._id ?? updated.id),
+      deliveryLog: toDTO(updated),
+    });
     return toDTO(updated);
   },
 
@@ -181,6 +187,11 @@ export const deliveryLogsService = {
       failureCode:   null,
     };
     const updated = await deliveryLogsRepository.incrementRetry(ctx.tenantId, id, set);
+
+    emitToTenant(ctx.tenantId, 'whatsapp:deliveryLog', {
+      deliveryLogId: String(updated._id ?? updated.id),
+      deliveryLog: toDTO(updated),
+    });
     return toDTO(updated);
   },
 
@@ -237,6 +248,17 @@ export const deliveryLogsService = {
     if (providerMetadata) set.providerMetadata = { ...(log.providerMetadata || {}), ...providerMetadata };
 
     const updated = await deliveryLogsRepository.applyWebhook(log.tenantId, String(log._id), { set, webhookEvent });
+
+    // Push to any open Delivery Logs tab for this tenant so it updates
+    // without a manual refresh -- same realtime channel message.service.js
+    // uses for the Inbox (see realtime/socket.js). log.tenantId (not the
+    // request, since there IS no authenticated request here) is the
+    // correct scope -- resolved above from the matched log itself.
+    emitToTenant(log.tenantId, 'whatsapp:deliveryLog', {
+      deliveryLogId: String(updated._id ?? updated.id),
+      deliveryLog: toDTO(updated),
+    });
+
     return toDTO(updated);
   },
 

@@ -1,6 +1,7 @@
 import { AppError } from '../../../shared/helpers/lead.helpers.js';
 import { conversationRepository } from '../conversations/conversation.repository.js';
 import { conversationService } from '../conversations/conversation.service.js';
+import { emitToTenant } from '../../../realtime/socket.js';
 
 async function ensureConversation(ctx, conversationId) {
   const conversation = await conversationRepository.findById(ctx.tenantId, conversationId);
@@ -15,7 +16,9 @@ export const tagService = {
     await ensureConversation(ctx, conversationId);
 
     const updated = await conversationRepository.addTag(ctx.tenantId, conversationId, clean);
-    return conversationService.toConversationDTO(updated);
+    const dto = conversationService.toConversationDTO(updated);
+    emitToTenant(ctx.tenantId, 'whatsapp:conversation', { conversation: dto });
+    return dto;
   },
 
   async removeTag(ctx, conversationId, tag) {
@@ -24,6 +27,8 @@ export const tagService = {
     await ensureConversation(ctx, conversationId);
 
     const updated = await conversationRepository.removeTag(ctx.tenantId, conversationId, clean);
-    return conversationService.toConversationDTO(updated);
+    const dto = conversationService.toConversationDTO(updated);
+    emitToTenant(ctx.tenantId, 'whatsapp:conversation', { conversation: dto });
+    return dto;
   },
 };

@@ -13,6 +13,20 @@ export const conversationRepository = {
     return Conversation.findOne({ _id: id, tenant_id: tenantId });
   },
 
+  /**
+   * findByPhone -- used by the inbound Meta webhook to find an existing
+   * conversation for a raw, digits-only sender number. Same last-10-digit
+   * matching approach as leadRepository.findByWhatsAppNumber, for the same
+   * reason (Meta's raw format vs however `phone` was stored).
+   */
+  findByPhone(tenantId, rawPhone) {
+    const digits = String(rawPhone || '').replace(/\D/g, '');
+    if (digits.length < 6) return null;
+    const last10 = digits.slice(-10);
+    const pattern = new RegExp(`${last10}$`);
+    return Conversation.findOne({ tenant_id: tenantId, phone: pattern, archived: false });
+  },
+
   find(tenantId, filter = {}, { sort = { last_message_at: -1 }, skip = 0, limit = 20 } = {}) {
     return Conversation.find({ tenant_id: tenantId, ...filter })
       .sort(sort)

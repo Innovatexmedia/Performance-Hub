@@ -22,11 +22,33 @@ import deliveryLogsRoutes      from './submodules/deliveryLogs/deliveryLogs.rout
 import consentRoutes           from './submodules/consent/consent.routes.js';
 import whatsappAnalyticsRoutes  from './submodules/whatsappAnalytics/whatsappAnalytics.routes.js';
 import whatsappSettingsRoutes   from './submodules/whatsappSettings/whatsappSettings.routes.js';
+import metaWebhookRoutes        from './webhooks/metaWebhook.routes.js';
 
 const whatsappRouter = Router();
 
 /**
- * Authentication FIRST
+ * PUBLIC WEBHOOKS -- mounted BEFORE authenticate.
+ *
+ * templateApprovalWebhookRoutes receives callbacks from the WhatsApp
+ * provider (Meta/WATI/etc.) -- those requests never carry a JWT, so this
+ * route MUST be reachable without authenticate/resolveTenant/withContext.
+ * Tenant identity for this route comes from the webhook payload itself
+ * (see templateApproval.controller.js). Fixed: this used to be mounted
+ * AFTER whatsappRouter.use(authenticate) below, which meant every real
+ * provider callback was rejected with 401 before it ever reached the
+ * handler -- manual Postman calls only "worked" because a JWT was
+ * attached by hand, masking the bug.
+ *
+ * metaWebhookRoutes -- same reasoning, same fix pattern: Meta cannot send
+ * our JWT either. Tenant identity comes from the URL itself (/:tenantId),
+ * and request authenticity comes from the HMAC signature check inside the
+ * controller (see metaWebhook.controller.js), not from a JWT.
+ */
+whatsappRouter.use('/template-approval', templateApprovalWebhookRoutes);
+whatsappRouter.use('/webhooks/meta', metaWebhookRoutes);
+
+/**
+ * Authentication FIRST for everything else
  */
 whatsappRouter.use(authenticate);
 
@@ -50,8 +72,6 @@ whatsappRouter.use('/contacts', contactsRoutes);
 
 whatsappRouter.use('/templates', templatesRoutes);
 whatsappRouter.use('/templates', templateApprovalRoutes);
-
-whatsappRouter.use('/template-approval', templateApprovalWebhookRoutes);
 
 whatsappRouter.use('/campaigns', campaignsRoutes);
 whatsappRouter.use('/broadcasts', broadcastsRoutes);

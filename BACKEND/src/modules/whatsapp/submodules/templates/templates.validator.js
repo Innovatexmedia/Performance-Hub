@@ -43,6 +43,18 @@ const buttonsRule = body('buttons').optional().isArray({ max: MAX_BUTTONS })
 const headerTypeRule = body('header.type').optional().isIn(HEADER_TYPE_VALUES)
   .withMessage('Invalid header type');
 
+// NOTE: `approvalStatus` is deliberately NOT a validated/accepted body
+// field on create or update anymore. It is never settable by a client --
+// every template starts at DRAFT on create, and every later transition
+// goes exclusively through the Template Approval workflow's own
+// role-gated, transition-validated endpoints (submit-review / approve /
+// reject / request-changes / submit-provider). templates.service.js now
+// 400s if `approvalStatus` shows up in a generic PATCH body; this
+// validator matches that by never accepting it in the first place.
+// APPROVAL_STATUS_VALUES is still imported/exported here for any other
+// consumer that needs the canonical enum (e.g. listing/filtering).
+export { APPROVAL_STATUS_VALUES };
+
 export const validateCreateTemplate = [
   body('name').trim().notEmpty().withMessage('name is required'),
   body('category').notEmpty().withMessage('category is required')
@@ -52,7 +64,6 @@ export const validateCreateTemplate = [
     .bail().isLength({ max: MAX_BODY_LENGTH }).withMessage(`body exceeds ${MAX_BODY_LENGTH} characters`),
   body('footer').optional().isLength({ max: MAX_FOOTER_LENGTH }).withMessage(`footer exceeds ${MAX_FOOTER_LENGTH} characters`),
   body('status').optional().isIn(TEMPLATE_STATUS_VALUES).withMessage('Invalid status'),
-  body('approvalStatus').optional().isIn(APPROVAL_STATUS_VALUES).withMessage('Invalid approvalStatus'),
   body('provider').optional().isIn(PROVIDER_VALUES).withMessage('Invalid provider'),
   body('providerMetadata.providerStatus').optional().isIn(PROVIDER_STATUS_VALUES).withMessage('Invalid provider status'),
   headerTypeRule,
@@ -68,7 +79,6 @@ export const validateUpdateTemplate = [
   body('body').optional().isLength({ max: MAX_BODY_LENGTH }).withMessage(`body exceeds ${MAX_BODY_LENGTH} characters`),
   body('footer').optional().isLength({ max: MAX_FOOTER_LENGTH }).withMessage(`footer exceeds ${MAX_FOOTER_LENGTH} characters`),
   body('status').optional().isIn(TEMPLATE_STATUS_VALUES).withMessage('Invalid status'),
-  body('approvalStatus').optional().isIn(APPROVAL_STATUS_VALUES).withMessage('Invalid approvalStatus'),
   body('provider').optional().isIn(PROVIDER_VALUES).withMessage('Invalid provider'),
   body('providerMetadata.providerStatus').optional().isIn(PROVIDER_STATUS_VALUES).withMessage('Invalid provider status'),
   headerTypeRule,

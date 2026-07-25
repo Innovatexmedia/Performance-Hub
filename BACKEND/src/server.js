@@ -5,21 +5,18 @@
  *
  * FILE: src/server.js
  *
- * WHAT CHANGED:
- *   - Fixed import paths: '../src/config/...' → './config/...'
- *     server.js lives AT src/server.js so relative paths start from src/
- *
  * Validates environment variables, connects to MongoDB, starts HTTP server.
  * Handles graceful shutdown on SIGTERM/SIGINT.
  * =============================================================================
  */
 
 // ── Load & validate env vars FIRST (before any other imports)
-import './config/env.js';
+import '../src/config/env.js';
 
 import app       from './app.js';
-import config    from './config/config.js';
-import connectDB from './config/db.js';
+import config    from '../src/config/config.js';
+import connectDB from '../src/config/db.js';
+import { initSocketServer } from './realtime/socket.js';
 
 const PORT = config.PORT || 4000;
 
@@ -34,6 +31,10 @@ const startServer = async () => {
       console.log(`   Port        : ${PORT}`);
       console.log(`   Auth routes : http://localhost:${PORT}/api/auth\n`);
     });
+
+    // Socket.io attaches to the SAME http.Server instance -- no separate
+    // server/port needed. Must happen after app.listen() so `server` exists.
+    initSocketServer(server);
 
     // ─── Graceful Shutdown ────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ const startServer = async () => {
     process.on('SIGINT',  () => shutdown('SIGINT'));
 
     // ─── Unhandled Rejections ─────────────────────────────────────────────────
-    process.on('unhandledRejection', (reason) => {
+    process.on('unhandledRejection', (reason, promise) => {
       console.error('❌ Unhandled Promise Rejection:', reason);
       server.close(() => process.exit(1));
     });

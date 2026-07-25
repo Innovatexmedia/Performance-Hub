@@ -96,7 +96,7 @@ function buildUrl(path: string, query?: RequestOptions['query']): string {
  * body differently depending on whether the target endpoint uses the
  * standard { success, message, data } envelope or not.
  */
-async function doRequest(path: string, options: RequestOptions): Promise<Response> {
+export async function doRequest(path: string, options: RequestOptions): Promise<Response> {
   const { method = 'GET', body, query, skipAuth = false } = options;
 
   const attempt = async (): Promise<Response> => {
@@ -131,7 +131,7 @@ async function doRequest(path: string, options: RequestOptions): Promise<Respons
  * sends { success: false, message, errors? }. So error parsing is shared
  * between request() and requestRaw() even though their SUCCESS shapes differ.
  */
-async function throwIfError(res: Response): Promise<void> {
+export async function throwIfError(res: Response): Promise<void> {
   if (res.ok) return;
   let body: Partial<ApiEnvelope<unknown>> = {};
   try {

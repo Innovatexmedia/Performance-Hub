@@ -86,10 +86,19 @@ export const PROVIDER_REJECTION_REASON_VALUES = Object.freeze(
  * The spec's "sales_manager / marketing_manager" map to the manager tier
  * (tenant_admin and above). requireRole is hierarchy-based, so listing the
  * minimum role grants it to everyone above.
+ *
+ * Per the InnovateX role table: sales_manager/marketing_manager (=
+ * tenant_admin) are explicitly allowed to internally approve/reject and
+ * submit to provider, same as tenant_owner. This used to be tightened to
+ * TENANT_OWNER-only ("only the tenant owner can grant that approval") --
+ * that contradicted the role table, so it's reverted to TENANT_ADMIN here.
  */
 export const ROLE_MIN = Object.freeze({
   // Creators submit their own; managers may submit any (enforced in service).
   SUBMIT_FOR_REVIEW: ROLES.SALES_USER,
+  // Reviewer-authority actions -- manager tier (tenant_admin) and above,
+  // matching the role table (sales_manager/marketing_manager/tenant_owner
+  // can all approve/reject/request-changes/submit-to-provider).
   REQUEST_CHANGES: ROLES.TENANT_ADMIN,
   APPROVE: ROLES.TENANT_ADMIN,
   REJECT: ROLES.TENANT_ADMIN,

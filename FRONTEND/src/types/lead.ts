@@ -31,6 +31,7 @@ export interface LeadListItem {
   name: string;
   email: string;
   phone: string;
+  whatsapp_number: string;
   company: string;
   status: LeadStatus;
   lead_temperature: LeadTemperature;
@@ -38,6 +39,8 @@ export interface LeadListItem {
   source: string;
   assigned_user_id: string | null;
   value: number;
+  consent_status: ConsentStatus;
+  opt_out_status: boolean;
   created_at: string;
   last_contacted_at: string | null;
 }

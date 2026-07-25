@@ -10,6 +10,8 @@ import { leadRepository } from '../../leads/lead/lead.repository.js';
 import { activityService } from '../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE } from '../../leads/activities/activity.model.js';
 import { dealRepository } from '../../pipeline/deals/deal.repository.js';
+import { Payment } from '../../payments/payment.model.js';
+import { emitToTenant } from '../../../realtime/socket.js';
 
 import { conversationRepository } from './conversation.repository.js';
 import { messageRepository } from '../messages/message.repository.js';
@@ -74,16 +76,37 @@ async function buildLeadContext(ctx, leadId) {
     pipelineStage = null; // pipeline module optional
   }
 
+  // FRONTEND_SPEC.md section 5 requires "payment status" in the lead
+  // context panel -- most recent payment for this lead, if any.
+  let paymentStatus = null;
+  try {
+    const latestPayment = await Payment
+      .findOne({ tenant_id: ctx.tenantId, lead_id: leadId })
+      .sort({ created_at: -1 });
+    paymentStatus = latestPayment ? latestPayment.status : null;
+  } catch {
+    paymentStatus = null; // payments module optional
+  }
+
   return {
     lead_id: String(lead._id),
     name: lead.name,
     email: lead.email,
     phone: lead.phone,
+    company: lead.company,
     qualification_score: lead.qualification_score,
     source: lead.source,
     lead_temperature: lead.lead_temperature,
     status: lead.status,
     pipeline_stage: pipelineStage,
+    payment_status: paymentStatus,
+    // UTM lineage -- FRONTEND_SPEC section 5: "score, source, UTM, pipeline
+    // stage, payment status..." -- was missing entirely before this fix.
+    utm_source: lead.utm_source,
+    utm_medium: lead.utm_medium,
+    utm_campaign: lead.utm_campaign,
+    value: lead.value,
+    last_contacted_at: lead.last_contacted_at,
   };
 }
 
@@ -169,6 +192,7 @@ export const conversationService = {
       });
     }
 
+    emitToTenant(ctx.tenantId, 'whatsapp:conversation', { conversation: toConversationDTO(updated) });
     return toConversationDTO(updated);
   },
 
@@ -189,6 +213,7 @@ export const conversationService = {
       });
     }
 
+    emitToTenant(ctx.tenantId, 'whatsapp:conversation', { conversation: toConversationDTO(updated) });
     return toConversationDTO(updated);
   },
 };
