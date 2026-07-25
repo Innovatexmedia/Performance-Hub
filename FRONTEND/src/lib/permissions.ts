@@ -97,6 +97,62 @@ export const qualificationPermissions = {
 };
 
 /**
+ * Campaign (marketing) permissions -- mirrors the SPEC-TRIMMED
+ * campaign.routes.js exactly: only POST / (create) requires a role floor
+ * (tenant_admin+). Update/delete/regenerate-link do not exist as routes
+ * anymore -- removed to match spec, which names only createMarketingCampaign
+ * as a write action for this module. GET routes have no requireRole -- any
+ * authenticated role can read.
+ */
+export const campaignPermissions = {
+  canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+};
+
+/**
+ * Payment permissions -- mirrors payment.routes.js exactly:
+ *   GET routes: no requireRole -- any authenticated role can read.
+ *   POST /, PATCH /:id, POST /:id/mark-paid, POST /:id/refund all require
+ *   sales_user+. No delete endpoint exists.
+ */
+export const paymentPermissions = {
+  canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canUpdate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canMarkPaid: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canRefund: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+};
+
+/**
+ * Automation permissions -- mirrors automation.routes.js exactly:
+ *   GET routes: no requireRole -- any authenticated role can read.
+ *   POST / (create) and POST /:id/toggle require tenant_admin+.
+ *   POST /:id/simulate requires sales_user+.
+ */
+export const automationPermissions = {
+  canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+  canToggle: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+  canSimulate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+};
+
+/**
+ * Generic Template permissions -- mirrors template.routes.js exactly:
+ *   GET routes: no requireRole -- any authenticated role can read.
+ *   POST / requires tenant_admin+ (scope=global additionally requires
+ *   super_admin, enforced server-side and mirrored here).
+ *   PATCH/DELETE require tenant_admin+ for the template's OWNER tenant,
+ *   or super_admin for scope='global' templates.
+ *   POST /:id/duplicate requires sales_user+.
+ * These are per-resource checks (depend on the specific template's own
+ * scope), not a static role floor like most other modules' permissions.
+ */
+export const genericTemplatePermissions = {
+  canCreateTenantScope: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+  canCreateGlobalScope: (role: AuthRole | null | undefined) => role === 'super_admin',
+  canEditOrDelete: (role: AuthRole | null | undefined, scope: 'tenant' | 'global') =>
+    scope === 'global' ? role === 'super_admin' : atLeast(role, 'tenant_admin'),
+  canDuplicate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+};
+
+/**
  * super_admin-only gate -- used for nav visibility. This is the ONE case
  * where hiding an entire section (not just an action) is correct, because
  * Super Admin routes operate in a fundamentally different, tenant-less

@@ -17,7 +17,7 @@
  */
 
 import * as campaignService from './campaign.service.js';
-import { sendSuccess, sendCreated, sendPaginated, sendNoContent } from '../../utils/apiResponse.js';
+import { sendSuccess, sendCreated, sendPaginated } from '../../utils/apiResponse.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 
 /**
@@ -101,43 +101,7 @@ export const createCampaign = asyncHandler(async (req, res) => {
   return sendCreated(res, { campaign }, 'Campaign created successfully');
 });
 
-/**
- * updateCampaign — PATCH /api/campaigns/:id
- * Update campaign fields including status changes.
- */
-export const updateCampaign = asyncHandler(async (req, res) => {
-  const campaign = await campaignService.updateCampaign(
-    req.user.tenantId,
-    req.params.id,
-    req.body,
-    req.user
-  );
-  return sendSuccess(res, { campaign }, 'Campaign updated successfully');
-});
-
-/**
- * deleteCampaign — DELETE /api/campaigns/:id
- */
-export const deleteCampaign = asyncHandler(async (req, res) => {
-  await campaignService.deleteCampaign(
-    req.user.tenantId,
-    req.params.id,
-    req.user
-  );
-  return sendNoContent(res);
-});
-
-/**
- * regenerateLink — POST /api/campaigns/:id/regenerate-link
- * Regenerates the UTM tracking link.
- * SOURCE: FRONTEND_SPEC §12 LINK column — copy icon
- * SOURCE: MASTER_SPEC §B11 "UTM tracking-link generator (copyable)"
- */
-export const regenerateLink = asyncHandler(async (req, res) => {
-  const campaign = await campaignService.regenerateUtmLink(
-    req.user.tenantId,
-    req.params.id,
-    req.user
-  );
-  return sendSuccess(res, { campaign }, 'UTM tracking link regenerated');
-});
+// NOTE: updateCampaign / deleteCampaign / regenerateLink were removed --
+// not named anywhere in MASTER_SPEC.md, DEVELOPER_HANDOFF.md, or
+// FRONTEND_SPEC.md for this module. DEVELOPER_HANDOFF.md's action table
+// names exactly one write action here: createMarketingCampaign.

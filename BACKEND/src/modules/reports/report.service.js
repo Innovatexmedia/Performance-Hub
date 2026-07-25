@@ -22,6 +22,7 @@
 import * as reportRepo from './report.repository.js';
 import { getAttributionDashboard } from '../attribution/attribution.service.js';
 import { whatsappAnalyticsService } from '../whatsapp/submodules/whatsappAnalytics/whatsappAnalytics.service.js';
+import { WhatsAppCampaign } from '../whatsapp/submodules/campaigns/campaigns.model.js';
 import { paginationMeta, normalizePaging } from '../../shared/helpers/lead.helpers.js';
 
 // =============================================================================
@@ -92,6 +93,8 @@ export const getLeadReport = async (tenantId, query = {}) => {
     kpis: {
       totalLeads:      kpis.total,
       wonLeads:        kpis.won,
+      hotLeads:        kpis.hot,
+      qualifiedLeads:  kpis.qualified,
       conversionRate:  pct(kpis.won, kpis.total),
       avgQualificationScore: round2(kpis.avgScore),
     },
@@ -167,13 +170,21 @@ export const getWhatsAppReport = async (reqUser, query = {}) => {
     provider: query.provider,
   };
 
-  const [dashboard, trends] = await Promise.all([
+  const [dashboard, trends, revenueAgg] = await Promise.all([
     whatsappAnalyticsService.getDashboard(ctx, waQuery),
     whatsappAnalyticsService.getTrends(ctx, { ...waQuery, period: 'DAILY' }),
+    // whatsappAnalyticsService.getDashboard() has no revenue field at all --
+    // the frontend's WhatsApp report tab needs "WA Revenue", so this sums
+    // WhatsAppCampaign.revenueGenerated directly (same real field the
+    // WhatsApp Campaigns page itself reports on).
+    WhatsAppCampaign.aggregate([
+      { $match: { tenant_id: ctx.tenantId } },
+      { $group: { _id: null, revenue: { $sum: '$revenueGenerated' } } },
+    ]),
   ]);
 
   return {
-    kpis: dashboard,
+    kpis: { ...dashboard, revenue: revenueAgg[0]?.revenue || 0 },
     charts: {
       messagesTrend:      trends.messages,
       conversationsTrend: trends.conversations,
@@ -377,6 +388,8 @@ export const getAiQualificationReport = async (tenantId, query = {}) => {
       avgFitScore:         round2(kpis.avgFitScore),
       applied:             kpis.applied,
       appliedRate:         round2(kpis.appliedRate),
+      hotLeads:            kpis.hotLeads,
+      hotConversionRate:   round2(kpis.hotConversionRate),
     },
     charts: { byTemperature, byQuality, trend },
     table: {

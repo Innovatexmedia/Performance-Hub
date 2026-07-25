@@ -8,7 +8,7 @@
  *   Campaign Name | Source | Type | Medium | Budget
  */
 
-import { body, param, query, validationResult } from 'express-validator';
+import { body, query, validationResult } from 'express-validator';
 import {
   CAMPAIGN_STATUS_VALUES,
   CAMPAIGN_TYPE_VALUES,
@@ -102,49 +102,9 @@ export const validateCreateCampaign = [
 // UPDATE CAMPAIGN — PATCH /api/campaigns/:id
 // =============================================================================
 
-export const validateUpdateCampaign = [
-  param('id')
-    .isMongoId().withMessage('Campaign ID must be a valid MongoDB ObjectId'),
-
-  body('campaign_name')
-    .optional()
-    .trim()
-    .isLength({ max: 100 }).withMessage('campaign_name cannot exceed 100 characters'),
-
-  body('source')
-    .optional()
-    .isIn(CAMPAIGN_SOURCE_VALUES)
-    .withMessage(`source must be one of: ${CAMPAIGN_SOURCE_VALUES.join(', ')}`),
-
-  body('campaign_type')
-    .optional()
-    .isIn(CAMPAIGN_TYPE_VALUES)
-    .withMessage(`campaign_type must be one of: ${CAMPAIGN_TYPE_VALUES.join(', ')}`),
-
-  body('medium')
-    .optional()
-    .isIn(CAMPAIGN_MEDIUM_VALUES)
-    .withMessage(`medium must be one of: ${CAMPAIGN_MEDIUM_VALUES.join(', ')}`),
-
-  body('status')
-    .optional()
-    .isIn(CAMPAIGN_STATUS_VALUES)
-    .withMessage(`status must be one of: ${CAMPAIGN_STATUS_VALUES.join(', ')}`),
-
-  body('budget')
-    .optional()
-    .isFloat({ min: 0 }).withMessage('budget must be a non-negative number'),
-
-  body('spend')
-    .optional()
-    .isFloat({ min: 0 }).withMessage('spend must be a non-negative number'),
-
-  body('revenue')
-    .optional()
-    .isFloat({ min: 0 }).withMessage('revenue must be a non-negative number'),
-
-  handleValidation,
-];
+// NOTE: validateUpdateCampaign was removed along with the PATCH /:id route
+// -- update is not in spec's action list for this module (see routes.js
+// header comment for the full explanation).
 
 // =============================================================================
 // LIST QUERY — GET /api/campaigns

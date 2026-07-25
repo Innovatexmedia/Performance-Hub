@@ -65,9 +65,17 @@ export const getLeadKpis = async (tenantId, filter = {}) => {
   const query = { ...baseQuery(tenantId, filter), archived: { $ne: true } };
   if (filter.source) query.source = filter.source;
 
-  const [total, wonCount, scoreAgg] = await Promise.all([
+  // 'Qualified or further along' -- matches the same status set the
+  // frontend's Lead report tab uses to define "Qualified" (a lead that has
+  // progressed past raw qualification, not just leads currently sitting in
+  // the literal 'Qualified' status).
+  const QUALIFIED_OR_LATER = ['Qualified', 'Booked', 'Call Completed', 'Proposal Sent', 'Won'];
+
+  const [total, wonCount, hotCount, qualifiedCount, scoreAgg] = await Promise.all([
     Lead.countDocuments(query),
     Lead.countDocuments({ ...query, status: 'Won' }),
+    Lead.countDocuments({ ...query, lead_temperature: 'Hot' }),
+    Lead.countDocuments({ ...query, status: { $in: QUALIFIED_OR_LATER } }),
     Lead.aggregate([
       { $match: query },
       { $group: { _id: null, avgScore: { $avg: '$qualification_score' } } },
@@ -77,6 +85,8 @@ export const getLeadKpis = async (tenantId, filter = {}) => {
   return {
     total,
     won: wonCount,
+    hot: hotCount,
+    qualified: qualifiedCount,
     avgScore: scoreAgg[0]?.avgScore || 0,
   };
 };
@@ -405,12 +415,14 @@ export const findUsersByIds = async (userIds = []) => {
 export const getQualificationKpis = async (tenantId, filter = {}) => {
   const query = baseQuery(tenantId, filter);
 
-  const [totals, appliedCount] = await Promise.all([
+  const [totals, appliedCount, hotCount, hotAppliedCount] = await Promise.all([
     Qualification.aggregate([
       { $match: query },
       { $group: { _id: null, total: { $sum: 1 }, avgFitScore: { $avg: '$fit_score' } } },
     ]),
     Qualification.countDocuments({ ...query, applied: true }),
+    Qualification.countDocuments({ ...query, temperature: 'Hot' }),
+    Qualification.countDocuments({ ...query, temperature: 'Hot', applied: true }),
   ]);
 
   const total = totals[0]?.total || 0;
@@ -419,6 +431,10 @@ export const getQualificationKpis = async (tenantId, filter = {}) => {
     avgFitScore: totals[0]?.avgFitScore || 0,
     applied: appliedCount,
     appliedRate: total ? (appliedCount / total) * 100 : 0,
+    hotLeads: hotCount,
+    // Real metric, NOT the old mock's hardcoded "34%" placeholder: the
+    // applied-rate specifically among Hot-temperature qualifications.
+    hotConversionRate: hotCount ? (hotAppliedCount / hotCount) * 100 : 0,
   };
 };
 

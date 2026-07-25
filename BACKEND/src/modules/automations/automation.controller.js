@@ -54,23 +54,9 @@ export const getAutomation = asyncHandler(async (req, res) => {
   return sendSuccess(res, automation, 'Automation fetched successfully');
 });
 
-/**
- * updateAutomation — PATCH /api/automations/:id
- */
-export const updateAutomation = asyncHandler(async (req, res) => {
-  const automation = await automationService.updateAutomation(
-    req.user.tenantId, req.params.id, req.user.sub, req.body
-  );
-  return sendSuccess(res, automation, 'Automation updated successfully');
-});
-
-/**
- * deleteAutomation — DELETE /api/automations/:id
- */
-export const deleteAutomation = asyncHandler(async (req, res) => {
-  const result = await automationService.deleteAutomation(req.user.tenantId, req.params.id);
-  return sendSuccess(res, result, 'Automation deleted successfully');
-});
+// NOTE: updateAutomation / deleteAutomation were removed -- not named in
+// any of the 3 spec documents' action lists for this module (see
+// automation.routes.js header comment for the full explanation).
 
 /**
  * toggleAutomation — POST /api/automations/:id/toggle

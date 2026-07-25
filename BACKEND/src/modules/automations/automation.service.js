@@ -170,27 +170,8 @@ export const listAutomations = async (tenantId, filter, options) => {
   return { automations, pagination: paginationMeta({ page, limit, total }) };
 };
 
-export const updateAutomation = async (tenantId, id, userId, patch) => {
-  const existing = await automationRepo.findById(tenantId, id);
-  if (!existing) throw AppError.notFound('Automation not found');
-
-  if (patch && patch.trigger && patch.trigger.type && !TRIGGER_TYPE_VALUES.includes(patch.trigger.type)) {
-    throw AppError.badRequest('Invalid trigger.type');
-  }
-  if (patch && patch.action && patch.action.type && !ACTION_TYPE_VALUES.includes(patch.action.type)) {
-    throw AppError.badRequest('Invalid action.type');
-  }
-
-  const updated = await automationRepo.update(tenantId, id, Object.assign({}, patch, { updated_by: userId }));
-  return updated;
-};
-
-export const deleteAutomation = async (tenantId, id) => {
-  const existing = await automationRepo.findById(tenantId, id);
-  if (!existing) throw AppError.notFound('Automation not found');
-  await automationRepo.remove(tenantId, id);
-  return { id, deleted: true };
-};
+// NOTE: updateAutomation / deleteAutomation were removed -- not named in
+// any of the 3 spec documents' action lists for this module.
 
 // =============================================================================
 // TOGGLE

@@ -73,31 +73,9 @@ export const validateCreateAutomation = [
  * validateUpdateAutomation — PATCH /api/automations/:id
  * All fields optional for partial update.
  */
-export const validateUpdateAutomation = [
-  param('id')
-    .isMongoId().withMessage('Automation ID must be a valid MongoDB ObjectId'),
-
-  body('name')
-    .optional()
-    .isLength({ max: 100 }).withMessage('name cannot exceed 100 characters'),
-
-  body('trigger.type')
-    .optional()
-    .isIn(TRIGGER_TYPE_VALUES)
-    .withMessage('trigger.type must be one of: ' + TRIGGER_TYPE_VALUES.join(', ')),
-
-  body('condition.operator')
-    .optional({ nullable: true })
-    .isIn(CONDITION_OPERATOR_VALUES)
-    .withMessage('condition.operator must be one of: ' + CONDITION_OPERATOR_VALUES.join(', ')),
-
-  body('action.type')
-    .optional()
-    .isIn(ACTION_TYPE_VALUES)
-    .withMessage('action.type must be one of: ' + ACTION_TYPE_VALUES.join(', ')),
-
-  handleValidation,
-];
+// NOTE: validateUpdateAutomation was removed along with the PATCH /:id
+// route -- update is not in spec's action list for this module (see
+// automation.routes.js header comment for the full explanation).
 
 /**
  * validateListQuery — GET /api/automations

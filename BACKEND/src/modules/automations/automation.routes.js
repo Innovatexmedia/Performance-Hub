@@ -4,13 +4,21 @@
  *
  * FILE: src/modules/automations/automation.routes.js
  *
+ * SCOPE NOTE: trimmed to match spec exactly. Three independent spec
+ * documents describe this module's action surface and all three agree:
+ *   - DEVELOPER_HANDOFF.md's action table: `toggleAutomation, simulateAutomation, createAutomation`
+ *   - MASTER_SPEC.md B14: "Rule cards..., enable/disable, simulate run, logs"
+ *   - FRONTEND_SPEC.md section 15 (cited in automation.constants.js's own
+ *     header): "create rule -> toggle active -> 'Simulate run' -> view logs"
+ * None of the three ever names an update or delete action. PATCH /:id and
+ * DELETE /:id existed in an earlier build of this backend and have been
+ * removed to align -- same fix already applied to the Campaigns module.
+ *
  * ROUTE MAP:
  *   GET   /api/automations/kpis          — KPI row (all roles)
  *   GET   /api/automations               — list (all roles)
  *   POST  /api/automations               — create rule (tenant_admin+)
  *   GET   /api/automations/:id           — get single rule (all roles)
- *   PATCH /api/automations/:id           — update rule (tenant_admin+)
- *   DELETE /api/automations/:id          — delete rule (tenant_admin+)
  *   POST  /api/automations/:id/toggle    — enable/disable (tenant_admin+)
  *   POST  /api/automations/:id/simulate  — simulate run (sales_user+)
  *   GET   /api/automations/:id/logs      — run history (all roles)
@@ -24,7 +32,6 @@ import { Router } from 'express';
 import * as controller from './automation.controller.js';
 import {
   validateCreateAutomation,
-  validateUpdateAutomation,
   validateListQuery,
   validateIdParam,
   validateSimulate,
@@ -51,8 +58,6 @@ router
 
 // ── Resource routes
 router.get('/:id', validateIdParam, controller.getAutomation);
-router.patch('/:id', requireRole('tenant_admin'), validateUpdateAutomation, controller.updateAutomation);
-router.delete('/:id', requireRole('tenant_admin'), validateIdParam, controller.deleteAutomation);
 
 router.post('/:id/toggle', requireRole('tenant_admin'), validateIdParam, controller.toggleAutomation);
 router.post('/:id/simulate', requireRole('sales_user'), validateSimulate, controller.simulateAutomation);

@@ -172,88 +172,11 @@ export const createCampaign = async (data, reqUser) => {
   return campaign;
 };
 
-// =============================================================================
-// UPDATE CAMPAIGN
-// =============================================================================
-
-/**
- * updateCampaign — updates campaign fields.
- * Regenerates UTM link if campaign_name, source, or medium changes.
- */
-export const updateCampaign = async (tenantId, id, patch, reqUser) => {
-  const ctx      = buildCtx(reqUser);
-  const existing = await campaignRepo.findById(tenantId, id);
-  if (!existing) throw AppError.notFound('Campaign not found');
-
-  // Regenerate UTM link if key fields changed
-  if (patch.campaign_name || patch.source || patch.medium) {
-    patch.utm_tracking_link = generateUtmLink(
-      patch.campaign_name || existing.campaign_name,
-      patch.source        || existing.source,
-      patch.medium        || existing.medium
-    );
-  }
-
-  const updated = await campaignRepo.updateById(tenantId, id, {
-    ...patch,
-    updated_by: ctx.userId,
-  });
-
-  // Emit tracking event when campaign is activated/sent
-  if (
-    patch.status &&
-    patch.status !== CAMPAIGN_STATUS.DRAFT &&
-    existing.status === CAMPAIGN_STATUS.DRAFT
-  ) {
-    await createTrackingEvent({
-      tenant_id:  tenantId,
-      event_type: TRACKING_EVENT_TYPE.CAMPAIGN_SENT,
-      source:     existing.source,
-      medium:     existing.medium,
-      campaign:   existing.campaign_name,
-      metadata:   { campaign_id: id, campaign_type: existing.campaign_type },
-      created_by: ctx.userId,
-    });
-  }
-
-  return updated;
-};
-
-// =============================================================================
-// DELETE CAMPAIGN
-// =============================================================================
-
-export const deleteCampaign = async (tenantId, id, reqUser) => {
-  const existing = await campaignRepo.findById(tenantId, id);
-  if (!existing) throw AppError.notFound('Campaign not found');
-  await campaignRepo.deleteById(tenantId, id);
-};
-
-// =============================================================================
-// REGENERATE UTM LINK
-// =============================================================================
-
-/**
- * regenerateUtmLink — regenerates the UTM tracking link for a campaign.
- * SOURCE: MASTER_SPEC §B11 "UTM tracking-link generator (copyable)"
- * FRONTEND_SPEC §12 LINK column — copy icon
- */
-export const regenerateUtmLink = async (tenantId, id, reqUser) => {
-  const ctx      = buildCtx(reqUser);
-  const campaign = await campaignRepo.findById(tenantId, id);
-  if (!campaign) throw AppError.notFound('Campaign not found');
-
-  const utm_tracking_link = generateUtmLink(
-    campaign.campaign_name,
-    campaign.source,
-    campaign.medium
-  );
-
-  return campaignRepo.updateById(tenantId, id, {
-    utm_tracking_link,
-    updated_by: ctx.userId,
-  });
-};
+// NOTE: updateCampaign / deleteCampaign / regenerateUtmLink were removed --
+// not named anywhere in MASTER_SPEC.md, DEVELOPER_HANDOFF.md, or
+// FRONTEND_SPEC.md for this module. DEVELOPER_HANDOFF.md's action table
+// names exactly one write action here: createMarketingCampaign. The UTM
+// link is generated once, at creation, by generateUtmLink() below.
 
 // =============================================================================
 // EXPORT DATA — CSV download
