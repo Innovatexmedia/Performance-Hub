@@ -20,7 +20,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
       {open && <div className="fixed inset-0 z-30 bg-ink-950/50 lg:hidden" onClick={onClose} />}
       <aside
         className={cn(
-          'sidebar-scroll fixed inset-y-0 left-0 z-40 flex w-64 flex-col overflow-y-auto bg-sidebar text-ink-300 transition-transform lg:translate-x-0',
+          'sidebar-scroll fixed inset-y-0 left-0 z-40 flex w-64 flex-col overflow-y-auto bg-sidebar text-ink-300 transition-transform',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >
@@ -47,7 +47,7 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
                     <li key={item.path}>
                       <NavLink
                         to={item.path}
-                        onClick={onClose}
+                        onClick={() => { if (window.innerWidth < 1024) onClose(); }}
                         className={({ isActive }) =>
                           cn(
                             'group flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition',

@@ -1,10 +1,12 @@
-
-
 export const TOKEN_TYPES = Object.freeze({
   ACCESS:               "access",
   REFRESH:              "refresh",
   PASSWORD_RESET:       "password_reset",
   EMAIL_VERIFICATION:   "email_verification",
+  // Short-lived token proving "this user's password was already verified"
+  // during login, used only to pick which workspace to enter when a user
+  // has more than one active Membership. Never used for actual API access.
+  WORKSPACE_SELECTION:  "workspace_selection",
 });
 
 // ─── Cookie Names ─────────────────────────────────────────────────────────────

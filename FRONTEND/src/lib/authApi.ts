@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/apiClient';
-import type { AuthResult, AuthUser, LoginPayload, RegisterPayload } from '@/types/auth';
+import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, WorkspaceOption } from '@/types/auth';
 
 /**
  * Thin, typed functions -- one per backend route. No business logic here;
@@ -9,7 +9,19 @@ import type { AuthResult, AuthUser, LoginPayload, RegisterPayload } from '@/type
 export const authApi = {
   register: (payload: RegisterPayload) => apiClient.post<AuthResult>('/auth/register', payload),
 
-  login: (payload: LoginPayload) => apiClient.post<AuthResult>('/auth/login', payload),
+  /** May return AuthResult (normal login) or WorkspaceSelectionResult (2+ active memberships) -- see isWorkspaceSelectionResult() to distinguish. */
+  login: (payload: LoginPayload) => apiClient.post<LoginResult>('/auth/login', payload),
+
+  /**
+   * switchWorkspace -- two calling contexts, same function:
+   *   - Right after login (2+ memberships): pass selectionToken, no real access token exists yet.
+   *   - Mid-session (Topbar switcher): omit selectionToken -- the request's real Bearer token proves identity instead.
+   */
+  switchWorkspace: (tenantId: string, selectionToken?: string) =>
+    apiClient.post<AuthResult>('/auth/switch-workspace', { tenantId, selectionToken }),
+
+  /** Every workspace the currently authenticated user belongs to -- for the Topbar switcher dropdown. */
+  listMyWorkspaces: () => apiClient.get<{ workspaces: WorkspaceOption[] }>('/auth/my-workspaces').then((r) => r.workspaces),
 
   refresh: () => apiClient.post<AuthResult>('/auth/refresh'),
 

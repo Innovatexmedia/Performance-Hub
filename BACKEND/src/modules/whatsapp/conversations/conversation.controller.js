@@ -17,6 +17,13 @@ export const conversationController = {
 
     res.status(201).json(conversation);
   }),
+  // POST /api/whatsapp/conversations/for-lead/:leadId
+  // Real, safe entry point -- called by the Lead Detail drawer's WhatsApp
+  // quick action. Finds the lead's existing conversation, or creates one.
+  findOrCreateForLead: asyncHandler(async (req, res) => {
+    const conversation = await conversationService.findOrCreateForLead(req.context, req.params.leadId);
+    res.status(200).json(conversation);
+  }),
   // GET /api/whatsapp/conversations/:id
   details: asyncHandler(async (req, res) => {
     const result = await conversationService.getConversationDetails(req.context, req.params.id);

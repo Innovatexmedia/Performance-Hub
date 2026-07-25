@@ -69,6 +69,38 @@ export interface AuthResult {
   accessToken: string;
 }
 
+/** One entry in the workspace switcher — either at login-selection time or the Topbar dropdown. */
+export interface WorkspaceOption {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  logoUrl: string | null;
+  role: AuthRole;
+}
+
+/**
+ * The new branch of /auth/login's response, returned instead of AuthResult
+ * when a user has more than one active Membership. No token is issued yet
+ * -- selectionToken proves the password step already happened, and gets
+ * passed to /auth/switch-workspace once the user picks one.
+ * SOURCE: src/modules/auth/services/auth.service.js login()'s comment --
+ * every account that existed before this feature shipped has at most one
+ * Membership, so this branch is genuinely new behavior, not a change to
+ * how existing accounts log in.
+ */
+export interface WorkspaceSelectionResult {
+  requiresWorkspaceSelection: true;
+  selectionToken: string;
+  user: AuthUser;
+  workspaces: WorkspaceOption[];
+}
+
+export type LoginResult = AuthResult | WorkspaceSelectionResult;
+
+export function isWorkspaceSelectionResult(result: LoginResult): result is WorkspaceSelectionResult {
+  return 'requiresWorkspaceSelection' in result && result.requiresWorkspaceSelection === true;
+}
+
 /** Human-readable label for a role -- UI display only, never sent to the backend. */
 export const ROLE_LABELS: Record<AuthRole, string> = {
   super_admin: 'Super Admin',

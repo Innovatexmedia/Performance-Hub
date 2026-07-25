@@ -15,7 +15,7 @@ import { emitToTenant } from '../../../realtime/socket.js';
 
 import { conversationRepository } from './conversation.repository.js';
 import { messageRepository } from '../messages/message.repository.js';
-import { CONVERSATION_STATUS_VALUES } from './conversation.model.js';
+import { CONVERSATION_STATUS, CONVERSATION_STATUS_VALUES } from './conversation.model.js';
 
 function toConversationDTO(doc) {
   if (!doc) return null;
@@ -119,6 +119,41 @@ export const conversationService = {
       tenant_id: ctx.tenantId,
       ...data,
     });
+    return toConversationDTO(conversation);
+  },
+
+  /**
+   * findOrCreateForLead -- the real "open WhatsApp for this lead" entry
+   * point, called from the Lead Detail drawer's WhatsApp quick action.
+   * Reuses conversationRepository.findByPhone's normalized last-10-digit
+   * matching (same reasoning as metaWebhook.service.js's find-or-create --
+   * a lead's stored phone format may differ from however it was typed
+   * originally). Prefers whatsapp_number over phone if both are set.
+   */
+  async findOrCreateForLead(ctx, leadId) {
+    const lead = await leadRepository.findById(ctx.tenantId, leadId);
+    if (!lead) throw AppError.notFound('Lead not found');
+
+    const rawPhone = lead.whatsapp_number || lead.phone;
+    if (!rawPhone) {
+      throw AppError.badRequest('This lead has no phone number on file -- add one before starting a WhatsApp conversation.');
+    }
+
+    let conversation = await conversationRepository.findByPhone(ctx.tenantId, rawPhone);
+    if (!conversation) {
+      conversation = await conversationRepository.create({
+        tenant_id: ctx.tenantId,
+        lead_id: leadId,
+        phone: rawPhone,
+        contact_name: lead.name || '',
+        status: CONVERSATION_STATUS.NEW,
+        tags: [],
+        unread_count: 0,
+        last_message_preview: '',
+        archived: false,
+      });
+    }
+
     return toConversationDTO(conversation);
   },
 

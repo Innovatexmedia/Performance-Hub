@@ -20,6 +20,10 @@ export const whatsappInboxApi = {
   getConversationDetails: (id: string) =>
     apiClientRaw.get<ConversationDetails>(`/whatsapp/conversations/${id}`),
 
+  /** Real, safe entry point for "open WhatsApp for this lead" — used by the Lead Detail drawer's WhatsApp quick action. */
+  findOrCreateForLead: (leadId: string) =>
+    apiClientRaw.post<Conversation>(`/whatsapp/conversations/for-lead/${leadId}`),
+
   assignConversation: (id: string, userId: string) =>
     apiClientRaw.post<Conversation>(`/whatsapp/conversations/${id}/assign`, { userId }),
 

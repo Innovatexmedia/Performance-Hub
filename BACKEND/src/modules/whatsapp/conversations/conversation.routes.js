@@ -21,6 +21,7 @@ router.get('/', conversationController.list);
 // for API testing only
 router.get('/', conversationController.list);
 router.post('/', conversationController.create);
+router.post('/for-lead/:leadId', conversationController.findOrCreateForLead);
 
 
 // Conversation-scoped messages list (send/simulate live under /messages).

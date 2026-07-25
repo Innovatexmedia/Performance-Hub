@@ -22,7 +22,7 @@
 
 import { Router } from 'express';
 import * as authController from '../controllers/auth.controller.js';
-import { authenticate }    from '../../../shared/middlewares/auth.middleware.js';
+import { authenticate, optionalAuthenticate } from '../../../shared/middlewares/auth.middleware.js';
 import {
   loginRateLimit,
   forgotPasswordRateLimit,
@@ -46,11 +46,13 @@ router.post('/refresh',             authController.refresh);
 router.post('/forgot-password',     forgotPasswordRateLimit, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password',      validateResetPassword,  authController.resetPassword);
 router.post('/verify-email',        validateVerifyEmail,    authController.verifyEmail);
+router.post('/switch-workspace',    optionalAuthenticate, authController.switchWorkspace);
 
 // ─── Protected Routes (require valid access token) ───────────────────────────
 
 router.post('/logout',              authenticate, authController.logout);
 router.get('/me',                   authenticate, authController.getMe);
+router.get('/my-workspaces',        authenticate, authController.listMyWorkspaces);
 router.patch('/change-password',    authenticate, validateChangePassword, authController.changePassword);
 router.post('/resend-verification', authenticate, authController.resendVerification);
 
