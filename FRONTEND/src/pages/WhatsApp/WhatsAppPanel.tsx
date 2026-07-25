@@ -20,7 +20,6 @@ import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/format
 import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
-// import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
 import { PROVIDER_LABELS, NATIVE_PROVIDER, THIRD_PARTY_PROVIDER_VALUES, IMPLEMENTED_THIRD_PARTY_PROVIDERS } from '@/types/whatsappSettings';
@@ -32,6 +31,10 @@ import { useDeliveryLogs, useDeliveryLogsStats } from '@/hooks/useDeliveryLogs';
 import type { DeliveryLog, DeliveryStatus, DeliveryProvider } from '@/types/whatsappDeliveryLog';
 import { DELIVERY_PROVIDER_VALUES } from '@/types/whatsappDeliveryLog';
 import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
+import { usePermissions } from '@/hooks/usePermissions';
+import { useConsent, useConsentStats } from '@/hooks/useConsent';
+import type { Consent, ConsentStatus, ConsentSource, CreateConsentInput } from '@/types/whatsappConsent';
+import { CONSENT_STATUS_VALUES, CONSENT_SOURCE_VALUES } from '@/types/whatsappConsent';
 
 const TABS = [
   { id: 'inbox', label: 'Inbox' },
@@ -81,20 +84,6 @@ export function WhatsAppPanel() {
 }
 
 // ---- Contacts --------------------------------------------------------------
-/**
- * ContactsTab -- per DEVELOPER_HANDOFF.md's entity list, there is NO
- * separate WhatsAppContact entity in spec. Tab #2 is literally named
- * "Contacts / Leads" -- every field it needs (whatsapp_number,
- * consent_status, opt_out_status, last_contacted_at, qualification_score)
- * already lives on the real Lead entity. This reuses useLeads() (the same
- * hook the Leads page uses) rather than a separate WhatsApp-specific
- * collection, matching the mock's own db.leads-based implementation.
- *
- * NOTE: the backend still has a separate WhatsAppContact model used
- * internally by Campaigns/Broadcasts/Analytics for audience targeting --
- * that's a deliberate, deferred decision (see conversation), not something
- * this tab depends on.
- */
 function ContactsTab() {
   const [page, setPage] = useState(1);
   const { leads, pagination, loading, error } = useLeads({ page, limit: 20 });
@@ -141,15 +130,6 @@ function ContactsTab() {
 }
 
 // ---- Templates -------------------------------------------------------------
-/**
- * TemplatesTab -- real data. Status-aware actions use the REAL 7-value
- * status enum (DRAFT/SUBMITTED/APPROVED/REJECTED/ACTIVE/PAUSED/ARCHIVED),
- * not the mock's 11-state DEVELOPER_HANDOFF.md workflow -- that fuller
- * workflow lives in approvalStatus, managed separately by the Template
- * Approval tab. Confirmed via real Postman testing: activate/pause/archive
- * are real, working dedicated endpoints; duplicate creates a genuine new
- * Draft copy with a fresh id/slug.
- */
 function TemplatesTab() {
   const { templates, loading, error, refetch, deleteTemplate, duplicateTemplate, activateTemplate, pauseTemplate, archiveTemplate } = useWhatsAppTemplates();
   const [showBuilder, setShowBuilder] = useState(false);
@@ -229,29 +209,6 @@ function TemplatesTab() {
 }
 
 // ---- Approval workflow -----------------------------------------------------
-/**
- * ApprovalTab -- real, backend-connected. Replaces the old mock version
- * that read from db.templates / useStore()'s transitionTemplate (in-memory
- * seed data, never touched the real API -- that's why it always showed
- * the same handful of fake templates like "proposal_followup" regardless
- * of what was actually created).
- *
- * Reuses useWhatsAppTemplates() for the list -- same data Templates tab
- * shows, since approvalStatus/transitionHistory/approvalComments/
- * providerRejectionReason are already real fields on WhatsAppTemplate, no
- * separate fetch needed. Actions go through useTemplateApproval(), which
- * calls the real, role-gated, transition-validated endpoints.
- *
- * Only three approvalStatus values have a real user-facing action on the
- * backend right now (see ALLOWED_TRANSITIONS in
- * templateApproval.constants.js):
- *   DRAFT                          -> Submit for internal review
- *   SUBMITTED_FOR_INTERNAL_REVIEW  -> Approve / Request changes / Reject
- *   INTERNALLY_APPROVED            -> Submit to provider
- * Everything past SUBMITTED_TO_PROVIDER (PROVIDER_APPROVED,
- * PROVIDER_REJECTED, PAUSED, DISABLED) is provider-webhook-controlled --
- * shown as read-only status here, not fake buttons that would just 409.
- */
 const APPROVAL_STATUS_LABEL: Record<string, string> = {
   DRAFT: 'Draft',
   SUBMITTED_FOR_INTERNAL_REVIEW: 'Submitted for Internal Review',
@@ -302,7 +259,7 @@ function ApprovalTab() {
 
   const handleRequestChanges = (t: WhatsAppTemplateReal) => {
     const comment = window.prompt('What changes are needed? (required)');
-    if (comment === null) return; // cancelled
+    if (comment === null) return;
     if (!comment.trim()) return toast.error('A comment is required to request changes');
     return runAction(t.id, () => requestChanges(t.id, comment), 'Changes requested', 'Could not request changes');
   };
@@ -345,7 +302,6 @@ function ApprovalTab() {
               <p className="mt-2 rounded-lg bg-ink-50 px-3 py-1.5 text-xs text-ink-600">💬 {t.approvalComments}</p>
             )}
 
-            {/* Transition timeline -- real audit trail, not a fake status_history array */}
             {t.transitionHistory.length > 0 ? (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-400">
                 <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600">{t.transitionHistory[0].fromStatus ?? 'DRAFT'}</span>
@@ -360,7 +316,6 @@ function ApprovalTab() {
               <p className="mt-3 text-xs text-ink-400">No transitions yet — still in Draft.</p>
             )}
 
-            {/* Actions -- only for the 3 states that have a real backend action */}
             <div className="mt-3 flex flex-wrap gap-2">
               {t.approvalStatus === 'DRAFT' && (
                 <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitForReview(t)}>
@@ -563,56 +518,256 @@ function RulesTab() {
 }
 
 // ---- Consent ---------------------------------------------------------------
+/**
+ * ConsentTab -- real, backend-connected. Replaces the mock version that
+ * read/wrote Lead.consent_status / Lead.opt_out_status directly.
+ *
+ * IMPORTANT: the real backend models consent as its OWN collection
+ * (WhatsAppConsent), keyed by phoneNumber, decoupled from Lead. Two known
+ * gaps as of this build:
+ *   1. message.service.js's opt-out send guard still reads
+ *      Lead.opt_out_status directly, not this module's verifyConsent().
+ *   2. Nothing auto-creates a Consent record when a lead/conversation is
+ *      created -- this tab includes a "New consent record" action so it's
+ *      still usable standalone.
+ *
+ * No dedicated /consent/stats endpoint exists -- see useConsentStats for
+ * how the KPI cards are computed (one limit=1 list call per status).
+ */
+const CONSENT_STATUS_TONE: Record<ConsentStatus, 'gray' | 'green' | 'amber' | 'red'> = {
+  OPTED_IN: 'green',
+  PENDING: 'amber',
+  OPTED_OUT: 'red',
+  EXPIRED: 'gray',
+  BLOCKED: 'red',
+};
+
 function ConsentTab() {
-  const { db, tenantId } = useDb();
-  const { updateLead } = useStore();
-  const leads = db.leads.filter((l) => l.tenant_id === tenantId && !l.archived);
-  const optedOut = leads.filter((l) => l.opt_out_status);
+  const permissions = usePermissions();
+  const [page, setPage] = useState(1);
+  const [statusFilter, setStatusFilter] = useState<ConsentStatus | ''>('');
+  const [search, setSearch] = useState('');
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
+
+  const listQuery = {
+    page,
+    limit: 20,
+    ...(statusFilter ? { status: statusFilter } : {}),
+    ...(search ? { search } : {}),
+  };
+
+  const { records, pagination, loading, error, upsert, create, optIn, optOut, block, unblock } = useConsent(listQuery);
+  const { stats, refetch: refetchStats } = useConsentStats();
+
+  // consent.service.js broadcasts to the whole tenant room (including our
+  // own socket), so our own action's echo arrives here too -- harmless
+  // now: upsert() with the same real record is idempotent, and
+  // refetchStats() always returns the true current value, so a redundant
+  // call from the echo just re-fetches the same correct number. No
+  // self-echo tracking needed.
+  useWhatsAppRealtime({
+    onConsent: (payload) => {
+      upsert(payload.consent);
+      refetchStats();
+    },
+  });
+
+  const runAction = async (id: string, action: () => Promise<Consent>, successMsg: string, failMsg: string) => {
+    setBusyId(id);
+    try {
+      await action(); // already upserts the real returned record internally (see useConsent)
+      refetchStats();
+      toast.success(successMsg);
+    } catch (err) {
+      toast.error(failMsg, err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleOptIn = (c: Consent) =>
+    runAction(c.id, () => optIn(c.id, { optInMethod: 'MANUAL', consentSource: c.consentSource || 'CRM' }), 'Contact opted in', 'Could not opt in');
+
+  const handleOptOut = (c: Consent) => {
+    const reason = window.prompt('Reason for opt-out (optional)') || undefined;
+    return runAction(c.id, () => optOut(c.id, { optOutMethod: 'MANUAL', reason }), 'Contact opted out', 'Could not opt out');
+  };
+
+  const handleBlock = (c: Consent) => {
+    if (!window.confirm(`Block ${c.phoneNumber}? They will be excluded from all sending until unblocked.`)) return;
+    const reason = window.prompt('Reason for blocking (optional)') || undefined;
+    return runAction(c.id, () => block(c.id, reason), 'Contact blocked', 'Could not block contact');
+  };
+
+  const handleUnblock = (c: Consent) =>
+    runAction(c.id, () => unblock(c.id), 'Contact unblocked', 'Could not unblock contact');
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Opted-in" value={leads.filter((l) => l.consent_status === 'granted' && !l.opt_out_status).length} icon={<CheckCircle2 size={18} />} accent="#10b981" />
-        <KpiCard label="Pending consent" value={leads.filter((l) => l.consent_status === 'pending').length} icon={<MessageSquare size={18} />} accent="#f59e0b" />
-        <KpiCard label="Opted-out" value={optedOut.length} icon={<XCircle size={18} />} accent="#ef4444" />
-        <KpiCard label="Opt-out rate" value={percent(leads.length ? (optedOut.length / leads.length) * 100 : 0, 1)} icon={<XCircle size={18} />} accent="#ef4444" />
-      </div>
+      {stats && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <KpiCard label="Opted-in" value={stats.counts.OPTED_IN} icon={<CheckCircle2 size={18} />} accent="#10b981" />
+          <KpiCard label="Pending" value={stats.counts.PENDING} icon={<MessageSquare size={18} />} accent="#f59e0b" />
+          <KpiCard label="Opted-out" value={stats.counts.OPTED_OUT} icon={<XCircle size={18} />} accent="#ef4444" />
+          <KpiCard label="Blocked" value={stats.counts.BLOCKED} icon={<XCircle size={18} />} accent="#ef4444" />
+        </div>
+      )}
+
       <Card>
-        <CardHeader title="Consent & Suppression List" subtitle="Opt-out keywords: STOP · UNSUBSCRIBE · CANCEL · NO · REMOVE" />
-        <Table>
-          <thead><tr><Th>Contact</Th><Th>Consent</Th><Th>Source</Th><Th>Status</Th><Th>Action</Th></tr></thead>
-          <tbody>
-            {leads.slice(0, 25).map((l) => (
-              <Tr key={l.id}>
-                <Td className="font-medium">{l.name}</Td>
-                <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
-                <Td>{l.source}</Td>
-                <Td>{l.opt_out_status ? <Badge tone="red">Suppressed</Badge> : <Badge tone="green">Sendable</Badge>}</Td>
-                <Td><Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => updateLead(l.id, { opt_out_status: !l.opt_out_status })}>{l.opt_out_status ? 'Restore' : 'Opt out'}</Button></Td>
-              </Tr>
-            ))}
-          </tbody>
-        </Table>
+        <CardHeader
+          title="Consent & Suppression List"
+          subtitle="Opt-out keywords: STOP · UNSUBSCRIBE · CANCEL · NO · REMOVE"
+          action={
+            <div className="flex flex-wrap gap-2">
+              <Input
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                placeholder="Search phone, name…"
+                className="w-52 py-1.5 text-sm"
+              />
+              <Select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as ConsentStatus | ''); setPage(1); }} className="w-auto py-1.5 text-sm">
+                <option value="">All statuses</option>
+                {CONSENT_STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+              {permissions.consent.canCreate && (
+                <Button className="px-3 py-1.5 text-xs" onClick={() => setShowCreate(true)}><Plus size={14} /> New consent record</Button>
+              )}
+            </div>
+          }
+        />
+
+        {error ? (
+          <EmptyState title="Couldn't load consent records" description={error} />
+        ) : loading && records.length === 0 ? (
+          <p className="p-8 text-center text-sm text-ink-400">Loading consent records…</p>
+        ) : records.length === 0 ? (
+          <EmptyState title="No consent records yet" description="Create one manually, or connect a source that syncs contacts automatically." />
+        ) : (
+          <>
+            <Table>
+              <thead><tr><Th>Contact</Th><Th>Phone</Th><Th>Status</Th><Th>Source</Th><Th>Last verified</Th><Th>Actions</Th></tr></thead>
+              <tbody>
+                {records.map((c) => (
+                  <Tr key={c.id}>
+                    <Td className="font-medium">{c.contactName || c.leadName || '—'}</Td>
+                    <Td className="font-mono text-xs">{c.phoneNumber}</Td>
+                    <Td>
+                      <Badge tone={CONSENT_STATUS_TONE[c.status]}>{c.status}</Badge>
+                      {c.status === 'BLOCKED' && c.blockedReason && (
+                        <span className="ml-1.5 text-[11px] text-red-500">{c.blockedReason}</span>
+                      )}
+                    </Td>
+                    <Td>{c.consentSource || '—'}</Td>
+                    <Td className="text-ink-500">{c.lastVerifiedAt ? timeAgo(c.lastVerifiedAt) : 'Never'}</Td>
+                    <Td>
+                      <div className="flex flex-wrap gap-1.5">
+                        {permissions.consent.canOptIn && (c.status === 'PENDING' || c.status === 'OPTED_OUT' || c.status === 'EXPIRED') && (
+                          <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === c.id} onClick={() => void handleOptIn(c)}>
+                            Opt in
+                          </Button>
+                        )}
+                        {permissions.consent.canOptOut && (c.status === 'PENDING' || c.status === 'OPTED_IN') && (
+                          <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === c.id} onClick={() => void handleOptOut(c)}>
+                            Opt out
+                          </Button>
+                        )}
+                        {permissions.consent.canBlock && c.status !== 'BLOCKED' && (
+                          <Button variant="secondary" className="border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50" disabled={busyId === c.id} onClick={() => void handleBlock(c)}>
+                            Block
+                          </Button>
+                        )}
+                        {permissions.consent.canUnblock && c.status === 'BLOCKED' && (
+                          <Button className="px-2.5 py-1 text-xs" disabled={busyId === c.id} onClick={() => void handleUnblock(c)}>
+                            Unblock
+                          </Button>
+                        )}
+                        {!permissions.consent.canOptIn && !permissions.consent.canBlock && (
+                          <span className="text-xs text-ink-400">View only</span>
+                        )}
+                      </div>
+                    </Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+            {pagination && pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3">
+                <p className="text-xs text-ink-500">Page {pagination.page} of {pagination.totalPages} · {pagination.total} total</p>
+                <div className="flex gap-1.5">
+                  <Button variant="secondary" disabled={!pagination.hasPrev} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={15} /> Prev</Button>
+                  <Button variant="secondary" disabled={!pagination.hasNext} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight size={15} /></Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
       </Card>
+
+      {showCreate && (
+        <CreateConsentModal
+          onClose={() => setShowCreate(false)}
+          onCreated={() => setShowCreate(false)}
+          create={async (input: CreateConsentInput) => {
+            const record = await create(input); // already upserts internally
+            refetchStats();
+            return record;
+          }}
+        />
+      )}
     </div>
   );
 }
 
+function CreateConsentModal({ onClose, onCreated, create }: {
+  onClose: () => void;
+  onCreated: () => void;
+  create: (input: CreateConsentInput) => Promise<Consent>;
+}) {
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [status, setStatus] = useState<ConsentStatus>('PENDING');
+  const [consentSource, setConsentSource] = useState<ConsentSource>('CRM');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!phoneNumber.trim()) return toast.error('Phone number is required');
+    setSaving(true);
+    try {
+      await create({ phoneNumber: phoneNumber.trim(), status, consentSource });
+      toast.success('Consent record created');
+      onCreated();
+    } catch (err) {
+      toast.error('Could not create record', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open onClose={onClose} title="New Consent Record"
+      footer={<><Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button><Button onClick={() => void submit()} disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button></>}
+    >
+      <div className="space-y-4">
+        <Field label="Phone number" hint="International format, e.g. +14155550142">
+          <Input value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} placeholder="+14155550142" />
+        </Field>
+        <Field label="Initial status">
+          <Select value={status} onChange={(e) => setStatus(e.target.value as ConsentStatus)}>
+            {CONSENT_STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
+        </Field>
+        <Field label="Source">
+          <Select value={consentSource} onChange={(e) => setConsentSource(e.target.value as ConsentSource)}>
+            {CONSENT_SOURCE_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+          </Select>
+        </Field>
+      </div>
+    </Modal>
+  );
+}
+
 // ---- Delivery logs ---------------------------------------------------------
-// ---- Delivery logs ---------------------------------------------------------
-/**
- * LogsTab -- real, backend-connected. Replaces the mock db.deliveryLogs
- * version. Filters (status, provider, search) live in CardHeader's `action`
- * prop (confirmed against charts/index.tsx: `<CardHeader title={title}
- * subtitle={subtitle} action={action} />` -- singular `action`, not
- * `actions`), matching how this codebase actually surfaces header-level
- * controls rather than guessing at a prop shape.
- *
- * Stats cards come from GET /delivery-logs/stats, computed server-side via
- * aggregation -- not client-computed from whatever's on the current page.
- *
- * Retry button only shows for FAILED rows (RETRYABLE_STATUSES) -- matches
- * the backend's own transition guard, so clicking it never just 409s.
- */
 const DELIVERY_STATUS_TONE: Record<string, 'gray' | 'violet' | 'green' | 'red' | 'amber' | 'blue'> = {
   QUEUED: 'gray',
   SENDING: 'blue',
@@ -643,15 +798,15 @@ function LogsTab() {
     ...(search ? { search } : {}),
   };
 
-const { logs, pagination, loading, error, retry, refetch } = useDeliveryLogs(listQuery);
-const { stats, refetch: refetchStats } = useDeliveryLogsStats(status || provider ? { status: status || undefined, provider: provider || undefined } : {});
+  const { logs, pagination, loading, error, retry, refetch } = useDeliveryLogs(listQuery);
+  const { stats, refetch: refetchStats } = useDeliveryLogsStats(status || provider ? { status: status || undefined, provider: provider || undefined } : {});
 
-useWhatsAppRealtime({
-  onDeliveryLog: () => {
-    refetch();
-    refetchStats();
-  },
-});
+  useWhatsAppRealtime({
+    onDeliveryLog: () => {
+      refetch();
+      refetchStats();
+    },
+  });
 
   const handleRetry = async (log: DeliveryLog) => {
     setRetryingId(log.id);
@@ -801,122 +956,6 @@ function AnalyticsTab() {
 }
 
 // ---- Settings --------------------------------------------------------------
-/**
- * SettingsTab -- real, backend-connected WhatsApp Provider Settings.
- *
- * Phase 1 scope, confirmed with the user: only META_CLOUD + panelMode
- * NATIVE has a real, working send/receive/webhook path. Every other
- * provider is a real, valid, stored enum value with no adapter
- * implemented yet -- shown in the dropdown but disabled, not hidden, so
- * the gap is honest.
- *
- * Three fields deliberately differ from the original reference design,
- * each for a specific real-backend reason (confirmed with the user
- * beforehand):
- *   - "Default Sender Number" -> read-only, populated by Test Connection
- *     from Meta's real API response, not a typed field (there's nowhere
- *     to store a typed value distinct from phoneNumberId).
- *   - "Webhook URL" -> read-only, computed server-side from
- *     API_BASE_URL + tenantId, with a copy button. This is OUR receiving
- *     endpoint, not something a tenant invents.
- *   - "App Secret" is present here even though the original reference
- *     design didn't show it -- it's functionally required for webhook
- *     signature verification (HMAC against this exact value) to work at
- *     all; without it, real inbound messages could never be verified.
- */
-// ---- Settings --------------------------------------------------------------
-/**
- * SettingsTab -- real, backend-connected WhatsApp Provider Settings.
- *
- * Phase 1 scope, confirmed with the user: only META_CLOUD + panelMode
- * NATIVE has a real, working send/receive/webhook path.
- *
- * ARCHITECTURE DECISION (Option B) -- the backend owns execution mode:
- *   - WhatsApp Mode ('panelMode') is the one real user choice:
- *       - 'NATIVE' (default): provider is locked to Native Meta Cloud API.
- *         The Provider dropdown is disabled entirely, not just
- *         individually-disabled options -- there is only one valid value.
- *       - 'THIRD_PARTY': the Provider dropdown becomes enabled, offering
- *         WATI / Interakt / AiSensy / Gallabox / Twilio / 360dialog /
- *         Custom Webhook -- all shown as "(coming soon)" since none have a
- *         working adapter yet in this phase.
- *   - `providerMode` (LIVE / SANDBOX / SIMULATION) is NEVER sent by this
- *     component. It isn't even on UpdateProviderInput. The backend derives
- *     it exclusively from a successful Test Connection. Simulation/Sandbox
- *     are not user-facing concepts anywhere in this screen.
- *
- * Three fields deliberately differ from the original reference design,
- * each for a specific real-backend reason (confirmed with the user
- * beforehand):
- *   - "Default Sender Number" -> read-only, populated by Test Connection
- *     from Meta's real API response, not a typed field (there's nowhere
- *     to store a typed value distinct from phoneNumberId).
- *   - "Webhook URL" -> read-only, computed server-side from
- *     API_BASE_URL + tenantId, with a copy button. This is OUR receiving
- *     endpoint, not something a tenant invents.
- *   - "App Secret" is present here even though the original reference
- *     design didn't show it -- it's functionally required for webhook
- *     signature verification (HMAC against this exact value) to work at
- *     all; without it, real inbound messages could never be verified.
- */
-// ---- Settings --------------------------------------------------------------
-/**
- * SettingsTab -- real, backend-connected WhatsApp Provider Settings.
- *
- * Test Connection UX improvements over the previous version:
- *   - Result is no longer toast-only (which disappears and is easy to
- *     miss). A persistent inline status panel shows: connected number +
- *     verified name on success, OR the actual error message on failure --
- *     both stay visible until the next action, not just a few seconds.
- *   - "Last verified" relative time is shown next to the Live/Not-verified
- *     badge, sourced from settings.meta.lastVerifiedAt.
- *   - Test Connection is disabled until the fields it actually needs
- *     (phoneNumberId, businessAccountId, and an access token -- either
- *     freshly typed or already saved) are present, with a hint explaining
- *     why it's disabled, instead of letting people click it and get a
- *     generic 400.
- *   - Editing any credential field clears the previous test result, so a
- *     stale "Connected" panel can't sit there next to different,
- *     untested credentials.
- */
-// ---- Settings --------------------------------------------------------------
-/**
- * SettingsTab -- real, backend-connected WhatsApp Provider Settings.
- *
- * Latest fixes:
- *   - Save settings now actually validates required Native Meta Cloud
- *     fields (Phone Number ID, Business Account ID, Access Token) before
- *     submitting, instead of silently accepting a half-filled form. The
- *     button is disabled while required fields are missing, and once a
- *     save is attempted, the specific missing fields get a red border +
- *     "Required" hint so it's obvious what's blocking it.
- *   - Disconnect is now a quiet text link under the status badges instead
- *     of a bordered button sitting next to them -- it's a destructive,
- *     infrequent action and shouldn't visually compete with "Save
- *     settings" / "Test Connection".
- *   - Test Connection result is a persistent inline panel (not just a
- *     toast), "Last verified" relative time shown, Test Connection
- *     disabled until required fields are present.
- */
-// ---- Settings --------------------------------------------------------------
-/**
- * SettingsTab -- real, backend-connected WhatsApp Provider Settings.
- *
- * Latest fixes:
- *   - Save settings now actually validates required Native Meta Cloud
- *     fields (Phone Number ID, Business Account ID, Access Token) before
- *     submitting, instead of silently accepting a half-filled form. The
- *     button is disabled while required fields are missing, and once a
- *     save is attempted, the specific missing fields get a red border +
- *     "Required" hint so it's obvious what's blocking it.
- *   - Disconnect is now a quiet text link under the status badges instead
- *     of a bordered button sitting next to them -- it's a destructive,
- *     infrequent action and shouldn't visually compete with "Save
- *     settings" / "Test Connection".
- *   - Test Connection result is a persistent inline panel (not just a
- *     toast), "Last verified" relative time shown, Test Connection
- *     disabled until required fields are present.
- */
 function SettingsTab() {
   const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect } = useWhatsAppSettings();
 
@@ -956,8 +995,6 @@ function SettingsTab() {
   const hasBusinessAccountId = businessAccountId.trim().length > 0;
   const hasAccessToken = accessToken.trim().length > 0 || Boolean(settings?.meta.hasAccessToken);
 
-  // Native Meta Cloud needs all three before it can ever be tested/used --
-  // this is the same requirement Save and Test Connection both enforce.
   const nativeFieldsComplete = hasPhoneNumberId && hasBusinessAccountId && hasAccessToken;
   const canSave = panelMode !== 'NATIVE' || nativeFieldsComplete;
   const canTest = panelMode === 'NATIVE' && nativeFieldsComplete;
@@ -975,8 +1012,6 @@ function SettingsTab() {
       await updateProvider({
         provider: panelMode === 'NATIVE' ? NATIVE_PROVIDER : provider,
         panelMode,
-        // providerMode is deliberately NOT sent -- backend-derived only,
-        // see Architecture Decision, Option B.
         meta: {
           businessAccountId,
           phoneNumberId,
@@ -1187,7 +1222,6 @@ function SettingsTab() {
         <p className="mt-2 text-[11px] text-amber-600">Enter Phone Number ID, Business Account ID, and an Access Token before saving or testing.</p>
       )}
 
-      {/* Persistent inline result -- doesn't disappear like a toast does. */}
       {testResult && (
         <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
           <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />

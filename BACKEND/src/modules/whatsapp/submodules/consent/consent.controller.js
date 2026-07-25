@@ -48,6 +48,12 @@ export const consentController = {
     return sendPaginated(res, data, pagination);
   }),
 
+  // GET /api/whatsapp/consent/stats
+  stats: asyncHandler(async (req, res) => {
+    const result = await consentService.getStats(buildCtx(req));
+    return sendSuccess(res, result);
+  }),
+
   // GET /api/whatsapp/consent/verify/:phoneNumber
   verify: asyncHandler(async (req, res) => {
     const result = await consentService.verifyConsent(buildCtx(req), req.params.phoneNumber);

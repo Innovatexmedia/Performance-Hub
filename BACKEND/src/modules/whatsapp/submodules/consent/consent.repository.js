@@ -57,4 +57,22 @@ export const consentRepository = {
       { new: true },
     );
   },
+
+  /**
+   * Aggregate consent counts by status for a tenant, in ONE query --
+   * powers GET /consent/stats. Mirrors the exact pattern
+   * deliveryLogsRepository.aggregateStats() already uses. Replaces the
+   * old frontend workaround that ran 5 separate list() calls (one per
+   * status, limit=1) just to compute counts client-side -- that approach
+   * was expensive AND, combined with per-action client-side math, was the
+   * root cause of two real bugs (double-counting, a race condition)
+   * fixed earlier. A single source of truth here removes that entire
+   * class of bug.
+   */
+  async aggregateStats(tenantId) {
+    return Consent.aggregate([
+      { $match: { tenantId } },
+      { $group: { _id: '$status', count: { $sum: 1 } } },
+    ]);
+  },
 };

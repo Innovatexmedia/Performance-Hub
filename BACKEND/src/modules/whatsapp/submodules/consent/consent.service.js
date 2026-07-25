@@ -8,16 +8,28 @@
  *   • Append-only history tracking
  *   • Tenant isolation
  *   • Compliance validation (expiry, sendable status)
+ *   • Realtime push -- every status-changing action emits 'whatsapp:consent'
+ *     to the tenant's socket room (see realtime/socket.js), same pattern as
+ *     templateApproval.service.js / deliveryLogs.service.js. This lets any
+ *     open Consent tab for the tenant reflect another user's action (or
+ *     this tenant's own auto-expiry) instantly, with ZERO extra HTTP calls
+ *     on either side -- sockets aren't subject to the REST rate limiter
+ *     (app.js's `app.use('/api', generalApiRateLimit)` only wraps
+ *     '/api/*' routes), so this doesn't compound the per-IP request budget
+ *     the way polling for the same effect would.
  *
  * Status changes always:
  *   1. Validate the transition
  *   2. Stamp the relevant timestamp
  *   3. Append (never overwrite) a history entry
+ *   4. Emit the realtime event
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { emitToTenant } from '../../../../realtime/socket.js';
 import { consentRepository } from './consent.repository.js';
 import {
   CONSENT_STATUS,
+  CONSENT_STATUS_VALUES,
   CONSENT_ACTION,
   ALLOWED_STATUS_TRANSITIONS,
   SENDABLE_STATUSES,
@@ -98,6 +110,21 @@ function meta(req) {
   };
 }
 
+/**
+ * Emit the realtime consent event. `previousStatus` is null for a brand
+ * new record (create()); every other caller passes the status the record
+ * was in immediately before this change, so the frontend can apply the
+ * exact same local bump(toStatus, fromStatus) it already uses for its own
+ * actions -- no extra fetch needed on the receiving end either.
+ */
+function emitConsentChanged(tenantId, updated, previousStatus) {
+  emitToTenant(tenantId, 'whatsapp:consent', {
+    consentId: String(updated._id ?? updated.id),
+    consent: toDTO(updated),
+    previousStatus,
+  });
+}
+
 // ── Service ────────────────────────────────────────────────────────────────────
 
 export const consentService = {
@@ -127,6 +154,7 @@ export const consentService = {
       updatedBy:    ctx.userId,
     });
 
+    emitConsentChanged(ctx.tenantId, consent, null);
     return toDTO(consent);
   },
 
@@ -193,6 +221,10 @@ export const consentService = {
         { status: CONSENT_STATUS.EXPIRED },
         historyEntry,
       );
+      // This is a silent, backend-triggered transition (not a user
+      // clicking a button) -- still needs to push, or an open Consent tab
+      // would show a stale OPTED_IN badge until manually refreshed.
+      emitConsentChanged(ctx.tenantId, updated, CONSENT_STATUS.OPTED_IN);
       return { allowed: false, status: updated.status, reason: 'Consent expired' };
     }
 
@@ -228,13 +260,15 @@ export const consentService = {
     if (consentText)   set.consentText = consentText;
     if (expiresAt)     set.expiresAt = new Date(expiresAt);
 
-    const historyEntry = buildHistory(consent.status, CONSENT_STATUS.OPTED_IN, CONSENT_ACTION.OPT_IN, {
+    const previousStatus = consent.status;
+    const historyEntry = buildHistory(previousStatus, CONSENT_STATUS.OPTED_IN, CONSENT_ACTION.OPT_IN, {
       reason:      reason || 'Contact opted in',
       performedBy: ctx.userId,
       ...reqMeta,
     });
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
+    emitConsentChanged(ctx.tenantId, updated, previousStatus);
     return toDTO(updated);
   },
 
@@ -257,13 +291,15 @@ export const consentService = {
       updatedBy:    ctx.userId,
     };
 
-    const historyEntry = buildHistory(consent.status, CONSENT_STATUS.OPTED_OUT, CONSENT_ACTION.OPT_OUT, {
+    const previousStatus = consent.status;
+    const historyEntry = buildHistory(previousStatus, CONSENT_STATUS.OPTED_OUT, CONSENT_ACTION.OPT_OUT, {
       reason:      reason || 'Contact opted out',
       performedBy: ctx.userId,
       ...reqMeta,
     });
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
+    emitConsentChanged(ctx.tenantId, updated, previousStatus);
     return toDTO(updated);
   },
 
@@ -277,19 +313,21 @@ export const consentService = {
     }
     assertTransition(consent.status, CONSENT_STATUS.BLOCKED);
 
+    const previousStatus = consent.status;
     const set = {
       status:         CONSENT_STATUS.BLOCKED,
       blockedReason:  reason || 'Blocked by tenant',
-      preBlockStatus: consent.status,   // remember so unblock can restore
+      preBlockStatus: previousStatus,   // remember so unblock can restore
       updatedBy:      ctx.userId,
     };
-    const historyEntry = buildHistory(consent.status, CONSENT_STATUS.BLOCKED, CONSENT_ACTION.BLOCK, {
+    const historyEntry = buildHistory(previousStatus, CONSENT_STATUS.BLOCKED, CONSENT_ACTION.BLOCK, {
       reason:      reason || 'Contact blocked',
       performedBy: ctx.userId,
       ...reqMeta,
     });
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
+    emitConsentChanged(ctx.tenantId, updated, previousStatus);
     return toDTO(updated);
   },
 
@@ -319,6 +357,26 @@ export const consentService = {
     });
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
+    emitConsentChanged(ctx.tenantId, updated, CONSENT_STATUS.BLOCKED);
     return toDTO(updated);
+  },
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Real, single-query aggregate counts by status. Powers the Consent
+   * tab's KPI cards -- ONE call, always the true server value, no client
+   * math involved anywhere. See consentRepository.aggregateStats() for
+   * why this replaced the old 5-call client-side workaround.
+   */
+  async getStats(ctx) {
+    const rows = await consentRepository.aggregateStats(ctx.tenantId);
+    const counts = Object.fromEntries(CONSENT_STATUS_VALUES.map((s) => [s, 0]));
+    for (const row of rows) {
+      if (counts[row._id] !== undefined) counts[row._id] = row.count;
+    }
+    const total = Object.values(counts).reduce((a, b) => a + b, 0);
+    const optOutRate = total > 0 ? Number(((counts.OPTED_OUT / total) * 100).toFixed(1)) : 0;
+    return { total, counts, optOutRate };
   },
 };

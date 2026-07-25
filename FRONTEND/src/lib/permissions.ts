@@ -97,6 +97,21 @@ export const qualificationPermissions = {
 };
 
 /**
+ * Consent permissions -- mirrors consent.constants.js's ROLE_MIN exactly
+ * (see consent.routes.js, which applies each floor per-endpoint):
+ *
+ *   CREATE, READ, VERIFY, OPT_IN, OPT_OUT, HISTORY -> sales_user+
+ *   BLOCK, UNBLOCK                                  -> tenant_admin+
+ */
+export const consentPermissions = {
+  canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canOptIn: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canOptOut: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canBlock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+  canUnblock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+};
+
+/**
  * super_admin-only gate -- used for nav visibility. This is the ONE case
  * where hiding an entire section (not just an action) is correct, because
  * Super Admin routes operate in a fundamentally different, tenant-less
