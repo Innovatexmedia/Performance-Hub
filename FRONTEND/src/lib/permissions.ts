@@ -167,7 +167,7 @@ export const consentPermissions = {
   canBlock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
   canUnblock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
 };
-};
+
 
 /**
  * super_admin-only gate -- used for nav visibility. This is the ONE case

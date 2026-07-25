@@ -64,6 +64,5 @@ export function usePermissions() {
       canBlock: consentPermissions.canBlock(role),
       canUnblock: consentPermissions.canUnblock(role),
     },
-    },
-  };
-}
+    };
+  }
