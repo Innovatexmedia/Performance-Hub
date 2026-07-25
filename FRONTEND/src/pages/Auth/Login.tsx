@@ -1,14 +1,17 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Zap, ArrowRight, TrendingUp, MessageCircle, Sparkles } from 'lucide-react';
+import { Zap, ArrowRight, TrendingUp, MessageCircle, Sparkles, Building2, ChevronRight } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Button, Input, Field } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
+import { ROLE_LABELS } from '@/types/auth';
 
 export function Login() {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
+  const selectWorkspace = useAuthStore((s) => s.selectWorkspace);
+  const pendingWorkspaceSelection = useAuthStore((s) => s.pendingWorkspaceSelection);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -18,11 +21,31 @@ export function Login() {
     setLoading(true);
     try {
       const user = await login({ email, password });
-      toast.success(`Welcome back, ${user.firstName}!`, `Signed in as ${user.email}`);
-      navigate(user.role === 'super_admin' ? '/super-admin' : '/dashboard');
+      // null = multi-workspace case -- pendingWorkspaceSelection is now
+      // set, the form below switches to showing the picker instead.
+      // Every account that existed before this feature shipped never
+      // returns null here (see authStore.ts login()'s comment).
+      if (user) {
+        toast.success(`Welcome back, ${user.firstName}!`, `Signed in as ${user.email}`);
+        navigate(user.role === 'super_admin' ? '/super-admin' : '/dashboard');
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to sign in. Please try again.';
       toast.error('Sign in failed', message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSelectWorkspace = async (tenantId: string) => {
+    setLoading(true);
+    try {
+      const user = await selectWorkspace(tenantId);
+      toast.success(`Welcome back, ${user.firstName}!`);
+      navigate(user.role === 'super_admin' ? '/super-admin' : '/dashboard');
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not enter that workspace. Please try again.';
+      toast.error('Could not switch workspace', message);
     } finally {
       setLoading(false);
     }
@@ -80,20 +103,51 @@ export function Login() {
             </div>
           </div>
 
-          <h2 className="text-2xl font-bold text-ink-900">Sign in</h2>
-          <p className="mt-1 text-sm text-ink-500">Welcome back. Enter your credentials to continue.</p>
+          {pendingWorkspaceSelection ? (
+            <>
+              <h2 className="text-2xl font-bold text-ink-900">Choose a workspace</h2>
+              <p className="mt-1 text-sm text-ink-500">You belong to more than one workspace — pick which one to enter.</p>
 
-          <form onSubmit={submit} className="mt-6 space-y-4">
-            <Field label="Email">
-              <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" required autoComplete="email" />
-            </Field>
-            <Field label="Password">
-              <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required autoComplete="current-password" />
-            </Field>
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Signing in…' : 'Sign in'} <ArrowRight size={16} />
-            </Button>
-          </form>
+              <div className="mt-6 space-y-2">
+                {pendingWorkspaceSelection.workspaces.map((w) => (
+                  <button
+                    key={w.tenantId}
+                    disabled={loading}
+                    onClick={() => void handleSelectWorkspace(w.tenantId)}
+                    className="flex w-full items-center gap-3 rounded-xl border border-ink-200 p-3.5 text-left transition hover:border-brand-300 hover:bg-brand-50/50 disabled:opacity-50"
+                  >
+                    {w.logoUrl ? (
+                      <img src={w.logoUrl} alt="" className="h-10 w-10 rounded-lg object-cover" />
+                    ) : (
+                      <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600"><Building2 size={18} /></span>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-semibold text-ink-900">{w.tenantName}</p>
+                      <p className="text-xs text-ink-500">{ROLE_LABELS[w.role]}</p>
+                    </div>
+                    <ChevronRight size={16} className="shrink-0 text-ink-400" />
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : (
+            <>
+              <h2 className="text-2xl font-bold text-ink-900">Sign in</h2>
+              <p className="mt-1 text-sm text-ink-500">Welcome back. Enter your credentials to continue.</p>
+
+              <form onSubmit={submit} className="mt-6 space-y-4">
+                <Field label="Email">
+                  <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" required autoComplete="email" />
+                </Field>
+                <Field label="Password">
+                  <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required autoComplete="current-password" />
+                </Field>
+                <Button type="submit" className="w-full" disabled={loading}>
+                  {loading ? 'Signing in…' : 'Sign in'} <ArrowRight size={16} />
+                </Button>
+              </form>
+            </>
+          )}
         </div>
       </div>
     </div>

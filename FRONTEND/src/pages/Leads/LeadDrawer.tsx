@@ -4,8 +4,9 @@ import * as Icons from 'lucide-react';
 import { Sparkles, MessageCircle, CalendarPlus, CreditCard, Plus } from 'lucide-react';
 import { useStore } from '@/store/store';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
-import { usePermissions } from '@/hooks/usePermissions.ts';
+import { usePermissions } from '@/hooks/usePermissions';
 import { leadsApi } from '@/lib/leadsApi';
+import { whatsappInboxApi } from '@/lib/whatsappInboxApi';
 import { Drawer, Badge, StatusBadge, Button, Avatar, Field, Textarea } from '@/components/ui';
 import { formatCurrency, formatDateTime, timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
@@ -37,6 +38,8 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
   // Bookings and Payments modules haven't been migrated to the real API
   // yet, so these are a known follow-up, not silently broken.
   const { createBooking, createPayment } = useStore();
+
+  const [waLoading, setWaLoading] = useState(false);
 
   const [details, setDetails] = useState<LeadDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -79,6 +82,18 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
         const { lead, notes, timeline, recommendation, counts } = details;
         const tempTone = lead.lead_temperature === 'Hot' ? 'red' : lead.lead_temperature === 'Warm' ? 'amber' : 'gray';
 
+        const handleOpenWhatsApp = async () => {
+          setWaLoading(true);
+          try {
+            const conversation = await whatsappInboxApi.findOrCreateForLead(lead.id);
+            navigate('/whatsapp', { state: { tab: 'inbox', conversationId: conversation.id } });
+          } catch (err) {
+            toast.error('Could not open WhatsApp conversation', err instanceof ApiError ? err.message : 'Please try again.');
+          } finally {
+            setWaLoading(false);
+          }
+        };
+
         return (
           <>
             {/* Header */}
@@ -117,8 +132,13 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
 
             {/* Quick actions */}
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => navigate('/whatsapp')}>
-                <MessageCircle size={18} /> WhatsApp
+              <Button
+                variant="secondary" className="flex-col !py-3 text-xs"
+                disabled={(!lead.phone && !lead.whatsapp_number) || waLoading}
+                title={!lead.phone && !lead.whatsapp_number ? 'This lead has no phone number on file' : undefined}
+                onClick={() => void handleOpenWhatsApp()}
+              >
+                <MessageCircle size={18} /> {waLoading ? 'Opening…' : 'WhatsApp'}
               </Button>
               <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => navigate('/qualification')}>
                 <Sparkles size={18} /> Qualify

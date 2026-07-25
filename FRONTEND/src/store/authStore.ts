@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { authApi } from '@/lib/authApi';
 import { ApiError, setAuthHandlers } from '@/lib/apiClient';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
-import type { AuthUser, LoginPayload, RegisterPayload } from '@/types/auth';
+import { isWorkspaceSelectionResult } from '@/types/auth';
+import type { AuthUser, LoginPayload, RegisterPayload, WorkspaceOption, WorkspaceSelectionResult } from '@/types/auth';
 
 export type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -13,31 +14,47 @@ interface AuthState {
   error: string | null;
 
   /**
-   * initialize -- call ONCE on app boot. The access token lives only in
-   * memory (this store), so a full page reload always starts with
-   * accessToken: null. This silently calls /auth/refresh, which reads the
-   * httpOnly refresh cookie set by the backend on a previous login -- if
-   * it's still valid, the session is restored with no user action needed.
-   * If there's no cookie (or it's expired), this resolves to
-   * status: 'unauthenticated' with NO error shown -- that's just "logged out".
+   * Set only when login() returns the multi-workspace branch -- the UI
+   * (Login page) checks this to know whether to show a workspace picker
+   * instead of navigating straight into the app. Cleared once a workspace
+   * is chosen via selectWorkspace().
    */
+  pendingWorkspaceSelection: WorkspaceSelectionResult | null;
+
+  /** Every workspace the current user belongs to -- populated by loadWorkspaces(), used by the Topbar switcher dropdown. */
+  workspaces: WorkspaceOption[];
+  /** True only while the initial fetch is actually in flight -- distinct from workspaces being an empty array after a successful fetch that found nothing. */
+  workspacesLoading: boolean;
+
   initialize: () => Promise<void>;
 
-  /** Throws ApiError on failure (invalid credentials, suspended account, etc.) -- callers should catch and display err.message. */
-  login: (payload: LoginPayload) => Promise<AuthUser>;
+  /** Throws ApiError on failure (invalid credentials, suspended account, etc.) -- callers should catch and display err.message. Returns null (not a user) when a workspace pick is required -- check pendingWorkspaceSelection in that case instead. */
+  login: (payload: LoginPayload) => Promise<AuthUser | null>;
 
   register: (payload: RegisterPayload) => Promise<AuthUser>;
+
+  /** Completes login after the multi-workspace branch -- uses pendingWorkspaceSelection's selectionToken. */
+  selectWorkspace: (tenantId: string) => Promise<AuthUser>;
+
+  /** Mid-session workspace switch (Topbar dropdown) -- user is already authenticated, no selectionToken needed. */
+  switchWorkspace: (tenantId: string) => Promise<AuthUser>;
+
+  /** Refreshes the workspaces list for the Topbar switcher -- safe to call any time while authenticated. */
+  loadWorkspaces: () => Promise<void>;
 
   logout: () => Promise<void>;
 
   clearError: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
+export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   accessToken: null,
   status: 'idle',
   error: null,
+  pendingWorkspaceSelection: null,
+  workspaces: [],
+  workspacesLoading: true,
 
   initialize: async () => {
     set({ status: 'loading' });
@@ -54,8 +71,19 @@ export const useAuthStore = create<AuthState>((set) => ({
   login: async (payload) => {
     set({ status: 'loading', error: null });
     try {
-      const { user, accessToken } = await authApi.login(payload);
-      set({ user, accessToken, status: 'authenticated', error: null });
+      const result = await authApi.login(payload);
+
+      if (isWorkspaceSelectionResult(result)) {
+        // Multi-workspace case: no token issued yet. Every account that
+        // existed before this feature shipped never reaches this branch
+        // (see auth.service.js login()'s comment) -- this only fires for
+        // an account genuinely invited into a second workspace.
+        set({ pendingWorkspaceSelection: result, status: 'unauthenticated', error: null });
+        return null;
+      }
+
+      const { user, accessToken } = result;
+      set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null });
       connectSocket(() => useAuthStore.getState().accessToken);
       return user;
     } catch (err) {
@@ -76,6 +104,53 @@ export const useAuthStore = create<AuthState>((set) => ({
       const message = err instanceof ApiError ? err.message : 'Unable to create account. Please try again.';
       set({ status: 'unauthenticated', error: message });
       throw err;
+    }
+  },
+
+  selectWorkspace: async (tenantId) => {
+    const pending = get().pendingWorkspaceSelection;
+    if (!pending) throw new Error('No pending workspace selection -- log in again');
+
+    set({ status: 'loading', error: null });
+    try {
+      const { user, accessToken } = await authApi.switchWorkspace(tenantId, pending.selectionToken);
+      set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null });
+      connectSocket(() => useAuthStore.getState().accessToken);
+      return user;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not enter that workspace. Please try again.';
+      set({ status: 'unauthenticated', error: message });
+      throw err;
+    }
+  },
+
+  switchWorkspace: async (tenantId) => {
+    try {
+      const { user, accessToken } = await authApi.switchWorkspace(tenantId);
+      // Reconnect the socket -- the OLD connection is still joined to the
+      // OLD tenant's room (see src/realtime/socket.js), so a plain token
+      // swap alone wouldn't move it into the new tenant's real-time
+      // channel. Disconnecting and reconnecting re-runs the handshake
+      // with the new token, joining the correct room this time.
+      disconnectSocket();
+      set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocket(() => useAuthStore.getState().accessToken);
+      return user;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not switch workspace. Please try again.';
+      set({ error: message });
+      throw err;
+    }
+  },
+
+  loadWorkspaces: async () => {
+    set({ workspacesLoading: true });
+    try {
+      const workspaces = await authApi.listMyWorkspaces();
+      set({ workspaces, workspacesLoading: false });
+    } catch {
+      // Non-critical -- the switcher just shows nothing if this fails, no need to surface an error toast for it.
+      set({ workspacesLoading: false });
     }
   },
 

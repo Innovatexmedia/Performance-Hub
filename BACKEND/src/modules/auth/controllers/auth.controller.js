@@ -43,12 +43,50 @@ export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const result = await authService.login({ email, password }, req);
 
+  // Multi-workspace case: no tokens issued yet, nothing to set a cookie
+  // from -- the client shows a workspace picker and calls switchWorkspace
+  // once one is chosen. Every existing single-workspace account never
+  // reaches this branch at all (see auth.service.js login()'s comment).
+  if (result.requiresWorkspaceSelection) {
+    return sendSuccess(res, {
+      requiresWorkspaceSelection: true,
+      selectionToken: result.selectionToken,
+      user: result.user,
+      workspaces: result.workspaces,
+    }, 'Multiple workspaces found -- please select one');
+  }
+
   setRefreshTokenCookie(res, result.refreshToken);
 
   return sendSuccess(res, {
     user:        result.user,
     accessToken: result.accessToken,
   }, 'Login successful');
+});
+
+/**
+ * switchWorkspace — POST /auth/switch-workspace
+ */
+export const switchWorkspace = asyncHandler(async (req, res) => {
+  const { selectionToken, tenantId } = req.body;
+  const result = await authService.switchWorkspace({ selectionToken, tenantId }, req);
+
+  setRefreshTokenCookie(res, result.refreshToken);
+
+  return sendSuccess(res, {
+    user:        result.user,
+    accessToken: result.accessToken,
+  }, 'Workspace switched');
+});
+
+/**
+ * listMyWorkspaces — GET /auth/my-workspaces
+ * Every workspace the currently authenticated user belongs to -- for
+ * rendering the workspace switcher dropdown any time, not just at login.
+ */
+export const listMyWorkspaces = asyncHandler(async (req, res) => {
+  const workspaces = await authService.listMyWorkspaces(req.user.sub);
+  return sendSuccess(res, { workspaces }, 'Workspaces retrieved');
 });
 
 /**

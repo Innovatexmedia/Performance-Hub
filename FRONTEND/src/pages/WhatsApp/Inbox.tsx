@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { MessageSquarePlus, Tag, UserPlus, StickyNote, Search } from 'lucide-react';
 import { Avatar, Badge, StatusBadge, Button, Select, cn } from '@/components/ui';
 import { Composer } from './Composer';
@@ -14,10 +15,12 @@ import type { ConversationStatus } from '@/types/whatsapp';
 
 export function Inbox() {
   const { members, nameById } = useTeamMembers();
+  const location = useLocation();
+  const requestedConversationId = (location.state as { conversationId?: string } | null)?.conversationId ?? null;
 
   const [q, setQ] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [activeId, setActiveId] = useState<string | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(requestedConversationId);
   const [tagInput, setTagInput] = useState('');
   const [showNote, setShowNote] = useState(false);
   const [noteText, setNoteText] = useState('');

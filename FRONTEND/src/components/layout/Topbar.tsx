@@ -6,6 +6,8 @@ import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
 import { Avatar, cn } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
+import { toast } from '@/store/toastStore';
+import { ApiError } from '@/lib/apiClient';
 import { ROLE_LABELS } from '@/types/auth';
 
 function useClickOutside(onClose: () => void) {
@@ -34,24 +36,50 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const authLogout = useAuthStore((s) => s.logout);
-  const tenants = useStore((s) => s.db.tenants);
-  const activeTenantId = useStore((s) => s.activeTenantId);
+  const workspaces = useAuthStore((s) => s.workspaces);
+  const workspacesLoading = useAuthStore((s) => s.workspacesLoading);
+  const loadWorkspaces = useAuthStore((s) => s.loadWorkspaces);
+  const switchWorkspace = useAuthStore((s) => s.switchWorkspace);
   const notificationsAll = useStore((s) => s.db.notifications);
+  const activeTenantId = useStore((s) => s.activeTenantId);
   const notifications = notificationsAll.filter((n) => n.tenant_id === activeTenantId);
-  const { switchTenant, markNotificationRead, markAllNotificationsRead } = useStore();
+  const { markNotificationRead, markAllNotificationsRead } = useStore();
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [wsOpen, setWsOpen] = useState(false);
+  const [switching, setSwitching] = useState(false);
   const [search, setSearch] = useState('');
 
   const notifRef = useClickOutside(() => setNotifOpen(false));
   const profileRef = useClickOutside(() => setProfileOpen(false));
   const wsRef = useClickOutside(() => setWsOpen(false));
 
-  const activeTenant = tenants.find((t) => t.id === activeTenantId) ?? tenants[0];
+  // Load once on mount -- super_admin has no tenantId/workspace at all, so
+  // this is skipped for that role (nothing to load, nothing to switch).
+  useEffect(() => {
+    if (user && user.role !== 'super_admin') void loadWorkspaces();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  const activeWorkspace = workspaces.find((w) => w.tenantId === user?.tenantId);
   const unread = notifications.filter((n) => !n.read).length;
   if (!user) return null;
+
+  const handleSwitchWorkspace = async (tenantId: string) => {
+    if (tenantId === user.tenantId) { setWsOpen(false); return; }
+    setSwitching(true);
+    try {
+      await switchWorkspace(tenantId);
+      setWsOpen(false);
+      toast.success('Workspace switched');
+      navigate('/dashboard');
+    } catch (err) {
+      toast.error('Could not switch workspace', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSwitching(false);
+    }
+  };
 
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -60,39 +88,52 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
 
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-ink-200 bg-white/90 px-4 backdrop-blur lg:px-6">
-      <button onClick={onMenu} className="rounded-lg p-2 text-ink-600 hover:bg-ink-100 lg:hidden">
+      <button onClick={onMenu} className="rounded-lg p-2 text-ink-600 hover:bg-ink-100">
         <Menu size={20} />
       </button>
 
-      {/* Workspace switcher */}
-      <div className="relative" ref={wsRef}>
-        <button onClick={() => setWsOpen((o) => !o)} className="flex items-center gap-2 rounded-lg border border-ink-200 px-2.5 py-1.5 text-sm font-semibold text-ink-800 hover:bg-ink-50">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md text-xs font-bold text-white" style={{ background: activeTenant?.logo_color }}>
-            {activeTenant?.name[0]}
-          </span>
-          <span className="hidden max-w-[140px] truncate sm:inline">{activeTenant?.name}</span>
-          <ChevronDown size={14} className="text-ink-400" />
-        </button>
-        {wsOpen && (
-          <div className="absolute left-0 top-12 z-30 w-64 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft animate-slide-up">
-            <p className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest text-ink-400">Workspaces</p>
-            {tenants.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => { switchTenant(t.id); setWsOpen(false); }}
-                className={cn('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-ink-50', t.id === activeTenantId && 'bg-brand-50')}
-              >
-                <span className="flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold text-white" style={{ background: t.logo_color }}>{t.name[0]}</span>
-                <span className="flex-1">
-                  <span className="block font-medium text-ink-800">{t.name}</span>
-                  <span className="block text-xs text-ink-400">{t.plan} · {t.region}</span>
-                </span>
-                {t.id === activeTenantId && <Check size={15} className="text-brand-600" />}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Workspace switcher -- super_admin has no tenant/workspace at all */}
+      {user.role !== 'super_admin' && (
+        <div className="relative" ref={wsRef}>
+          <button onClick={() => setWsOpen((o) => !o)} className="flex items-center gap-2 rounded-lg border border-ink-200 px-2.5 py-1.5 text-sm font-semibold text-ink-800 hover:bg-ink-50">
+            {activeWorkspace?.logoUrl ? (
+              <img src={activeWorkspace.logoUrl} alt="" className="h-6 w-6 rounded-md object-cover" />
+            ) : (
+              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">
+                {(activeWorkspace?.tenantName || '?')[0]}
+              </span>
+            )}
+            <span className="hidden max-w-[140px] truncate sm:inline">{activeWorkspace?.tenantName || 'Workspace'}</span>
+            <ChevronDown size={14} className="text-ink-400" />
+          </button>
+          {wsOpen && (
+            <div className="absolute left-0 top-12 z-30 w-64 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft animate-slide-up">
+              <p className="px-2.5 py-1.5 text-[10px] font-bold uppercase tracking-widest text-ink-400">Workspaces</p>
+              {workspacesLoading && <p className="px-2.5 py-2 text-sm text-ink-400">Loading…</p>}
+              {!workspacesLoading && workspaces.length === 0 && <p className="px-2.5 py-2 text-sm text-ink-400">No workspaces found</p>}
+              {workspaces.map((w) => (
+                <button
+                  key={w.tenantId}
+                  disabled={switching}
+                  onClick={() => void handleSwitchWorkspace(w.tenantId)}
+                  className={cn('flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-ink-50 disabled:opacity-50', w.tenantId === user.tenantId && 'bg-brand-50')}
+                >
+                  {w.logoUrl ? (
+                    <img src={w.logoUrl} alt="" className="h-7 w-7 rounded-md object-cover" />
+                  ) : (
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">{w.tenantName[0]}</span>
+                  )}
+                  <span className="flex-1">
+                    <span className="block font-medium text-ink-800">{w.tenantName}</span>
+                    <span className="block text-xs text-ink-400">{ROLE_LABELS[w.role]}</span>
+                  </span>
+                  {w.tenantId === user.tenantId && <Check size={15} className="text-brand-600" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Search */}
       <form onSubmit={submitSearch} className="relative hidden flex-1 md:block">

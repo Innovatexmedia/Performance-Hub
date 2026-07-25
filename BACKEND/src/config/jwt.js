@@ -83,6 +83,43 @@ export const signRefreshToken = ({ userId, sessionId }) => {
   );
 };
 
+/**
+ * signWorkspaceSelectionToken — short-lived token proving a user's
+ * password was already verified during login, used only to pick which
+ * workspace to enter (when Membership count > 1). Deliberately NOT a real
+ * access token -- distinct `type` claim, 5-minute expiry, and
+ * verifyWorkspaceSelectionToken below rejects anything that isn't
+ * exactly this type, so it can never be used for real API access.
+ * @param {Object} payload — { userId }
+ * @returns {string} signed JWT
+ */
+export const signWorkspaceSelectionToken = ({ userId }) => {
+  return jwt.sign(
+    {
+      sub:  userId,
+      type: TOKEN_TYPES.WORKSPACE_SELECTION,
+    },
+    ACCESS_SECRET(),
+    { expiresIn: '5m' }
+  );
+};
+
+/**
+ * verifyWorkspaceSelectionToken — verifies a workspace-selection token AND
+ * confirms it's genuinely that type, not a real access/refresh token that
+ * happened to verify against the same secret.
+ * @param {string} token
+ * @returns {Object} decoded payload
+ * @throws {JsonWebTokenError} if invalid, expired, or wrong type
+ */
+export const verifyWorkspaceSelectionToken = (token) => {
+  const decoded = jwt.verify(token, ACCESS_SECRET());
+  if (decoded.type !== TOKEN_TYPES.WORKSPACE_SELECTION) {
+    throw new Error('Invalid token type for workspace selection');
+  }
+  return decoded;
+};
+
 // ─── Verify Functions ─────────────────────────────────────────────────────────
 
 /**

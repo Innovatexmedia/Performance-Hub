@@ -1,5 +1,3 @@
-
-
 import mongoose                           from 'mongoose';
 import * as userRepo                      from '../repositories/user.repository.js';
 import * as tenantRepo                    from '../repositories/tenant.repository.js';
@@ -7,10 +5,11 @@ import * as tokenRepo                     from '../repositories/token.repository
 import * as tokenSvc                      from './token.service.js';
 import { comparePassword, hashPassword }  from '../../../utils/password.js';
 import { generateSecureToken, hashToken } from '../../../utils/crypto.js';
-import { verifyRefreshToken }             from '../../../config/jwt.js';
+import { verifyRefreshToken, signWorkspaceSelectionToken, verifyWorkspaceSelectionToken } from '../../../config/jwt.js';
 import AppError                           from '../../../utils/AppError.js';
 import LoginAudit                         from '../models/LoginAudit.js';
 import Tenant                             from '../models/Tenant.js';
+import Membership, { MEMBERSHIP_STATUS }  from '../models/Membership.js';
 import {
   AUDIT_EVENTS,
   TOKEN_EXPIRY,
@@ -232,6 +231,18 @@ async function _registerTenantOwner(
     tenant.currentUserCount = 1;
 
     await tenant.save();
+
+    // Mirror this as the user's first Membership row -- see Membership.js
+    // header comment: User.tenantId/role stays the "primary" membership,
+    // this makes "how many workspaces does this user belong to" always
+    // answerable by counting Membership rows, from day one.
+    await Membership.create({
+      userId: user._id,
+      tenantId: tenant._id,
+      role: ROLES.TENANT_OWNER,
+      status: MEMBERSHIP_STATUS.ACTIVE,
+      joinedAt: new Date(),
+    });
   } catch (error) {
     if (error.code === 11000 && error.keyPattern?.slug) {
       throw new AppError(
@@ -315,6 +326,14 @@ async function _registerTenantMember(
 
   // Increment user count atomically
   await tenantRepo.incrementUsageCounter(tenantId, 'currentUserCount', 1);
+
+  await Membership.create({
+    userId: user._id,
+    tenantId,
+    role,
+    status: MEMBERSHIP_STATUS.ACTIVE,
+    joinedAt: new Date(),
+  });
 
   await issueVerificationEmail(user);
 
@@ -414,6 +433,43 @@ export const login = async ({ email, password }, req) => {
   await user.resetLoginAttempts();
   await userRepo.updateLastLogin(user._id);
 
+  // ── Multi-workspace check ────────────────────────────────────────────────
+  // 0 or 1 active memberships -> proceed exactly as before (this covers
+  // EVERY account that existed before this feature shipped, since none of
+  // them have more than one Membership row -- the mechanism didn't exist
+  // yet to create a second one). Only 2+ triggers the new flow. This is
+  // deliberately the safest possible branch condition: no existing login
+  // behavior changes unless a user was actually invited to a second
+  // workspace, which can only happen going forward from here.
+  const activeMemberships = await Membership.find({
+    userId: user._id,
+    status: MEMBERSHIP_STATUS.ACTIVE,
+  }).populate('tenantId', 'name slug branding.logoUrl');
+
+  if (activeMemberships.length > 1) {
+    await createAuditLog({
+      userId:   user._id,
+      tenantId: user.tenantId,
+      email,
+      event:    AUDIT_EVENTS.LOGIN_SUCCESS,
+      success:  true,
+      ...meta,
+    });
+
+    return {
+      requiresWorkspaceSelection: true,
+      selectionToken: signWorkspaceSelectionToken({ userId: user._id.toString() }),
+      user: user.getPublicProfile(),
+      workspaces: activeMemberships.map((m) => ({
+        tenantId: String(m.tenantId._id),
+        tenantName: m.tenantId.name,
+        tenantSlug: m.tenantId.slug,
+        logoUrl: m.tenantId.branding?.logoUrl || null,
+        role: m.role,
+      })),
+    };
+  }
+
   const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(user, meta);
 
   await createAuditLog({
@@ -426,6 +482,152 @@ export const login = async ({ email, password }, req) => {
   });
 
   return { user: user.getPublicProfile(), accessToken, refreshToken };
+};
+
+// =============================================================================
+// SWITCH WORKSPACE
+// =============================================================================
+
+/**
+ * switchWorkspace — the counterpart to login()'s multi-membership branch.
+ * Verifies the short-lived selectionToken (proves the password step
+ * already happened), confirms the requested tenant is genuinely one of
+ * this user's ACTIVE memberships (never trusts the client blindly), then
+ * issues a real, full access+refresh token pair scoped to that tenant --
+ * reusing tokenSvc.issueTokenPair exactly as every other login path does,
+ * just with tenantId/role temporarily overridden to match the CHOSEN
+ * membership rather than the user's stored primary one. The real User
+ * document's own tenantId/role is never modified by this -- switching
+ * workspaces doesn't change which one is "primary".
+ *
+ * @param {{ selectionToken: string, tenantId: string }} params
+ * @param {Object} req
+ */
+/**
+ * switchWorkspace — the counterpart to login()'s multi-membership branch,
+ * AND the mid-session "switch workspace" action from an already-logged-in
+ * user (e.g. the Topbar dropdown). Two different callers, two different
+ * ways of proving identity, same result:
+ *
+ *   - Right after login: no real access token exists yet (login() didn't
+ *     issue one for the multi-membership case) -- proves identity via the
+ *     short-lived selectionToken instead.
+ *   - Mid-session: the user already has a real, valid access token --
+ *     req.user (from the authenticate middleware) is trusted directly,
+ *     no selectionToken needed or expected.
+ *
+ * Both paths converge on the same userId before the rest of the function
+ * (membership check, token issuance) runs identically either way.
+ *
+ * @param {{ selectionToken?: string, tenantId: string }} params
+ * @param {Object} req
+ */
+export const switchWorkspace = async ({ selectionToken, tenantId }, req) => {
+  const meta = getClientMeta(req);
+
+  let userId;
+  if (req.user?.sub) {
+    // Mid-session case -- authenticate middleware already verified a real access token.
+    userId = req.user.sub;
+  } else if (selectionToken) {
+    // Post-login case -- no real access token exists yet.
+    let decoded;
+    try {
+      decoded = verifyWorkspaceSelectionToken(selectionToken);
+    } catch {
+      throw new AppError('Workspace selection expired or invalid -- please log in again', 401);
+    }
+    userId = decoded.sub;
+  } else {
+    throw new AppError('Not authenticated', 401);
+  }
+
+  const membership = await Membership.findOne({
+    userId,
+    tenantId,
+    status: MEMBERSHIP_STATUS.ACTIVE,
+  });
+  if (!membership) {
+    throw new AppError('You do not have access to this workspace', 403);
+  }
+
+  const user = await userRepo.findById(userId);
+  if (!user) throw new AppError('User not found', 404);
+  if (user.status === USER_STATUS.SUSPENDED) {
+    throw new AppError('Your account has been suspended. Please contact support.', 403);
+  }
+
+  // issueTokenPair only reads ._id / .tenantId / .role off whatever object
+  // it's given -- this overrides those two to the CHOSEN membership
+  // without touching the real User document at all.
+  const scopedUser = { _id: user._id, tenantId: membership.tenantId, role: membership.role };
+  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(scopedUser, meta);
+
+  await createAuditLog({
+    userId: user._id,
+    tenantId: membership.tenantId,
+    email: user.email,
+    event: AUDIT_EVENTS.LOGIN_SUCCESS,
+    success: true,
+    ...meta,
+  });
+
+  return {
+    user: { ...user.getPublicProfile(), tenantId: String(membership.tenantId), role: membership.role },
+    accessToken,
+    refreshToken,
+  };
+};
+
+/**
+ * listMyWorkspaces — all ACTIVE memberships for the currently authenticated
+ * user, for rendering the workspace switcher dropdown at any time (not
+ * just at login).
+ */
+export const listMyWorkspaces = async (userId) => {
+  const memberships = await Membership.find({
+    userId,
+    status: MEMBERSHIP_STATUS.ACTIVE,
+  }).populate('tenantId', 'name slug branding.logoUrl');
+
+  if (memberships.length > 0) {
+    return memberships
+      .filter((m) => m.tenantId) // skip any membership whose tenant was deleted
+      .map((m) => ({
+        tenantId: String(m.tenantId._id),
+        tenantName: m.tenantId.name,
+        tenantSlug: m.tenantId.slug,
+        logoUrl: m.tenantId.branding?.logoUrl || null,
+        role: m.role,
+      }));
+  }
+
+  // Self-heal: every account created before this feature shipped has zero
+  // Membership rows, but DOES have a real tenantId/role on the User
+  // document itself -- that's still their real, current workspace. Treat
+  // it as an implicit membership, and persist a real Membership row right
+  // now so this fallback only ever runs once per account, not every call.
+  const user = await userRepo.findById(userId);
+  if (!user?.tenantId) return []; // super_admin, or a genuinely broken account -- nothing to show either way
+
+  const tenant = await tenantRepo.findById(user.tenantId);
+  if (!tenant) return [];
+
+  await Membership.create({
+    userId: user._id,
+    tenantId: tenant._id,
+    role: user.role,
+    status: MEMBERSHIP_STATUS.ACTIVE,
+    joinedAt: user.createdAt || new Date(),
+  }).catch(() => null); // duplicate-key race is fine, just means another request already healed it
+
+  return [{
+    tenantId: String(tenant._id),
+    tenantName: tenant.name,
+    tenantSlug: tenant.slug,
+    logoUrl: tenant.branding?.logoUrl || null,
+    role: user.role,
+  }];
 };
 
 // =============================================================================
