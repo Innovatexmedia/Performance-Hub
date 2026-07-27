@@ -170,6 +170,42 @@ export const consentPermissions = {
 
 
 /**
+ * Team permissions -- mirrors team.service.js EXACTLY, not just a static
+ * role floor. Three real business rules enforced server-side that the UI
+ * needs to match, or buttons would be clickable and always 403:
+ *   1. Cannot change your own role / cannot deactivate your own account
+ *   2. Cannot touch the tenant_owner role/status unless you ARE super_admin
+ *   3. No privilege escalation -- assertCanManageRole() throws if the
+ *      target role's rank >= the requester's own rank
+ */
+export const teamPermissions = {
+  canAdd: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+
+  /** Can the requester change THIS member's role at all (before considering which roles to offer)? */
+  canChangeRole: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
+    if (!atLeast(requesterRole, 'tenant_admin')) return false;
+    if (member.id === requesterUserId) return false;
+    if (member.role === 'tenant_owner' && requesterRole !== 'super_admin') return false;
+    return true;
+  },
+
+  /** Which roles the requester is allowed to assign -- strictly below their own rank, matching assertCanManageRole(). */
+  assignableRoles: (requesterRole: AuthRole | null | undefined): AuthRole[] => {
+    if (!requesterRole) return [];
+    const ceiling = RANK[requesterRole];
+    return (['tenant_owner', 'tenant_admin', 'sales_user', 'read_only_user'] as AuthRole[])
+      .filter((r) => RANK[r] < ceiling);
+  },
+
+  canChangeStatus: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
+    if (!atLeast(requesterRole, 'tenant_admin')) return false;
+    if (member.id === requesterUserId) return false;
+    if (member.role === 'tenant_owner' && requesterRole !== 'super_admin') return false;
+    return true;
+  },
+};
+
+/**
  * super_admin-only gate -- used for nav visibility. This is the ONE case
  * where hiding an entire section (not just an action) is correct, because
  * Super Admin routes operate in a fundamentally different, tenant-less
