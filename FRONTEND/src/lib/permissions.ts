@@ -206,6 +206,16 @@ export const teamPermissions = {
 };
 
 /**
+ * Settings permissions -- mirrors settings.routes.js exactly:
+ *   GET  routes -- no requireRole -- any authenticated role can view (including read_only_user).
+ *   PATCH routes -- all 7 editable tabs require tenant_admin+.
+ *   Lead Fields, Pipeline Stages, and Billing have no PATCH route at all (read-only/system-defined).
+ */
+export const settingsPermissions = {
+  canEdit: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+};
+
+/**
  * super_admin-only gate -- used for nav visibility. This is the ONE case
  * where hiding an entire section (not just an action) is correct, because
  * Super Admin routes operate in a fundamentally different, tenant-less

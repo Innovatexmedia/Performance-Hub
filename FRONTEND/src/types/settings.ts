@@ -1,0 +1,104 @@
+/**
+ * Real Settings types -- match the backend exactly, all 10 tabs.
+ *
+ * Standard envelope. SOURCE: src/modules/settings/settings.service.js +
+ * .constants.js. GET /settings returns all 10 tabs in one call; 7 of the
+ * 10 have a dedicated PATCH endpoint (Lead Fields, Pipeline Stages, and
+ * Billing are read-only -- confirmed via settings.routes.js, which marks
+ * exactly these 3 as GET-only "system-defined"/"updated by webhooks").
+ */
+
+export interface CompanySettings {
+  company_name: string;
+  company_website: string;
+  description: string;
+  business_type: string;
+  industry: string;
+}
+
+export interface BrandingSettings {
+  accent_color: string;
+  primary_color: string;
+  logo_url: string | null;
+  available_colors: string[];
+}
+
+export type LeadFields = string[];
+
+export interface PipelineStageDisplay {
+  id: number;
+  name: string;
+  color: string;
+}
+
+export interface QualificationSettings {
+  questions: string[];
+}
+
+export interface ScoringRule {
+  factor: string;
+  weight: number;
+}
+
+export interface ScoringRulesSettings {
+  rules: ScoringRule[];
+}
+
+export interface NotificationSettings {
+  hot_lead_alert: boolean;
+  booking_created: boolean;
+  payment_received: boolean;
+  template_approved: boolean;
+  campaign_sent: boolean;
+  deal_won: boolean;
+  deal_lost: boolean;
+}
+
+export interface ConsentSettings {
+  consent_required: boolean;
+  data_retention_days: number;
+  opt_out_keywords: string[];
+}
+
+export interface BillingSettings {
+  plan: string;
+  subscription_status: string;
+  trial_ends_at: string | null;
+  trial_days_remaining: number;
+  mrr: number;
+  max_users: number;
+  max_leads: number;
+  max_campaigns: number;
+  current_user_count: number;
+  current_lead_count: number;
+  current_campaign_count: number;
+  plan_details: {
+    name: string;
+    price: number | null;
+    currency: string;
+    maxUsers: number;
+    maxLeads: number;
+  };
+}
+
+export interface SecuritySettings {
+  two_factor_auth: boolean;
+  sso_saml: boolean;
+  audit_logging: boolean;
+  ip_allowlist_enabled: boolean;
+  ip_allowlist: string[];
+  session_timeout_minutes: number;
+}
+
+export interface AllSettings {
+  company: CompanySettings;
+  branding: BrandingSettings;
+  lead_fields: LeadFields;
+  pipeline_stages: PipelineStageDisplay[];
+  qualification: QualificationSettings;
+  scoring_rules: ScoringRulesSettings;
+  notifications: NotificationSettings;
+  consent: ConsentSettings;
+  billing: BillingSettings;
+  security: SecuritySettings;
+}
