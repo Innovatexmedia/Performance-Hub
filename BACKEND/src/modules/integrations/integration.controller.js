@@ -26,12 +26,12 @@ export const getIntegrations = asyncHandler(async (req, res) => {
     limit: parseInt(req.query.limit) || 50,
   };
 
-  const result = await integrationService.listIntegrations(req.user.tenantId, filter, options);
+  const result = await integrationService.listIntegrations(req.user.tenantId, filter, options, req.user.sub);
   return sendPaginated(res, result.integrations, result.pagination, 'Integrations fetched successfully');
 });
 
 export const getIntegration = asyncHandler(async (req, res) => {
-  const integration = await integrationService.getIntegration(req.user.tenantId, req.params.id);
+  const integration = await integrationService.getIntegration(req.user.tenantId, req.params.id, req.user.sub);
   return sendSuccess(res, integration, 'Integration fetched successfully');
 });
 

@@ -1,71 +1,197 @@
 import { useState } from 'react';
-import { Plug, RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle } from 'lucide-react';
-import { useStore } from '@/store/store';
-import { useDb } from '@/store/hooks';
-import { PageHeader, Card, Button, Badge, Tabs, Modal, Field, Input, cn } from '@/components/ui';
+import { RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle } from 'lucide-react';
+import { useAuthStore } from '@/store/authStore';
+import { useIntegrations } from '@/hooks/useIntegrations';
+import { integrationPermissions } from '@/lib/permissions';
+import { toast } from '@/store/toastStore';
+import { ApiError } from '@/lib/apiClient';
+import { PageHeader, Card, Button, Badge, Tabs, Modal, Field, Input } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
-import type { Integration } from '@/types';
+import { INTEGRATION_CATEGORY_VALUES } from '@/types/integration';
+import type { Integration } from '@/types/integration';
 
+/**
+ * Integrations -- confirmed spec-aligned (MASTER_SPEC B17, DEVELOPER_HANDOFF
+ * entity/action list). All 3 named actions real (toggle/sync/updateConfig),
+ * 22-item catalog auto-seeded per tenant on first load, matching spec's
+ * count exactly. MASTER_SPEC explicitly marks this "🟡 simulated" -- the
+ * connection state is genuinely real and persisted, but no live external
+ * API calls are made to Stripe/Twilio/etc. Not fixed/changed from that
+ * design, per instruction.
+ */
 export function Integrations() {
-  const { db, tenantId } = useDb();
-  const { toggleIntegration, syncIntegration, updateIntegrationConfig } = useStore();
-  const integrations = db.integrations.filter((i) => i.tenant_id === tenantId);
+  const role = useAuthStore((s) => s.user?.role);
+  const canManage = integrationPermissions.canManage(role);
+  const [category, setCategory] = useState('all');
+  const { integrations, counts, loading, error, toggle, sync, updateConfig } =
+    useIntegrations(category === 'all' ? {} : { category: category as never });
 
-  const [filter, setFilter] = useState('all');
   const [config, setConfig] = useState<Integration | null>(null);
-  const [logs, setLogs] = useState<Integration | null>(null);
+  const [configForm, setConfigForm] = useState({ api_key: '', webhook_url: '' });
+  const [waForm, setWaForm] = useState({ phoneNumberId: '', businessAccountId: '', accessToken: '', appSecret: '' });
+  const [logsFor, setLogsFor] = useState<Integration | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  const categories = ['all', ...Array.from(new Set(integrations.map((i) => i.category)))];
-  const filtered = filter === 'all' ? integrations : integrations.filter((i) => i.category === filter);
+  const tabs = [
+    { id: 'all', label: `All (${counts?.total ?? 0})` },
+    ...INTEGRATION_CATEGORY_VALUES.map((c) => ({ id: c, label: `${c} (${counts?.byCategory[c]?.count ?? 0})` })),
+  ];
+
+  const handleToggle = async (i: Integration) => {
+    if (i.key === 'meta_cloud' && i.status === 'disconnected') {
+      openConfig(i);
+      return;
+    }
+    setBusyId(i.id);
+    try {
+      await toggle(i.id);
+      toast.success(i.status === 'disconnected' ? 'Integration connected' : 'Integration disconnected');
+    } catch (err) {
+      toast.error('Could not update integration', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSync = async (i: Integration) => {
+    setBusyId(i.id);
+    try {
+      await sync(i.id);
+      toast.success('Synced', 'Last sync time updated');
+    } catch (err) {
+      toast.error('Could not sync', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const openConfig = (i: Integration) => {
+    setConfig(i);
+    if (i.key === 'meta_cloud') {
+      setWaForm({
+        phoneNumberId: typeof i.config.phoneNumberId === 'string' ? i.config.phoneNumberId : '',
+        businessAccountId: typeof i.config.businessAccountId === 'string' ? i.config.businessAccountId : '',
+        accessToken: '',
+        appSecret: '',
+      });
+      return;
+    }
+    setConfigForm({
+      api_key: typeof i.config.api_key === 'string' ? i.config.api_key : '',
+      webhook_url: typeof i.config.webhook_url === 'string' ? i.config.webhook_url : '',
+    });
+  };
+
+  const handleSaveConfig = async () => {
+    if (!config) return;
+    setSaving(true);
+    try {
+      if (config.key === 'meta_cloud') {
+        await updateConfig(config.id, {
+          phoneNumberId: waForm.phoneNumberId,
+          businessAccountId: waForm.businessAccountId,
+          ...(waForm.accessToken ? { accessToken: waForm.accessToken } : {}),
+          ...(waForm.appSecret ? { appSecret: waForm.appSecret } : {}),
+        });
+        toast.success('Connected', 'Credentials verified against Meta\u2019s real Graph API.');
+      } else {
+        await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
+        toast.success('Settings saved');
+      }
+      setConfig(null);
+    } catch (err) {
+      // For meta_cloud, this is a REAL rejection from Meta's API (invalid
+      // token, wrong phone number ID, etc.) -- not a generic failure.
+      toast.error('Could not verify connection', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div>
-      <PageHeader title="Integrations" description="Connect WhatsApp providers, payments, AI, calendars & more. All run in simulation mode." breadcrumb={['Admin', 'Integrations']}
-        actions={<Badge tone="violet">{integrations.filter((i) => i.status !== 'disconnected').length} connected</Badge>} />
+      <PageHeader
+        title="Integrations" description="Connect WhatsApp providers, payments, AI, calendars & more to power every part of your workspace."
+        breadcrumb={['Admin', 'Integrations']}
+        actions={<Badge tone="violet">{counts?.totalConnected ?? 0} connected</Badge>}
+      />
 
-      <div className="mb-4"><Tabs tabs={categories.map((c) => ({ id: c, label: c === 'all' ? 'All' : c }))} active={filter} onChange={setFilter} /></div>
+      <div className="mb-4"><Tabs tabs={tabs} active={category} onChange={setCategory} /></div>
+
+      {error && <Card className="mb-4 p-4 text-sm text-red-600">{error}</Card>}
+      {loading && integrations.length === 0 && <p className="p-8 text-center text-sm text-ink-400">Loading integrations…</p>}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {filtered.map((i) => (
+        {integrations.map((i) => (
           <Card key={i.id} className="flex flex-col p-4">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
                 <span className="flex h-10 w-10 items-center justify-center rounded-xl font-bold text-white" style={{ background: i.logo_color }}>{i.name[0]}</span>
                 <div><p className="font-semibold text-ink-900">{i.name}</p><p className="text-xs text-ink-500">{i.category}</p></div>
               </div>
-              <Badge tone={i.status === 'connected' ? 'green' : i.status === 'simulation' ? 'amber' : 'gray'}>
-                {i.status === 'connected' && <CheckCircle2 size={11} />} {i.status}
-              </Badge>
+              {!i.available ? (
+                <Badge tone="gray">Coming soon</Badge>
+              ) : (
+                <Badge tone={i.status === 'connected' ? 'green' : i.status === 'simulation' ? 'amber' : 'gray'}>
+                  {i.status === 'connected' && <CheckCircle2 size={11} />} {i.status}
+                </Badge>
+              )}
             </div>
             <p className="mt-3 flex-1 text-sm text-ink-500">{i.description}</p>
             {i.last_sync && <p className="mt-2 text-xs text-ink-400">Last sync: {timeAgo(i.last_sync)}</p>}
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              <Button variant={i.status === 'disconnected' ? 'primary' : 'secondary'} className="px-3 py-1.5 text-xs" onClick={() => toggleIntegration(i.id)}>
-                {i.status === 'disconnected' ? 'Connect' : 'Disconnect'}
-              </Button>
-              {i.status !== 'disconnected' && <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => syncIntegration(i.id)}><RefreshCw size={13} /> Sync</Button>}
-              <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setConfig(i)}><SettingsIcon size={13} /></Button>
-              {i.error_logs.length > 0 && <Button variant="ghost" className="px-2.5 py-1.5 text-xs text-amber-600" onClick={() => setLogs(i)}><AlertCircle size={13} /></Button>}
-            </div>
+            {canManage && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Button
+                  variant={i.status === 'disconnected' ? 'primary' : 'secondary'} className="px-3 py-1.5 text-xs"
+                  disabled={busyId === i.id || (!i.available && i.status === 'disconnected')}
+                  onClick={() => void handleToggle(i)}
+                >
+                  {i.status === 'disconnected' ? 'Connect' : 'Disconnect'}
+                </Button>
+                {i.status !== 'disconnected' && (
+                  <Button variant="ghost" className="px-2.5 py-1.5 text-xs" disabled={busyId === i.id} onClick={() => void handleSync(i)}><RefreshCw size={13} /> Sync</Button>
+                )}
+                <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => openConfig(i)}><SettingsIcon size={13} /></Button>
+                {i.error_logs.length > 0 && <Button variant="ghost" className="px-2.5 py-1.5 text-xs text-amber-600" onClick={() => setLogsFor(i)}><AlertCircle size={13} /></Button>}
+              </div>
+            )}
           </Card>
         ))}
       </div>
 
       {config && (
-        <Modal open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={<><Button variant="secondary" onClick={() => setConfig(null)}>Close</Button><Button onClick={() => { updateIntegrationConfig(config.id, { api_key: 'configured' }); setConfig(null); }}>Save</Button></>}>
-          <div className="space-y-4">
-            <Field label="API Key / Token"><Input placeholder="••••••••••••sim" defaultValue={config.config.api_key ? '••••••••configured' : ''} /></Field>
-            <Field label="Webhook URL"><Input defaultValue={`https://app.innovatex.com/webhooks/${config.name.toLowerCase().replace(/[^a-z]/g, '')}`} /></Field>
-            <p className="text-xs text-ink-400">In this prototype, credentials are simulated. Connecting toggles status and updates the last sync time.</p>
-          </div>
+        <Modal
+          open onClose={() => setConfig(null)} title={`${config.name} Settings`}
+          footer={<><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
+        >
+          {config.key === 'meta_cloud' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This is your real Meta WhatsApp Cloud API connection — the same one used by the WhatsApp Panel. Saving here will make a real, live call to Meta's Graph API to verify these credentials.</p>
+              <Field label="Phone Number ID"><Input value={waForm.phoneNumberId} onChange={(e) => setWaForm({ ...waForm, phoneNumberId: e.target.value })} placeholder="e.g. 1191287804063107" /></Field>
+              <Field label="Business Account ID"><Input value={waForm.businessAccountId} onChange={(e) => setWaForm({ ...waForm, businessAccountId: e.target.value })} /></Field>
+              <Field label="Access Token"><Input type="password" value={waForm.accessToken} onChange={(e) => setWaForm({ ...waForm, accessToken: e.target.value })} placeholder={config.config.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Meta access token'} /></Field>
+              <Field label="App Secret"><Input type="password" value={waForm.appSecret} onChange={(e) => setWaForm({ ...waForm, appSecret: e.target.value })} placeholder={config.config.hasAppSecret ? 'Already set — leave blank to keep' : 'Required for webhook verification'} /></Field>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <Field label="API Key / Token"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter API key…" /></Field>
+              <Field label="Webhook URL"><Input value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} placeholder="https://…" /></Field>
+              <p className="text-xs text-ink-400">This runs in simulation mode — credentials are saved but no live connection is made to {config.name}.</p>
+            </div>
+          )}
         </Modal>
       )}
 
-      {logs && (
-        <Modal open onClose={() => setLogs(null)} title={`${logs.name} — Error Logs`}>
+      {logsFor && (
+        <Modal open onClose={() => setLogsFor(null)} title={`${logsFor.name} — Error Logs`}>
           <div className="space-y-2">
-            {logs.error_logs.map((l, i) => <div key={i} className="flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700"><AlertCircle size={15} className="mt-0.5 shrink-0" /> {l}</div>)}
+            {logsFor.error_logs.map((l, i) => (
+              <div key={i} className={`flex items-start gap-2 rounded-lg p-3 text-sm ${l.severity === 'error' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+                <AlertCircle size={15} className="mt-0.5 shrink-0" />
+                <div className="flex-1"><p>{l.message}</p><p className="mt-0.5 text-xs opacity-70">{timeAgo(l.occurred_at)}</p></div>
+              </div>
+            ))}
           </div>
         </Modal>
       )}

@@ -97,7 +97,6 @@ export const qualificationPermissions = {
 };
 
 /**
-/**
  * Campaign (marketing) permissions -- mirrors the SPEC-TRIMMED
  * campaign.routes.js exactly: only POST / (create) requires a role floor
  * (tenant_admin+). Update/delete/regenerate-link do not exist as routes
@@ -168,7 +167,6 @@ export const consentPermissions = {
   canUnblock: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
 };
 
-
 /**
  * Team permissions -- mirrors team.service.js EXACTLY, not just a static
  * role floor. Three real business rules enforced server-side that the UI
@@ -213,6 +211,15 @@ export const teamPermissions = {
  */
 export const settingsPermissions = {
   canEdit: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
+};
+
+/**
+ * Integration permissions -- mirrors integration.routes.js exactly:
+ *   GET routes -- no requireRole -- any authenticated role can view.
+ *   toggle/sync/config all require tenant_admin+.
+ */
+export const integrationPermissions = {
+  canManage: (role: AuthRole | null | undefined) => atLeast(role, 'tenant_admin'),
 };
 
 /**

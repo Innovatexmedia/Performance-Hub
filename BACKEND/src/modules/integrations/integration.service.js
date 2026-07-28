@@ -35,6 +35,49 @@
 import * as integrationRepo from './integration.repository.js';
 import { AppError, paginationMeta, normalizePaging } from '../../shared/helpers/lead.helpers.js';
 import { INTEGRATION_STATUS } from './integration.constants.js';
+import { whatsappSettingsService } from '../whatsapp/submodules/whatsappSettings/whatsappSettings.service.js';
+
+// =============================================================================
+// META CLOUD API BRIDGE
+// =============================================================================
+// The 'meta_cloud' catalog entry is the ONE card in this module connected to
+// a genuinely real, already-working system (WhatsApp Settings' real Meta
+// Graph API integration) rather than this module's own simulated config.
+// Every other one of the 22 cards keeps the original simulated behavior
+// untouched -- this bridge exists ONLY for meta_cloud.
+
+const META_CLOUD_KEY = 'meta_cloud';
+
+/** Builds a ctx shape matching what whatsappSettingsService expects, from this module's (tenantId, userId) pair. */
+const toWaCtx = (tenantId, userId) => ({ tenantId, userId });
+
+/**
+ * overlayMetaCloudStatus -- given a raw Integration doc for the meta_cloud
+ * key, replaces its status/last_sync/config with REAL data derived from
+ * WhatsAppSettings, so this card always reflects the tenant's actual,
+ * already-working WhatsApp connection instead of its own separate
+ * (otherwise-unused) simulated fields. Returns the doc unchanged if it's
+ * not the meta_cloud entry.
+ */
+const overlayMetaCloudStatus = async (tenantId, userId, doc) => {
+  if (!doc || doc.key !== META_CLOUD_KEY) return doc;
+
+  const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
+  const isLive = settings.provider === 'META_CLOUD' && settings.providerMode === 'LIVE';
+
+  const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+  overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+  overlaid.last_sync = settings.meta?.lastVerifiedAt || null;
+  overlaid.config = {
+    phoneNumberId: settings.meta?.phoneNumberId || '',
+    businessAccountId: settings.meta?.businessAccountId || '',
+    hasAccessToken: settings.meta?.hasAccessToken || false,
+    hasAppSecret: settings.meta?.hasAppSecret || false,
+    displayPhoneNumber: settings.meta?.displayPhoneNumber || '',
+    verifiedName: settings.meta?.verifiedName || '',
+  };
+  return overlaid;
+};
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -50,7 +93,7 @@ const hasRealConfig = (config) => {
 // READ (auto-seeds the catalog first)
 // =============================================================================
 
-export const listIntegrations = async (tenantId, filter, options) => {
+export const listIntegrations = async (tenantId, filter, options, userId) => {
   await integrationRepo.ensureCatalogSeeded(tenantId);
 
   const { page, limit, skip } = normalizePaging(options || {});
@@ -59,14 +102,18 @@ export const listIntegrations = async (tenantId, filter, options) => {
     integrationRepo.count(tenantId, filter),
   ]);
 
-  return { integrations, pagination: paginationMeta({ page, limit, total }) };
+  const overlaid = await Promise.all(
+    integrations.map((doc) => overlayMetaCloudStatus(tenantId, userId, doc)),
+  );
+
+  return { integrations: overlaid, pagination: paginationMeta({ page, limit, total }) };
 };
 
-export const getIntegration = async (tenantId, id) => {
+export const getIntegration = async (tenantId, id, userId) => {
   await integrationRepo.ensureCatalogSeeded(tenantId);
   const integration = await integrationRepo.findById(tenantId, id);
   if (!integration) throw AppError.notFound('Integration not found');
-  return integration;
+  return overlayMetaCloudStatus(tenantId, userId, integration);
 };
 
 export const getCategoryCounts = async (tenantId, filter) => {
@@ -98,6 +145,24 @@ export const toggleIntegration = async (tenantId, userId, id) => {
   const existing = await integrationRepo.findById(tenantId, id);
   if (!existing) throw AppError.notFound('Integration not found');
 
+  if (existing.key === META_CLOUD_KEY) {
+    const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
+    const isLive = settings.provider === 'META_CLOUD' && settings.providerMode === 'LIVE';
+
+    if (isLive) {
+      // Real disconnect -- same action as the Disconnect button in WhatsApp Settings itself.
+      await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+        provider: 'SIMULATION',
+        providerMode: 'SIMULATION',
+      });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real Meta Cloud API credentials in Settings first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayMetaCloudStatus(tenantId, userId, existing);
+  }
+
   let newStatus;
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
     if (!existing.available) {
@@ -125,6 +190,14 @@ export const syncIntegration = async (tenantId, userId, id) => {
   const existing = await integrationRepo.findById(tenantId, id);
   if (!existing) throw AppError.notFound('Integration not found');
 
+  if (existing.key === META_CLOUD_KEY) {
+    // Real verification -- an actual live call to Meta's Graph API.
+    // Throws a real AppError with Meta's real rejection message if the
+    // credentials are genuinely invalid; never silently "succeeds".
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+    return overlayMetaCloudStatus(tenantId, userId, existing);
+  }
+
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
     throw AppError.badRequest('Cannot sync a disconnected integration');
   }
@@ -142,6 +215,27 @@ export const syncIntegration = async (tenantId, userId, id) => {
 export const updateIntegrationConfig = async (tenantId, userId, id, configPatch) => {
   const existing = await integrationRepo.findById(tenantId, id);
   if (!existing) throw AppError.notFound('Integration not found');
+
+  if (existing.key === META_CLOUD_KEY) {
+    const { phoneNumberId, businessAccountId, accessToken, appSecret } = configPatch || {};
+    const meta = {};
+    if (phoneNumberId !== undefined) meta.phoneNumberId = phoneNumberId;
+    if (businessAccountId !== undefined) meta.businessAccountId = businessAccountId;
+    if (accessToken) meta.accessToken = accessToken; // only overwrite if a new value was actually typed
+    if (appSecret) meta.appSecret = appSecret;
+
+    await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+      provider: 'META_CLOUD',
+      meta,
+    });
+
+    // Real verification, immediately -- this is what actually marks the
+    // card "connected", not the save above. Throws a real Meta error if
+    // the credentials are wrong; the card stays disconnected in that case.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+
+    return overlayMetaCloudStatus(tenantId, userId, existing);
+  }
 
   const mergedConfig = Object.assign({}, existing.config, configPatch || {});
 
