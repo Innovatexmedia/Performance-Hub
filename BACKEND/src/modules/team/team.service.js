@@ -320,16 +320,30 @@ export const getTeamMember = async (memberId, tenantId) => {
 // =============================================================================
 
 /**
- * generateTempPassword — creates a random 12-char temp password.
- * Sent to invited users via email.
+ * generateTempPassword — creates a temp password for invited team members.
+ *
+ * ⚠️ TEMPORARY TESTING OVERRIDE ⚠️
+ * Currently returns a FIXED password instead of a random one, purely so
+ * you can predict new team members' login credentials while testing
+ * locally (no real email sending is wired up yet -- see team.service.js
+ * addTeamMember()'s comment about sendTeamInvite() only logging to
+ * console right now). REVERT THIS before any real/shared use -- a fixed,
+ * predictable password for every new account is a genuine security
+ * issue the moment more than one person can reach this app.
+ *
+ * To revert: restore the random generation below (kept, just commented
+ * out) and delete the fixed return.
  */
 const generateTempPassword = () => {
-  const chars  = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
-  let password = '';
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return password;
+  return 'Test@1234'; // TEMP: fixed for local testing only -- see warning above
+
+  // Original random version -- restore this, delete the line above, when done testing:
+  // const chars  = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
+  // let password = '';
+  // for (let i = 0; i < 12; i++) {
+  //   password += chars.charAt(Math.floor(Math.random() * chars.length));
+  // }
+  // return password;
 };
 
 const isValidRole = (role) =>
