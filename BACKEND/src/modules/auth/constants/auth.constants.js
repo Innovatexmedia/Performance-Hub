@@ -46,7 +46,7 @@ export const RATE_LIMITS = Object.freeze({
   LOGIN_WINDOW_MINUTES:     15,    // Rate limit window in minutes
   FORGOT_PASSWORD_REQUESTS: 3,
   FORGOT_PASSWORD_WINDOW_MINUTES: 60,
-  GENERAL_API_REQUESTS:     100,
+  GENERAL_API_REQUESTS:     2000,  // Raised from 100 -- that was sized for a low-traffic public API, not an actively-used authenticated SPA making many legitimate calls per session (list+counts+kpis per page, real-time reconnects, etc.)
   GENERAL_API_WINDOW_MINUTES: 15,
 });
 
