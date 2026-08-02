@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { whatsappSettingsApi } from '@/lib/whatsappSettingsApi';
+import type { SyncResult } from '@/lib/whatsappSettingsApi';
 import { ApiError } from '@/lib/apiClient';
 import type {
   WhatsAppSettings, UpdateProviderInput, UpdateSyncInput, TestConnectionResult,
@@ -14,6 +15,9 @@ export interface UseWhatsAppSettingsResult {
   updateSync: (input: UpdateSyncInput) => Promise<WhatsAppSettings>;
   testConnection: () => Promise<TestConnectionResult>;
   disconnect: () => Promise<WhatsAppSettings>;
+  /** Real for templates (calls Meta's API); contacts/messages/profile are
+   * still the honest backend stub -- see SyncResult.implemented. */
+  syncTemplates: () => Promise<SyncResult>;
 }
 
 export function useWhatsAppSettings(): UseWhatsAppSettingsResult {
@@ -73,5 +77,11 @@ export function useWhatsAppSettings(): UseWhatsAppSettingsResult {
     return updated;
   }, []);
 
-  return { settings, loading, error, refetch, updateProvider, updateSync, testConnection, disconnect };
+  const syncTemplates = useCallback(async () => {
+    const result = await whatsappSettingsApi.syncTemplates();
+    refetch();
+    return result;
+  }, [refetch]);
+
+  return { settings, loading, error, refetch, updateProvider, updateSync, testConnection, disconnect, syncTemplates };
 }

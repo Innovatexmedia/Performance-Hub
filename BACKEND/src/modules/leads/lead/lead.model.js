@@ -41,6 +41,7 @@ const leadSchema = new Schema(
 
     // Ownership / segmentation
     assigned_user_id: { type: String, default: null },
+    group_id: { type: String, default: null, index: true },
     segment: { type: String, trim: true },
     value: { type: Number, default: 0 },
     notes: { type: String, default: '' },

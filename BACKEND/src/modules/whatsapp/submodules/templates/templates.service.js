@@ -7,8 +7,10 @@ import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE } from '../../../leads/activities/activity.model.js';
 
 import { templatesRepository } from './templates.repository.js';
+import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
 import {
   TEMPLATE_STATUS,
+  TEMPLATE_CATEGORY_VALUES,
   APPROVAL_STATUS,
   PROVIDER_STATUS,
   HEADER_TYPE,
@@ -194,6 +196,72 @@ async function logTemplate(ctx, template, type, message, meta = {}) {
     { message, meta: { templateId: String(template._id ?? template.id), ...meta } },
   );
 }
+
+/**
+ * Meta's real template status values -> our (status, approvalStatus) pair.
+ * Meta also uses IN_APPEAL/APPEALED in some cases; unmapped values fall
+ * back to SUBMITTED_TO_PROVIDER/SUBMITTED rather than silently guessing
+ * ACTIVE/APPROVED for something we don't actually recognize.
+ */
+const META_TEMPLATE_STATUS_MAP = {
+  APPROVED: { status: TEMPLATE_STATUS.ACTIVE, approvalStatus: APPROVAL_STATUS.PROVIDER_APPROVED },
+  REJECTED: { status: TEMPLATE_STATUS.REJECTED, approvalStatus: APPROVAL_STATUS.PROVIDER_REJECTED },
+  PENDING: { status: TEMPLATE_STATUS.SUBMITTED, approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER },
+  PAUSED: { status: TEMPLATE_STATUS.PAUSED, approvalStatus: APPROVAL_STATUS.PAUSED },
+  DISABLED: { status: TEMPLATE_STATUS.PAUSED, approvalStatus: APPROVAL_STATUS.DISABLED },
+};
+
+function mapMetaCategory(metaCategory) {
+  return TEMPLATE_CATEGORY_VALUES.includes(metaCategory) ? metaCategory : 'CUSTOM';
+}
+
+/** Meta's BUTTONS component types line up 1:1 with ours for the common
+ * cases (QUICK_REPLY/PHONE_NUMBER/URL); anything else falls back to
+ * CUSTOM rather than failing the whole sync over one unusual button. */
+function mapMetaButtonType(metaType) {
+  return BUTTON_TYPE_VALUES.includes(metaType) ? metaType : 'CUSTOM';
+}
+
+/** Extracts our (header, body, footer, buttons, variables) shape from
+ * Meta's `components` array. Only the BODY component's example values are
+ * used as `variables` -- header/button dynamic params aren't tracked
+ * separately in our schema today (matches MetaProvider.sendTemplate's own
+ * documented body-only scope). */
+function mapMetaComponents(components = []) {
+  const result = {
+    header: { type: 'NONE', text: '', mediaUrl: '' },
+    body: '',
+    footer: '',
+    buttons: [],
+    variables: [],
+  };
+
+  for (const c of components) {
+    const type = c.type?.toUpperCase();
+    if (type === 'HEADER') {
+      const format = c.format?.toUpperCase() || 'TEXT';
+      result.header = {
+        type: HEADER_TYPE_VALUES.includes(format) ? format : 'TEXT',
+        text: format === 'TEXT' ? (c.text || '') : '',
+        mediaUrl: '',
+      };
+    } else if (type === 'BODY') {
+      result.body = c.text || '';
+      result.variables = c.example?.body_text?.[0] || [];
+    } else if (type === 'FOOTER') {
+      result.footer = c.text || '';
+    } else if (type === 'BUTTONS') {
+      result.buttons = (c.buttons || []).map((b) => ({
+        type: mapMetaButtonType(b.type?.toUpperCase()),
+        text: b.text || '',
+        value: b.url || b.phone_number || '',
+      }));
+    }
+  }
+
+  return result;
+}
+
 
 async function generateUniqueSlug(ctx, base, excludeId = null) {
   const root = slugify(base);
@@ -524,5 +592,117 @@ export const templatesService = {
     await this.assertUsable(ctx, id);
     const updated = await templatesRepository.incrementUsageCount(ctx.tenantId, id);
     return toTemplateDTO(updated);
+  },
+
+  // ---- real sync from Meta -------------------------------------------------
+  /**
+   * Pulls every template that genuinely exists on Meta's side right now
+   * (GET /{waba_id}/message_templates) and reconciles our DB against it:
+   *   - Existing local record (matched by providerMetadata.providerTemplateId,
+   *     falling back to name+languageCode for one that was deleted locally
+   *     and needs recovering) -> updated in place, including approvalStatus/
+   *     status, so a template Meta already approved/rejected days ago but
+   *     that our webhook missed (e.g. app was unpublished at the time) gets
+   *     corrected here too.
+   *   - No local match at all -> created fresh, with fields read directly
+   *     from Meta's response (bypassing the normal DRAFT-only createTemplate
+   *     path deliberately: a synced-back record reflects Meta's already-real
+   *     state, not a brand new user draft that hasn't been through review).
+   *
+   * Previously this whole thing was a no-op stub in whatsappSettingsService
+   * that only stamped a lastSyncAt timestamp -- see that file's own comment
+   * admitting as much. This is the first real implementation.
+   */
+  async syncFromMeta(ctx) {
+    const config = await whatsappSettingsService.getProviderConfig(ctx);
+    const { accessToken, businessAccountId, graphApiVersion } = config.meta || {};
+    if (config.provider !== 'META_CLOUD' || config.providerMode === 'SIMULATION') {
+      throw new AppError(400, 'WhatsApp Settings must be configured for the real Meta Cloud API (not Simulation) to sync templates');
+    }
+    if (!accessToken || !businessAccountId) {
+      throw new AppError(400, 'Meta access token and Business Account ID must be configured before syncing');
+    }
+
+    const version = graphApiVersion || 'v21.0';
+    let url = `https://graph.facebook.com/${version}/${businessAccountId}/message_templates?limit=100`;
+
+    let created = 0;
+    let updated = 0;
+    const errors = [];
+
+    // Meta paginates via `paging.next` -- a bounded loop (not `while(true)`
+    // forever) so a misbehaving API can't hang this request indefinitely.
+    for (let page = 0; page < 20 && url; page += 1) {
+      let response;
+      try {
+        response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      } catch (networkErr) {
+        throw new AppError(502, `Could not reach Meta's API -- ${networkErr.message}`);
+      }
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const msg = json?.error?.message || `HTTP ${response.status}`;
+        throw new AppError(502, `Meta rejected the template list request -- ${msg}`);
+      }
+
+      for (const metaTemplate of json.data || []) {
+        try {
+          const mapped = mapMetaComponents(metaTemplate.components);
+          const statusInfo = META_TEMPLATE_STATUS_MAP[metaTemplate.status]
+            || { status: TEMPLATE_STATUS.SUBMITTED, approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER };
+
+          let existing = await templatesRepository.findByProviderTemplateId(ctx.tenantId, String(metaTemplate.id));
+          if (!existing) {
+            existing = await templatesRepository.findByNameAndLanguage(ctx.tenantId, metaTemplate.name, metaTemplate.language);
+          }
+
+          const patch = {
+            name: metaTemplate.name,
+            category: mapMetaCategory(metaTemplate.category),
+            languageCode: metaTemplate.language,
+            status: statusInfo.status,
+            approvalStatus: statusInfo.approvalStatus,
+            header: mapped.header,
+            body: mapped.body,
+            footer: mapped.footer,
+            buttons: mapped.buttons,
+            variables: mapped.variables,
+            isActive: statusInfo.status === TEMPLATE_STATUS.ACTIVE,
+            providerMetadata: {
+              providerTemplateId: String(metaTemplate.id),
+              providerStatus: metaTemplate.status,
+              providerError: null,
+              syncedAt: new Date(),
+              rawResponse: metaTemplate,
+            },
+          };
+
+          if (existing) {
+            await templatesRepository.updateTemplate(ctx.tenantId, existing._id, patch);
+            updated += 1;
+          } else {
+            const slug = await generateUniqueSlug(ctx, metaTemplate.name);
+            await templatesRepository.createTemplate({
+              ...patch,
+              tenantId: ctx.tenantId,
+              slug,
+              description: '',
+              provider: 'META_CLOUD',
+              version: 1,
+              usageCount: 0,
+              createdBy: ctx.userId,
+              updatedBy: ctx.userId,
+            });
+            created += 1;
+          }
+        } catch (itemErr) {
+          errors.push({ name: metaTemplate?.name, message: itemErr.message });
+        }
+      }
+
+      url = json.paging?.next || null;
+    }
+
+    return { created, updated, total: created + updated, errors, syncedAt: new Date() };
   },
 };

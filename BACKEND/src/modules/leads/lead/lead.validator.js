@@ -25,6 +25,7 @@ const ALLOWED_FIELDS = [
   'qualification_score',
   'lead_temperature',
   'assigned_user_id',
+  'group_id',
   'segment',
   'value',
   'notes',

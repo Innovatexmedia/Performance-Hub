@@ -62,6 +62,46 @@ export class MetaProvider extends WhatsAppProvider {
       text: { body: content },
     };
 
+    return this._post(body);
+  }
+
+  /**
+   * Send a real approved WHATSAPP TEMPLATE message via the Graph API.
+   * Required for every campaign/broadcast send -- Meta rejects free-text
+   * business-initiated messages to a user outside an active 24h
+   * customer-service session, so campaigns can never use sendMessage().
+   *
+   * `bodyParams` is a flat list of string values filled into the template
+   * body's {{1}}, {{2}}, ... placeholders IN ORDER. Only the body component
+   * is populated -- header/button dynamic params aren't supported yet, same
+   * "implemented only where the shape is fully correct" scoping as
+   * sendMessage()'s text-only limitation above.
+   */
+  async sendTemplate({ to, templateName, languageCode, bodyParams = [] }) {
+    if (!templateName) throw new Error('MetaProvider.sendTemplate: templateName is required');
+    if (!languageCode) throw new Error('MetaProvider.sendTemplate: languageCode is required');
+
+    const body = {
+      messaging_product: 'whatsapp',
+      to: MetaProvider.normalizePhone(to),
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: languageCode },
+        // Meta rejects a `components` array with zero-length parameters for
+        // a template that has no placeholders -- so this is only included
+        // when there's actually something to fill in.
+        ...(bodyParams.length
+          ? { components: [{ type: 'body', parameters: bodyParams.map((v) => ({ type: 'text', text: String(v) })) }] }
+          : {}),
+      },
+    };
+
+    return this._post(body);
+  }
+
+  /** Shared POST + response-normalization for sendMessage/sendTemplate. */
+  async _post(body) {
     let response;
     try {
       response = await fetch(this.baseUrl, {

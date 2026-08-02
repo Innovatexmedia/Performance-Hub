@@ -56,6 +56,19 @@ const messageSchema = new Schema(
     },
     lead_id: { type: Schema.Types.ObjectId, ref: 'Lead', default: null },
 
+    // Links an outbound message back to the campaign/broadcast that sent
+    // it -- null for manual Inbox sends and all inbound messages. This is
+    // what lets the delivery-status webhook and the inbound-reply handler
+    // find the right campaign/broadcast to update Delivered/Read/Replied
+    // counts on (see metaWebhook.service.js).
+    source_type: { type: String, enum: ['CAMPAIGN', 'BROADCAST', null], default: null },
+    source_id: { type: Schema.Types.ObjectId, default: null },
+    // Set the first time an inbound reply is matched back to this
+    // (outbound, campaign-sourced) message -- guards against counting
+    // multiple replies in the same conversation as multiple "Replied"
+    // events for the same campaign send.
+    replied_at: { type: Date, default: null },
+
     direction: { type: String, enum: MESSAGE_DIRECTION_VALUES, required: true },
     type: { type: String, enum: MESSAGE_TYPE_VALUES, default: MESSAGE_TYPE.TEXT },
     content: { type: String, default: '' },
@@ -82,5 +95,6 @@ const messageSchema = new Schema(
 );
 
 messageSchema.index({ tenant_id: 1, conversation_id: 1, created_at: 1 });
+messageSchema.index({ tenant_id: 1, source_type: 1, source_id: 1 });
 
 export const Message = mongoose.model('WhatsAppMessage', messageSchema);

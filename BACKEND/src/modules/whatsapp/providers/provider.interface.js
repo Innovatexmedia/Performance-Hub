@@ -22,6 +22,17 @@ export class WhatsAppProvider {
   }
 
   /**
+   * Send an outbound TEMPLATE message (the only message type Meta allows
+   * for business-initiated sends outside an active 24h customer-service
+   * window -- i.e. every campaign/broadcast send).
+   * @param {{ to: string, templateName: string, languageCode: string, bodyParams?: string[] }} _payload
+   * @returns {Promise<{ provider, provider_message_id, status, sent_at, delivered_at }>}
+   */
+  async sendTemplate(_payload) {
+    throw new Error('sendTemplate() not implemented');
+  }
+
+  /**
    * Simulate an inbound message arriving from a contact.
    * @param {{ from: string, content: string, type?: string }} _payload
    * @returns {Promise<{ provider, provider_message_id, status, received_at }>}

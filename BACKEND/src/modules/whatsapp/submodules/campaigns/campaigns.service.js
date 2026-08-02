@@ -2,14 +2,18 @@
  * WhatsApp Campaigns — service (business logic + workflow engine).
  *
  * Owns status-transition validation, template-approval guard (delegates to
- * templateApprovalService.assertUsable), audience calculation against the live
- * WhatsAppContact collection, activity logging, and all lifecycle methods.
+ * templateApprovalService.assertUsable), audience calculation against the
+ * real Lead collection (the same data the Contacts/Leads tab and the real
+ * inbound-webhook pipeline actually populate -- NOT the separate, unused
+ * WhatsAppContact collection this file previously queried), activity
+ * logging, and all lifecycle methods.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
-import { WhatsAppContact } from '../contacts/contacts.model.js';
+import { Lead } from '../../../leads/lead/lead.model.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
+import { campaignSenderService } from '../../campaignSender.service.js';
 import { campaignsRepository } from './campaigns.repository.js';
 import {
   CAMPAIGN_STATUS,
@@ -84,31 +88,39 @@ function paging(query = {}) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
-// ── Audience resolution against WhatsAppContact collection ───────────────────
+// ── Audience resolution against the real Lead collection ─────────────────────
 
-function buildAudienceQuery(tenantId, filters = {}, includedContacts = [], excludedContacts = []) {
-  const query = { tenantId, optOutStatus: 'ACTIVE' };
+export function buildAudienceQuery(tenantId, filters = {}, includedContacts = [], excludedContacts = []) {
+  // opt_out_status on Lead is a boolean (default false), not the
+  // 'ACTIVE'/'OPTED_OUT' string enum WhatsAppContact used -- so "reachable"
+  // means opt_out_status is not true.
+  const query = { tenant_id: tenantId, opt_out_status: { $ne: true } };
 
   if (filters.tags?.length)         query.tags = { $all: filters.tags };
   if (filters.source)               query.source = filters.source;
-  if (filters.consentStatus)        query.consentStatus = filters.consentStatus;
-  if (filters.optOutStatus)         query.optOutStatus = filters.optOutStatus;
-  if (filters.assignedUserId)       query.assignedUserId = filters.assignedUserId;
-  if (filters.status)               query.status = filters.status;
+  if (filters.consentStatus)        query.consent_status = filters.consentStatus;
+  if (filters.optOutStatus)         query.opt_out_status = filters.optOutStatus === 'OPTED_OUT';
+  if (filters.assignedUserId)       query.assigned_user_id = filters.assignedUserId;
+  if (filters.groupId)              query.group_id = filters.groupId;
+  // NOTE: filters.status (contact status) is intentionally NOT mapped onto
+  // Lead.status -- Lead's status is the pipeline stage (New/Qualified/Won/
+  // Lost/etc), a different concept than the old WhatsAppContact "contact
+  // status" this filter was built for. Repurposing it silently would be
+  // misleading, so it's left unimplemented until a real decision is made.
   if (filters.minimumScore !== undefined || filters.maximumScore !== undefined) {
-    query.score = {};
-    if (filters.minimumScore !== undefined) query.score.$gte = Number(filters.minimumScore);
-    if (filters.maximumScore !== undefined) query.score.$lte = Number(filters.maximumScore);
+    query.qualification_score = {};
+    if (filters.minimumScore !== undefined) query.qualification_score.$gte = Number(filters.minimumScore);
+    if (filters.maximumScore !== undefined) query.qualification_score.$lte = Number(filters.maximumScore);
   }
   if (filters.createdAfter || filters.createdBefore) {
-    query.createdAt = {};
-    if (filters.createdAfter)  query.createdAt.$gte = new Date(filters.createdAfter);
-    if (filters.createdBefore) query.createdAt.$lte = new Date(filters.createdBefore);
+    query.created_at = {};
+    if (filters.createdAfter)  query.created_at.$gte = new Date(filters.createdAfter);
+    if (filters.createdBefore) query.created_at.$lte = new Date(filters.createdBefore);
   }
   if (filters.lastContactedAfter || filters.lastContactedBefore) {
-    query.lastContactedAt = {};
-    if (filters.lastContactedAfter)  query.lastContactedAt.$gte = new Date(filters.lastContactedAfter);
-    if (filters.lastContactedBefore) query.lastContactedAt.$lte = new Date(filters.lastContactedBefore);
+    query.last_contacted_at = {};
+    if (filters.lastContactedAfter)  query.last_contacted_at.$gte = new Date(filters.lastContactedAfter);
+    if (filters.lastContactedBefore) query.last_contacted_at.$lte = new Date(filters.lastContactedBefore);
   }
 
   // Explicit include/exclude overrides.
@@ -145,7 +157,7 @@ export const campaignsService = {
   async calculateAudience(tenantId, audience = {}) {
     const { filters = {}, includedContacts = [], excludedContacts = [] } = audience;
     const query = buildAudienceQuery(tenantId, filters, includedContacts, excludedContacts);
-    return WhatsAppContact.countDocuments(query);
+    return Lead.countDocuments(query);
   },
 
   async previewAudience(ctx, audience = {}) {
@@ -346,6 +358,18 @@ export const campaignsService = {
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_CAMPAIGN_STARTED,
       'Campaign started', { recipientCount });
+
+    // Fire-and-forget: the actual real send loop. Never awaited -- the HTTP
+    // response returns immediately with status RUNNING, and the campaign
+    // transitions itself to COMPLETED/FAILED once every recipient has been
+    // attempted. Errors inside dispatch() are caught internally and turned
+    // into a real failCampaign transition, never an unhandled rejection here.
+    campaignSenderService
+      .dispatch(ctx, { id, kind: 'campaign' })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('campaignSenderService.dispatch threw unexpectedly for campaign', id, err);
+      });
 
     return toCampaignDTO(updated);
   },

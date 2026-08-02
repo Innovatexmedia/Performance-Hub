@@ -13,6 +13,7 @@ import activityRoutes from '.././activities/activity.routes.js';
 import assignmentRoutes from '../assignments/assignment.routes.js';
 import { exportController } from '../exports/export.controller.js';
 import { importController } from '../imports/import.controller.js';
+import groupRoutes from '../groups/group.routes.js';
 
 /**
  * Lead routes — mount at: app.use('/api/leads', leadRoutes)
@@ -31,6 +32,7 @@ router.get('/export', authorize(ACTIONS.EXPORT), exportController.exportCsv);
 router.post('/import', authorize(ACTIONS.IMPORT), upload.single('file'), importController.importCsv
 );
 router.get('/constants', authorize(ACTIONS.READ), leadController.constants);
+router.use('/groups', groupRoutes);
 
 // --- nested sub-resources ----------------------------------------------
 router.use('/:id/notes', noteRoutes); // Phase 8

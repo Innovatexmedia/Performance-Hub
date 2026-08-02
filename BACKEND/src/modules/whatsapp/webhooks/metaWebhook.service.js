@@ -42,6 +42,9 @@ import { MESSAGE_STATUS } from '../messages/message.model.js';
 import { CONVERSATION_STATUS } from '../conversations/conversation.model.js';
 import { leadRepository } from '../../leads/lead/lead.repository.js';
 import { leadService } from '../../leads/lead/lead.service.js';
+import { campaignsRepository } from '../submodules/campaigns/campaigns.repository.js';
+import { broadcastsRepository } from '../submodules/broadcasts/broadcasts.repository.js';
+import { emitToTenant } from '../../../realtime/socket.js';
 
 const META_STATUS_MAP = {
   sent: MESSAGE_STATUS.SENT,
@@ -131,6 +134,38 @@ async function findOrCreateLeadAndConversation(ctx, waId, profileName) {
   return conversation;
 }
 
+function toEntityDTO(doc) {
+  if (!doc) return null;
+  const o = typeof doc.toObject === 'function' ? doc.toObject() : doc;
+  const { _id, ...rest } = o;
+  return { id: String(_id ?? o.id), ...rest };
+}
+
+/**
+ * Bumps one metric field (deliveredCount/readCount/repliedCount) on the
+ * campaign/broadcast a message came from, and pushes the same live
+ * 'whatsapp:campaign'/'whatsapp:broadcast' event the sender uses -- so a
+ * campaign card's numbers keep moving after the initial send, as real
+ * delivery/read/reply events arrive from Meta, not just at send time.
+ * No-op (not an error) if the message has no source_type -- most
+ * messages are manual Inbox sends or inbound, which don't have one.
+ */
+async function bumpCampaignMetric(tenantId, message, metricKey) {
+  if (!message?.source_type || !message?.source_id) return;
+
+  const isCampaign = message.source_type === 'CAMPAIGN';
+  const repository = isCampaign ? campaignsRepository : broadcastsRepository;
+  const socketEvent = isCampaign ? 'whatsapp:campaign' : 'whatsapp:broadcast';
+  const payloadKey = isCampaign ? 'campaign' : 'broadcast';
+
+  await repository.updateMetrics(tenantId, message.source_id, { [metricKey]: 1 });
+  const updated = await repository.findById(tenantId, message.source_id);
+  if (updated) {
+    emitToTenant(tenantId, socketEvent, { [`${payloadKey}Id`]: String(message.source_id), [payloadKey]: toEntityDTO(updated) });
+  }
+}
+
+
 export const metaWebhookService = {
   async handleVerification(tenantId, query) {
     const config = await getTenantMetaConfig(tenantId);
@@ -209,6 +244,20 @@ export const metaWebhookService = {
         received_at: msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date(),
       },
     });
+
+    // Real "Replied" tracking: if the most recent outbound message in this
+    // conversation was a campaign/broadcast send that hasn't already been
+    // counted as replied-to, this inbound message counts as that reply --
+    // once per send, so a chatty back-and-forth doesn't inflate the count.
+    try {
+      const lastOutbound = await messageRepository.findLatestUnrepliedCampaignMessage(ctx.tenantId, conversation._id);
+      if (lastOutbound) {
+        await messageRepository.updateById(ctx.tenantId, lastOutbound._id, { replied_at: new Date() });
+        await bumpCampaignMetric(ctx.tenantId, lastOutbound, 'repliedCount');
+      }
+    } catch (err) {
+      console.log(`[WA_CAMPAIGN_METRICS] Failed to attribute reply in conversation ${conversation._id} -- ${err.message}`);
+    }
   },
 
   async _handleStatusUpdate(ctx, status) {
@@ -227,6 +276,20 @@ export const metaWebhookService = {
       if (mapped === MESSAGE_STATUS.READ) patch.read_at = new Date(Number(status.timestamp) * 1000);
       await messageRepository.updateById(ctx.tenantId, message._id, patch);
       console.log(`[WA_INBOUND_DEV] Updated message ${message._id} status -> ${mapped}`);
+
+      // If this message was sent as part of a campaign/broadcast, its
+      // real Delivered/Read counts move here -- this is the only place
+      // that happens, since send-time only ever knows "Sent".
+      if (mapped === MESSAGE_STATUS.DELIVERED) {
+        await bumpCampaignMetric(ctx.tenantId, message, 'deliveredCount').catch((err) => {
+          console.log(`[WA_CAMPAIGN_METRICS] Failed to bump deliveredCount for message ${message._id} -- ${err.message}`);
+        });
+      }
+      if (mapped === MESSAGE_STATUS.READ) {
+        await bumpCampaignMetric(ctx.tenantId, message, 'readCount').catch((err) => {
+          console.log(`[WA_CAMPAIGN_METRICS] Failed to bump readCount for message ${message._id} -- ${err.message}`);
+        });
+      }
     }
 
     // Mirror the same status onto the V2 delivery-logs entry created at

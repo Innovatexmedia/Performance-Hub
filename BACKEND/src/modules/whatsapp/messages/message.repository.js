@@ -16,6 +16,23 @@ export const messageRepository = {
     return Message.findOne({ tenant_id: tenantId, provider_message_id: providerMessageId });
   },
 
+  /**
+   * Finds the most recent OUTBOUND, campaign/broadcast-sourced message in
+   * a conversation that hasn't been counted as replied-to yet. Used by
+   * the inbound-message webhook handler to attribute a real reply back
+   * to the specific campaign/broadcast send that prompted it, without
+   * double-counting if the same person replies more than once.
+   */
+  findLatestUnrepliedCampaignMessage(tenantId, conversationId) {
+    return Message.findOne({
+      tenant_id: tenantId,
+      conversation_id: conversationId,
+      direction: MESSAGE_DIRECTION.OUTBOUND,
+      source_type: { $ne: null },
+      replied_at: null,
+    }).sort({ created_at: -1 });
+  },
+
   findByConversation(tenantId, conversationId, { sort = { created_at: 1 }, skip = 0, limit = 50 } = {}) {
     return Message.find({ tenant_id: tenantId, conversation_id: conversationId })
       .sort(sort)

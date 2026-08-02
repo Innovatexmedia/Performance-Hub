@@ -19,9 +19,14 @@ import { syncFromProvider } from '@/services/whatsappService';
 import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
+import { useGroups } from '@/hooks/useGroups';
+import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
+import { USABLE_APPROVAL_STATUS } from '@/types/whatsappTemplate';
+import { useWhatsAppCampaigns } from '@/hooks/useWhatsAppCampaigns';
+import type { CreateCampaignInput, WhatsAppCampaign as WhatsAppCampaignReal } from '@/types/whatsappCampaign';
 import { PROVIDER_LABELS, NATIVE_PROVIDER, THIRD_PARTY_PROVIDER_VALUES, IMPLEMENTED_THIRD_PARTY_PROVIDERS } from '@/types/whatsappSettings';
 import type { WhatsAppProvider as WhatsAppProviderReal, PanelMode, WhatsAppSettingsSync } from '@/types/whatsappSettings';
 import { ApiError } from '@/lib/apiClient';
@@ -39,6 +44,7 @@ import { CONSENT_STATUS_VALUES, CONSENT_SOURCE_VALUES } from '@/types/whatsappCo
 const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'contacts', label: 'Contacts / Leads' },
+  { id: 'groups', label: 'Groups' },
   { id: 'templates', label: 'Templates' },
   { id: 'approval', label: 'Template Approval' },
   { id: 'campaigns', label: 'Campaigns' },
@@ -68,6 +74,7 @@ export function WhatsAppPanel() {
 
       {tab === 'inbox' && <Inbox />}
       {tab === 'contacts' && <ContactsTab />}
+      {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}
       {tab === 'approval' && <ApprovalTab />}
       {tab === 'campaigns' && <CampaignsTab broadcast={false} />}
@@ -83,53 +90,356 @@ export function WhatsAppPanel() {
   );
 }
 
-// ---- Contacts --------------------------------------------------------------
-function ContactsTab() {
-  const [page, setPage] = useState(1);
-  const { leads, pagination, loading, error } = useLeads({ page, limit: 20 });
+// ---- ConfirmDialog: replaces window.confirm/prompt with real app UI -------
+// requireTypedText: if set, the confirm button stays disabled until the
+// user types this exact string -- used for destructive group deletion.
+function ConfirmDialog({
+  open, title, message, confirmLabel = 'Confirm', destructive = false,
+  requireTypedText, onConfirm, onClose,
+}: {
+  open: boolean;
+  title: string;
+  message: React.ReactNode;
+  confirmLabel?: string;
+  destructive?: boolean;
+  requireTypedText?: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState('');
+  useEffect(() => { if (open) setTyped(''); }, [open]);
+  if (!open) return null;
+  const locked = !!requireTypedText && typed !== requireTypedText;
 
   return (
-    <Card>
-      <CardHeader title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
-      {error ? (
-        <EmptyState title="Couldn't load contacts" description={error} />
-      ) : loading && leads.length === 0 ? (
-        <p className="p-8 text-center text-sm text-ink-400">Loading contacts…</p>
-      ) : leads.length === 0 ? (
-        <EmptyState title="No contacts yet" description="Leads with a WhatsApp number will appear here." />
-      ) : (
-        <>
-          <Table>
-            <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
-            <tbody>
-              {leads.map((l) => (
-                <Tr key={l.id}>
-                  <Td><div className="flex items-center gap-2"><Avatar name={l.name} color="#22c55e" size={30} /><span className="font-medium">{l.name}</span></div></Td>
-                  <Td className="font-mono text-xs">{l.whatsapp_number || l.phone}</Td>
-                  <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
-                  <Td>{l.opt_out_status ? <Badge tone="red">Opted out</Badge> : <Badge tone="gray">No</Badge>}</Td>
-                  <Td className="text-ink-500">{timeAgo(l.last_contacted_at)}</Td>
-                  <Td className="font-semibold">{l.qualification_score}/10</Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-          {pagination && pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3">
-              <p className="text-xs text-ink-500">Page {pagination.page} of {pagination.totalPages} · {pagination.total} total</p>
-              <div className="flex gap-1.5">
-                <Button variant="secondary" disabled={!pagination.hasPrev} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={15} /> Prev</Button>
-                <Button variant="secondary" disabled={!pagination.hasNext} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight size={15} /></Button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </Card>
+    <Modal open onClose={onClose} title={title} size="sm" footer={
+      <>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button
+          className={destructive ? 'bg-red-600 hover:bg-red-700' : ''}
+          disabled={locked}
+          onClick={() => { onConfirm(); onClose(); }}
+        >
+          {confirmLabel}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3 text-sm text-ink-600">
+        {message}
+        {requireTypedText && (
+          <div>
+            <p className="mb-1 text-xs font-medium text-ink-500">Type <span className="font-mono font-semibold text-ink-800">{requireTypedText}</span> to confirm</p>
+            <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
-// ---- Templates -------------------------------------------------------------
+
+function ContactsTab() {
+  const [page, setPage] = useState(1);
+  const { leads, pagination, loading, error, updateLead } = useLeads({ page, limit: 20 });
+  const { groups } = useGroups();
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+
+  const assignGroup = async (leadId: string, groupId: string) => {
+    setAssigningId(leadId);
+    try {
+      await updateLead(leadId, { group_id: groupId || null });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update group');
+    } finally {
+      setAssigningId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
+        {error ? (
+          <EmptyState title="Couldn't load contacts" description={error} />
+        ) : loading && leads.length === 0 ? (
+          <p className="p-8 text-center text-sm text-ink-400">Loading contacts…</p>
+        ) : leads.length === 0 ? (
+          <EmptyState title="No contacts yet" description="Leads with a WhatsApp number will appear here." />
+        ) : (
+          <>
+            <Table>
+              <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Group</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
+              <tbody>
+                {leads.map((l) => (
+                  <Tr key={l.id}>
+                    <Td><div className="flex items-center gap-2"><Avatar name={l.name} color="#22c55e" size={30} /><span className="font-medium">{l.name}</span></div></Td>
+                    <Td className="font-mono text-xs">{l.whatsapp_number || l.phone}</Td>
+                    <Td>
+                      <Select
+                        value={l.group_id || ''}
+                        disabled={assigningId === l.id}
+                        onChange={(e) => assignGroup(l.id, e.target.value)}
+                        className="py-1 text-xs"
+                      >
+                        <option value="">No group</option>
+                        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </Select>
+                    </Td>
+                    <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
+                    <Td>{l.opt_out_status ? <Badge tone="red">Opted out</Badge> : <Badge tone="gray">No</Badge>}</Td>
+                    <Td className="text-ink-500">{timeAgo(l.last_contacted_at)}</Td>
+                    <Td className="font-semibold">{l.qualification_score}/10</Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+            {pagination && pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3">
+                <p className="text-xs text-ink-500">Page {pagination.page} of {pagination.totalPages} · {pagination.total} total</p>
+                <div className="flex gap-1.5">
+                  <Button variant="secondary" disabled={!pagination.hasPrev} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={15} /> Prev</Button>
+                  <Button variant="secondary" disabled={!pagination.hasNext} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight size={15} /></Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Groups: own tab, professional CRUD + bulk member management ----------
+function GroupsTab() {
+  const { groups, loading, error, createGroup, updateGroup, deleteGroup, setMembers } = useGroups();
+  // Large limit -- member-management checklist needs the full contact list,
+  // not a paginated slice. Fine at current scale; would need a real search-
+  // as-you-type server query if the contact base grows much larger.
+  const { leads, loading: leadsLoading } = useLeads({ page: 1, limit: 500 });
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', description: '' });
+  const [creating, setCreating] = useState(false);
+
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', description: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [deletingGroup, setDeletingGroup] = useState<Group | null>(null);
+
+  const [managingGroup, setManagingGroup] = useState<Group | null>(null);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
+  const [memberSearch, setMemberSearch] = useState('');
+  const [savingMembers, setSavingMembers] = useState(false);
+
+  const openCreate = () => { setCreateForm({ name: '', description: '' }); setShowCreate(true); };
+
+  const submitCreate = async () => {
+    if (!createForm.name.trim()) return toast.error('Group name required');
+    setCreating(true);
+    try {
+      await createGroup({ name: createForm.name.trim(), description: createForm.description.trim() });
+      toast.success('Group created');
+      setShowCreate(false);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to create group');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openEdit = (g: Group) => { setEditingGroup(g); setEditForm({ name: g.name, description: g.description }); };
+
+  const submitEdit = async () => {
+    if (!editingGroup) return;
+    if (!editForm.name.trim()) return toast.error('Group name required');
+    setSavingEdit(true);
+    try {
+      await updateGroup(editingGroup.id, { name: editForm.name.trim(), description: editForm.description.trim() });
+      toast.success('Group updated');
+      setEditingGroup(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update group');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingGroup) return;
+    try {
+      await deleteGroup(deletingGroup.id);
+      toast.success('Group deleted');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete group');
+    }
+  };
+
+  const openManageMembers = (g: Group) => {
+    setManagingGroup(g);
+    setSelectedLeadIds(new Set(leads.filter((l) => l.group_id === g.id).map((l) => l.id)));
+    setMemberSearch('');
+  };
+
+  const toggleMember = (leadId: string) => {
+    setSelectedLeadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId); else next.add(leadId);
+      return next;
+    });
+  };
+
+  const filteredLeads = leads.filter((l) =>
+    !memberSearch.trim() || l.name.toLowerCase().includes(memberSearch.trim().toLowerCase()) ||
+    (l.whatsapp_number || l.phone || '').includes(memberSearch.trim()),
+  );
+
+  const selectAllFiltered = () => setSelectedLeadIds((prev) => {
+    const next = new Set(prev);
+    filteredLeads.forEach((l) => next.add(l.id));
+    return next;
+  });
+  const clearAllFiltered = () => setSelectedLeadIds((prev) => {
+    const next = new Set(prev);
+    filteredLeads.forEach((l) => next.delete(l.id));
+    return next;
+  });
+
+  const saveMembers = async () => {
+    if (!managingGroup) return;
+    setSavingMembers(true);
+    try {
+      await setMembers(managingGroup.id, Array.from(selectedLeadIds));
+      toast.success('Members updated');
+      setManagingGroup(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update members');
+    } finally {
+      setSavingMembers(false);
+    }
+  };
+
+  if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading groups…</div>;
+  if (error) return <div className="py-12 text-center text-sm text-red-600">{error}</div>;
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm text-ink-500">Groups are used to target campaigns and broadcasts at a whole audience, never at individually-picked contacts.</p>
+        <Button onClick={openCreate}><Plus size={16} /> New Group</Button>
+      </div>
+
+      {groups.length === 0 ? (
+        <EmptyState title="No groups yet" description="Create a group, then add members to it." action={<Button onClick={openCreate}><Plus size={16} /> Create group</Button>} />
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {groups.map((g) => (
+            <Card key={g.id} className="p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="font-semibold text-ink-900">{g.name}</p>
+                  {g.description && <p className="mt-0.5 text-xs text-ink-500">{g.description}</p>}
+                </div>
+                <Badge tone="gray">{g.memberCount} member{g.memberCount === 1 ? '' : 's'}</Badge>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => openManageMembers(g)}>Manage members</Button>
+                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => openEdit(g)}>Edit</Button>
+                <button
+                  className="ml-auto rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                  title="Delete"
+                  onClick={() => setDeletingGroup(g)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create */}
+      {showCreate && (
+        <Modal open onClose={() => setShowCreate(false)} title="New Group"
+          footer={<><Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button><Button onClick={submitCreate} disabled={creating}>Create</Button></>}>
+          <div className="space-y-4">
+            <Field label="Name"><Input value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} placeholder="e.g. Hot leads" autoFocus /></Field>
+            <Field label="Description (optional)"><Input value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit */}
+      {editingGroup && (
+        <Modal open onClose={() => setEditingGroup(null)} title="Edit Group"
+          footer={<><Button variant="secondary" onClick={() => setEditingGroup(null)}>Cancel</Button><Button onClick={submitEdit} disabled={savingEdit}>Save changes</Button></>}>
+          <div className="space-y-4">
+            <Field label="Name"><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} autoFocus /></Field>
+            <Field label="Description (optional)"><Input value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete -- double-verified: destructive + must type the group's exact name */}
+      <ConfirmDialog
+        open={!!deletingGroup}
+        onClose={() => setDeletingGroup(null)}
+        title="Delete group"
+        destructive
+        confirmLabel="Delete group"
+        requireTypedText={deletingGroup?.name}
+        onConfirm={confirmDelete}
+        message={
+          <p>
+            This permanently deletes <strong>{deletingGroup?.name}</strong>.
+            {deletingGroup && deletingGroup.memberCount > 0 && (
+              <> Its {deletingGroup.memberCount} member{deletingGroup.memberCount === 1 ? '' : 's'} will be unassigned (set to "No group") — they are not deleted.</>
+            )}
+          </p>
+        }
+      />
+
+      {/* Manage members -- bulk selective add/remove via checklist */}
+      {managingGroup && (
+        <Modal open onClose={() => setManagingGroup(null)} title={`Manage members — ${managingGroup.name}`} size="lg"
+          footer={<>
+            <p className="mr-auto self-center text-xs text-ink-500">{selectedLeadIds.size} selected</p>
+            <Button variant="secondary" onClick={() => setManagingGroup(null)}>Cancel</Button>
+            <Button onClick={saveMembers} disabled={savingMembers}>Save members</Button>
+          </>}>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="flex-1" />
+              <Button variant="secondary" className="whitespace-nowrap px-3 py-1.5 text-xs" onClick={selectAllFiltered}>Select all</Button>
+              <Button variant="secondary" className="whitespace-nowrap px-3 py-1.5 text-xs" onClick={clearAllFiltered}>Clear all</Button>
+            </div>
+            {leadsLoading ? (
+              <p className="py-8 text-center text-sm text-ink-400">Loading contacts…</p>
+            ) : filteredLeads.length === 0 ? (
+              <p className="py-8 text-center text-sm text-ink-400">No contacts match.</p>
+            ) : (
+              <div className="max-h-80 overflow-y-auto rounded-xl border border-ink-100">
+                {filteredLeads.map((l) => (
+                  <label key={l.id} className="flex cursor-pointer items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0 hover:bg-ink-50">
+                    <input type="checkbox" checked={selectedLeadIds.has(l.id)} onChange={() => toggleMember(l.id)} className="h-4 w-4 rounded border-ink-300 text-brand-600" />
+                    <Avatar name={l.name} color="#22c55e" size={26} />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                      <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                    </div>
+                    {l.group_id && l.group_id !== managingGroup.id && (
+                      <span className="whitespace-nowrap text-[10px] text-amber-600">in another group</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 function TemplatesTab() {
   const { templates, loading, error, refetch, deleteTemplate, duplicateTemplate, activateTemplate, pauseTemplate, archiveTemplate } = useWhatsAppTemplates();
   const [showBuilder, setShowBuilder] = useState(false);
@@ -360,55 +670,198 @@ function ApprovalTab() {
   );
 }
 
-// ---- Campaigns / Broadcasts ------------------------------------------------
+// ---- Campaigns / Broadcasts (REAL: backed by /whatsapp/campaigns and
+// /whatsapp/broadcasts -- two separate real backend resources with an
+// identical lifecycle. See types/whatsappCampaign.ts for source notes.) -----
+const CAMPAIGN_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'BOOKING', 'FOLLOW_UP', 'PAYMENT', 'REMINDER', 'NURTURE', 'BROADCAST', 'CUSTOM'];
+const BROADCAST_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'ANNOUNCEMENT', 'OFFER', 'REMINDER', 'FESTIVAL', 'PRODUCT_UPDATE', 'CUSTOM'];
+
 function CampaignsTab({ broadcast }: { broadcast: boolean }) {
-  const { db, tenantId } = useDb();
-  const { createCampaign, transitionCampaign, sendCampaign } = useStore();
+  const resource: 'campaigns' | 'broadcasts' = broadcast ? 'broadcasts' : 'campaigns';
+  const {
+    campaigns, loading, error, refetch,
+    createCampaign, updateCampaign, deleteCampaign,
+    approveCampaign, scheduleCampaign, startCampaign,
+    completeCampaign, cancelCampaign, failCampaign, previewAudience,
+    applyRealtimeUpdate,
+  } = useWhatsAppCampaigns(resource);
+  const { templates } = useWhatsAppTemplates();
+  const usableTemplates = templates.filter((t) => t.approvalStatus === USABLE_APPROVAL_STATUS);
+  const { groups } = useGroups();
+
+  // Live updates while a campaign/broadcast is actually sending -- fires on
+  // every per-recipient send AND the final auto COMPLETED/FAILED
+  // transition (see campaignSender.service.js). Merges the pushed
+  // campaign/broadcast into local state directly rather than refetching
+  // the whole list, so numbers tick up silently with no loading flash.
+  useWhatsAppRealtime(
+    broadcast
+      ? { onBroadcast: (payload) => applyRealtimeUpdate(payload.broadcast) }
+      : { onCampaign: (payload) => applyRealtimeUpdate(payload.campaign) },
+  );
+
   const [show, setShow] = useState(false);
-  const items = db.campaigns.filter((c) => c.tenant_id === tenantId && (broadcast ? c.is_broadcast : !c.is_broadcast));
-  const templates = db.templates.filter((t) => t.tenant_id === tenantId && ['Active', 'Provider Approved'].includes(t.status));
-  const [form, setForm] = useState({ name: '', template_id: '', audience: 'Hot leads', count: 250 });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
+  const [form, setForm] = useState({
+    name: '', type: typeOptions[0], templateId: '', groupId: '',
+  });
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
-  const audiences = ['Hot leads', 'Webinar attendees', 'Ghosted 14d+', 'Booked but not paid', 'Proposal sent', 'Payment pending', 'No-show leads', 'All qualified'];
+  // Mirrors LOCKED_STATUSES / READ_ONLY_STATUSES in campaigns.constants.js /
+  // broadcasts.constants.js exactly -- the backend rejects update/delete
+  // outside these, so the UI only offers the buttons when they'd succeed.
+  const EDIT_LOCKED = ['SCHEDULED', 'RUNNING', 'COMPLETED', 'CANCELLED'];
+  const DELETE_LOCKED = ['COMPLETED', 'CANCELLED'];
 
-  const create = () => {
-    if (!form.name.trim()) return toast.error('Name required');
-    createCampaign({ name: form.name, template_id: form.template_id || templates[0]?.id, audience_filter: form.audience, audience_count: Number(form.count), is_broadcast: broadcast });
-    setShow(false);
-    setForm({ name: '', template_id: '', audience: 'Hot leads', count: 250 });
+  // Audience is always a Group -- not raw per-contact filters -- per product
+  // decision: campaigns target a named group, never individuals directly.
+  const buildAudience = () => ({
+    filters: { groupId: form.groupId },
+  });
+
+  const runPreview = async () => {
+    setPreviewing(true);
+    try {
+      const count = await previewAudience(buildAudience());
+      setPreviewCount(count);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to preview audience');
+    } finally {
+      setPreviewing(false);
+    }
   };
+
+  const resetForm = () => {
+    setForm({ name: '', type: typeOptions[0], templateId: '', groupId: '' });
+    setPreviewCount(null);
+    setEditingId(null);
+  };
+
+  const startEdit = (c: WhatsAppCampaignReal) => {
+    setEditingId(c.id);
+    setForm({
+      name: c.name,
+      type: c.type,
+      templateId: c.templateId || '',
+      groupId: c.audience?.filters?.groupId || '',
+    });
+    setPreviewCount(null);
+    setShow(true);
+  };
+
+  const create = async () => {
+    if (!form.name.trim()) return toast.error('Name required');
+    if (!form.templateId) return toast.error('An approved template is required');
+    if (!form.groupId) return toast.error('A target group is required — campaigns send to a group, not individual contacts');
+    try {
+      if (editingId) {
+        await updateCampaign(editingId, {
+          name: form.name,
+          type: form.type as CreateCampaignInput['type'],
+          templateId: form.templateId,
+          audience: buildAudience(),
+        });
+        toast.success(`${broadcast ? 'Broadcast' : 'Campaign'} updated`);
+      } else {
+        await createCampaign({
+          name: form.name,
+          type: form.type as CreateCampaignInput['type'],
+          templateId: form.templateId,
+          audience: buildAudience(),
+        });
+        toast.success(`${broadcast ? 'Broadcast' : 'Campaign'} created`);
+      }
+      setShow(false);
+      resetForm();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : `Failed to ${editingId ? 'update' : 'create'}`);
+    }
+  };
+
+  const remove = async (c: WhatsAppCampaignReal) => {
+    if (!window.confirm(`Delete "${c.name}"? This cannot be undone.`)) return;
+    setBusyId(c.id);
+    try {
+      await deleteCampaign(c.id);
+      toast.success('Deleted');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const runAction = async (id: string, action: () => Promise<unknown>, label: string) => {
+    setBusyId(id);
+    try {
+      await action();
+      toast.success(label);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : `Failed to ${label.toLowerCase()}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading {resource}…</div>;
+  if (error) return <div className="py-12 text-center text-sm text-red-600">{error} <button className="underline" onClick={refetch}>Retry</button></div>;
 
   return (
     <div>
-      <div className="mb-4 flex justify-end"><Button onClick={() => setShow(true)}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button></div>
-      {items.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => setShow(true)}><Plus size={16} /> Create</Button>} /> : (
+      <div className="mb-4 flex justify-end"><Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button></div>
+      {campaigns.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> Create</Button>} /> : (
         <div className="grid gap-3 lg:grid-cols-2">
-          {items.map((c) => {
-            const t = db.templates.find((x) => x.id === c.template_id);
+          {campaigns.map((c) => {
             const m = c.metrics;
+            const isBusy = busyId === c.id;
             return (
               <Card key={c.id} className="p-4">
                 <div className="flex items-start justify-between">
-                  <div><p className="font-semibold text-ink-900">{c.name}</p><p className="text-xs text-ink-500">{c.audience_filter} · {c.audience_count} recipients · {t?.template_name ?? 'no template'}</p></div>
+                  <div><p className="font-semibold text-ink-900">{c.name}</p><p className="text-xs text-ink-500">{c.type} · {c.recipientCount} recipients · {c.templateName || 'no template'}</p></div>
                   <StatusBadge status={c.status} />
                 </div>
                 <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                  {[['Sent', m.sent], ['Delivered', m.delivered], ['Read', m.read], ['Replied', m.replied]].map(([k, v]) => (
+                  {[['Sent', m.sentCount], ['Delivered', m.deliveredCount], ['Read', m.readCount], ['Replied', m.repliedCount]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
                   ))}
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  {[['Bookings', m.bookings], ['Payments', m.payments]].map(([k, v]) => (
+                  {[['Bookings', m.bookingCount], ['Payments', m.paymentCount]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
                   ))}
-                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatCurrency(m.revenue)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
+                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatCurrency(m.revenueGenerated)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
                 </div>
+                {c.status === 'RUNNING' && (
+                  <p className="mt-2 text-[11px] text-ink-400">Sending now — counts update live as Meta reports delivery, read, and reply status.</p>
+                )}
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {c.status === 'Draft' && <Button className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Pending Approval')}>Submit for approval</Button>}
-                  {c.status === 'Pending Approval' && <Button className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Approved')}>Approve</Button>}
-                  {(c.status === 'Approved' || c.status === 'Scheduled') && <Button className="px-3 py-1 text-xs" onClick={() => sendCampaign(c.id)}><Send size={12} /> Send now</Button>}
-                  {c.status === 'Approved' && <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Scheduled')}>Schedule</Button>}
-                  {(c.status === 'Sending' || c.status === 'Scheduled') && <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Paused')}>Pause</Button>}
+                  {c.status === 'DRAFT' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
+                  {c.status === 'DRAFT' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'APPROVED' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'APPROVED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => {
+                    const dt = window.prompt('Schedule for (ISO date/time, e.g. 2026-08-05T10:00:00)');
+                    if (dt) runAction(c.id, () => scheduleCampaign(c.id, new Date(dt).toISOString()), 'Scheduled');
+                  }}>Schedule</Button>}
+                  {c.status === 'SCHEDULED' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'SCHEDULED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'RUNNING' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => completeCampaign(c.id), 'Completed')}>Mark completed</Button>}
+                  {c.status === 'RUNNING' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => failCampaign(c.id, 'Manually marked as failed'), 'Marked failed')}>Mark failed</Button>}
+                  {c.status === 'RUNNING' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'FAILED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {!EDIT_LOCKED.includes(c.status) && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEdit(c)}>Edit</Button>}
+                  {!DELETE_LOCKED.includes(c.status) && (
+                    <button
+                      disabled={isBusy}
+                      className="ml-auto rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                      title="Delete"
+                      onClick={() => remove(c)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               </Card>
             );
@@ -416,13 +869,27 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
         </div>
       )}
       {show && (
-        <Modal open onClose={() => setShow(false)} title={`New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
-          footer={<><Button variant="secondary" onClick={() => setShow(false)}>Cancel</Button><Button onClick={create}>Create</Button></>}>
+        <Modal open onClose={() => { setShow(false); resetForm(); }} title={editingId ? `Edit ${broadcast ? 'Broadcast' : 'Campaign'}` : `New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
+          footer={<><Button variant="secondary" onClick={() => { setShow(false); resetForm(); }}>Cancel</Button><Button onClick={create}>{editingId ? 'Save changes' : 'Create'}</Button></>}>
           <div className="space-y-4">
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-            <Field label="Approved template"><Select value={form.template_id} onChange={(e) => setForm({ ...form, template_id: e.target.value })}>{templates.map((t) => <option key={t.id} value={t.id}>{t.template_name}</option>)}</Select></Field>
-            <Field label="Audience segment"><Select value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })}>{audiences.map((a) => <option key={a}>{a}</option>)}</Select></Field>
-            <Field label="Estimated recipients" hint="Opted-out contacts are automatically excluded"><Input type="number" value={form.count} onChange={(e) => setForm({ ...form, count: Number(e.target.value) })} /></Field>
+            <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+            <Field label="Approved template" hint={usableTemplates.length === 0 ? 'No provider-approved templates yet — approve one first.' : undefined}>
+              <Select value={form.templateId} onChange={(e) => setForm({ ...form, templateId: e.target.value })}>
+                <option value="">Select a template…</option>
+                {usableTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Target group" hint={groups.length === 0 ? 'No groups yet — create one in Contacts / Leads first.' : 'Campaigns send to a whole group, not individually-picked contacts.'}>
+              <Select value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
+                <option value="">Select a group…</option>
+                {groups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberCount})</option>)}
+              </Select>
+            </Field>
+            <div className="flex items-center gap-3">
+              <Button variant="secondary" className="px-3 py-1 text-xs" onClick={runPreview} disabled={previewing || !form.groupId}>{previewing ? 'Checking…' : 'Preview audience'}</Button>
+              {previewCount !== null && <p className="text-xs text-ink-600">{previewCount} matching contact{previewCount === 1 ? '' : 's'} (opted-out contacts already excluded)</p>}
+            </div>
           </div>
         </Modal>
       )}
@@ -957,7 +1424,7 @@ function AnalyticsTab() {
 
 // ---- Settings --------------------------------------------------------------
 function SettingsTab() {
-  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect } = useWhatsAppSettings();
+  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect, syncTemplates } = useWhatsAppSettings();
 
   const [provider, setProvider] = useState<WhatsAppProviderReal>(NATIVE_PROVIDER);
   const [panelMode, setPanelMode] = useState<PanelMode>('NATIVE');
@@ -968,6 +1435,7 @@ function SettingsTab() {
   const [verifyToken, setVerifyToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [attemptedSave, setAttemptedSave] = useState(false);
 
@@ -1075,6 +1543,30 @@ function SettingsTab() {
       await updateSync({ [key]: value });
     } catch (err) {
       toast.error('Could not update sync setting', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleSyncTemplates = async () => {
+    setSyncingTemplates(true);
+    try {
+      const { result } = await syncTemplates();
+      if (!result) {
+        toast.error('Sync failed', 'No result returned from server.');
+      } else if (result.errors.length > 0) {
+        toast.warning(
+          `Synced with ${result.errors.length} error(s)`,
+          `${result.created} created, ${result.updated} updated. First error: ${result.errors[0].message}`,
+        );
+      } else {
+        toast.success(
+          'Templates synced from Meta',
+          `${result.created} created, ${result.updated} updated, ${result.total} total.`,
+        );
+      }
+    } catch (err) {
+      toast.error('Sync failed', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSyncingTemplates(false);
     }
   };
 
@@ -1202,9 +1694,17 @@ function SettingsTab() {
         ] as const).map(([k, label]) => (
           <div key={k} className="flex items-center justify-between">
             <span className="text-sm text-ink-700">{label}</span>
-            <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
+            <div className="flex items-center gap-2">
+              {k === 'autoSyncTemplates' && (
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => void handleSyncTemplates()} disabled={syncingTemplates}>
+                  <RefreshCw size={12} /> {syncingTemplates ? 'Syncing…' : 'Sync now'}
+                </Button>
+              )}
+              <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
+            </div>
           </div>
         ))}
+        <p className="text-[11px] text-ink-400">The toggle only controls whether templates auto-sync in the background later — click "Sync now" to pull your real current templates from Meta immediately, including any that were deleted here but still exist on Meta's side.</p>
       </div>
 
       <div className="mt-4 flex items-center gap-2">
