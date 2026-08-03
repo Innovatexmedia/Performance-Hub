@@ -1,6 +1,7 @@
 // Shared utilities (adjust paths if your shared utils live elsewhere).
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { hasRole, ROLES } from '../../../auth/constants/roles.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 
 // Reused activity system from the Lead module (extended with logEntity).
 import { activityService } from '../../../leads/activities/activity.service.js';
@@ -8,6 +9,7 @@ import { ACTIVITY_TYPE } from '../../../leads/activities/activity.model.js';
 
 import { templatesRepository } from './templates.repository.js';
 import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
+import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
 import {
   TEMPLATE_STATUS,
   TEMPLATE_CATEGORY_VALUES,
@@ -319,6 +321,36 @@ export const templatesService = {
     await logTemplate(ctx, template, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_CREATED,
       `Template "${template.name}" created`);
 
+    // Auto-collapse internal review + approval for anyone who can
+    // self-approve anyway -- Tenant Admin/Owner/Super Admin by rank, OR
+    // a Sales User individually granted APPROVE_TEMPLATES. There's no
+    // point making someone review-then-approve their own submission when
+    // they already have full approval rights; that's pure ceremony.
+    //
+    // What this does NOT do: auto-submit to Meta. That's the one step
+    // with a real external consequence (uses live API quota, isn't
+    // something to silently undo), so it always requires a deliberate,
+    // visible "Submit to provider" click -- for Owner, Admin, and anyone
+    // else alike. No one gets a template silently shipped to Meta the
+    // instant they hit Create.
+    const canSelfApprove = hasRole(ctx.role, ROLES.TENANT_ADMIN) || (ctx.permissions || []).includes(PERMISSIONS.APPROVE_TEMPLATES);
+    if (canSelfApprove) {
+      try {
+        await templateApprovalService.submitForReview(ctx, template._id, {});
+        const approved = await templateApprovalService.approveInternally(ctx, template._id, {});
+        return approved;
+      } catch (err) {
+        // The template genuinely exists either way -- if the auto-chain
+        // stalls partway, surface that clearly rather than silently
+        // leaving the caller thinking a plain DRAFT was created when
+        // it's actually further along.
+        const current = await templatesRepository.findById(ctx.tenantId, template._id);
+        const dto = toTemplateDTO(current);
+        dto.autoSubmitError = err.message;
+        return dto;
+      }
+    }
+
     return toTemplateDTO(template);
   },
 
@@ -356,6 +388,23 @@ export const templatesService = {
     if (!existing) throw new AppError(404, 'Template not found');
     if (existing.status === TEMPLATE_STATUS.ARCHIVED) {
       throw new AppError(409, 'Archived templates are read-only');
+    }
+
+    // REAL EDIT LOCK: a template can only be edited while it's still an
+    // untouched DRAFT. REJECTED is a genuine terminal state -- per product
+    // decision, a rejected template is never patched in place, only
+    // duplicated into a fresh DRAFT. Everything past DRAFT (in review,
+    // internally approved, submitted to Meta, rejected) is locked, since
+    // editing it here would silently desync it from whatever Meta
+    // actually has on file, or resurrect a dead template as if nothing happened.
+    const EDITABLE_APPROVAL_STATUSES = [APPROVAL_STATUS.DRAFT];
+    if (!EDITABLE_APPROVAL_STATUSES.includes(existing.approvalStatus)) {
+      throw new AppError(
+        409,
+        existing.approvalStatus === APPROVAL_STATUS.REJECTED
+          ? 'This template was rejected and is now read-only. Duplicate it to create a fresh, editable copy.'
+          : `This template can't be edited once it's ${existing.approvalStatus === APPROVAL_STATUS.SUBMITTED_FOR_INTERNAL_REVIEW || existing.approvalStatus === APPROVAL_STATUS.INTERNALLY_APPROVED ? 'in review' : 'been submitted to the provider'} (current status: ${existing.approvalStatus}). Duplicate it to create an editable copy instead.`,
+      );
     }
 
     // approvalStatus is NOT settable through this endpoint, full stop.
@@ -459,13 +508,15 @@ export const templatesService = {
       throw new AppError(409, 'Archived templates are read-only and cannot be activated');
     }
 
-    // Approval gate: a template created by a non-owner must go through real
-    // approval (approvalStatus reaching INTERNALLY_APPROVED or further)
-    // before it can be activated -- the tenant owner can bypass this and
-    // activate directly, matching standard "owner override" authority.
-    // Without this, any authenticated user could activate any DRAFT
-    // template just by calling this endpoint directly, regardless of
-    // whether the tenant owner had reviewed it at all.
+    // Approval gate: a template must go through real approval
+    // (approvalStatus reaching INTERNALLY_APPROVED or further) before it
+    // can be activated. The tenant owner bypasses this ONLY for templates
+    // they personally created -- NOT for anyone else's, even as owner.
+    // Without the createdBy check, an owner could activate a Sales User's
+    // untouched DRAFT template straight from this tab, skipping that
+    // person's own "submit for review" step entirely -- which defeats the
+    // whole point of routing other people's templates through the
+    // Template Approval tab in the first place.
     //
     // NOTE: this list uses ONLY the canonical APPROVAL_STATUS values from
     // templateApproval.constants.js. It used to also check
@@ -473,17 +524,19 @@ export const templatesService = {
     // (ACTIVE is a TEMPLATE_STATUS, not an approval status) -- a leftover
     // from the old, separate templates.constants.js APPROVAL_STATUS this
     // module no longer defines.
-    const isOwner = hasRole(ctx.role, ROLES.TENANT_OWNER);
+    const isOwnerAndCreator = hasRole(ctx.role, ROLES.TENANT_OWNER) && String(existing.createdBy) === String(ctx.userId);
     const APPROVED_ENOUGH = [
       APPROVAL_STATUS.INTERNALLY_APPROVED,
       APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
       APPROVAL_STATUS.PROVIDER_APPROVED,
       APPROVAL_STATUS.PAUSED, // reactivating a previously-approved template
     ];
-    if (!isOwner && !APPROVED_ENOUGH.includes(existing.approvalStatus)) {
+    if (!isOwnerAndCreator && !APPROVED_ENOUGH.includes(existing.approvalStatus)) {
       throw new AppError(
         403,
-        'This template has not been approved by the tenant owner yet. Submit it for review first.',
+        existing.approvalStatus === APPROVAL_STATUS.DRAFT
+          ? 'This template hasn\'t been submitted for review yet -- ask its creator to submit it first.'
+          : 'This template has not been approved by the tenant owner yet. Submit it for review first.',
       );
     }
 

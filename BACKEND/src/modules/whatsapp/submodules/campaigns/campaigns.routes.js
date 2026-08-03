@@ -7,8 +7,9 @@
  */
 import { Router } from 'express';
 import { authenticate }   from '../../../../shared/middlewares/auth.middleware.js';
-import { requireRole }    from '../../../../shared/middlewares/role.middleware.js';
-import { ROLE_MIN }       from './campaigns.constants.js';
+import { requireRole, requireRoleOrPermission } from '../../../../shared/middlewares/role.middleware.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
+import { ROLE_MIN } from './campaigns.constants.js';
 import { campaignsController } from './campaigns.controller.js';
 import {
   validateCreateCampaign,
@@ -70,7 +71,7 @@ router.delete('/:id',
 // ── Lifecycle transitions ──────────────────────────────────────────────────────
 router.post('/:id/approve',
   authenticate,
-  requireRole(ROLE_MIN.APPROVE),
+  requireRoleOrPermission(ROLE_MIN.APPROVE, PERMISSIONS.APPROVE_CAMPAIGNS),
   validateWithComment,
   campaignsController.approve,
 );
@@ -84,7 +85,7 @@ router.post('/:id/schedule',
 
 router.post('/:id/start',
   authenticate,
-  requireRole(ROLE_MIN.START),
+  requireRoleOrPermission(ROLE_MIN.START, PERMISSIONS.APPROVE_CAMPAIGNS),
   validateWithComment,
   campaignsController.start,
 );

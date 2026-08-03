@@ -24,7 +24,8 @@
  */
 import { Router } from 'express';
 import { authenticate } from '../../../../shared/middlewares/auth.middleware.js';
-import { requireRole } from '../../../../shared/middlewares/role.middleware.js';
+import { requireRole, requireRoleOrPermission } from '../../../../shared/middlewares/role.middleware.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 import { ROLE_MIN } from './templateApproval.constants.js';
 import { templateApprovalController } from './templateApproval.controller.js';
 import {
@@ -56,7 +57,7 @@ templateApprovalRouter.post(
 templateApprovalRouter.post(
   '/:id/approve',
   authenticate,
-  requireRole(ROLE_MIN.APPROVE),
+  requireRoleOrPermission(ROLE_MIN.APPROVE, PERMISSIONS.APPROVE_TEMPLATES),
   validateWithComment,
   templateApprovalController.approve,
 );
@@ -72,7 +73,7 @@ templateApprovalRouter.post(
 templateApprovalRouter.post(
   '/:id/submit-provider',
   authenticate,
-  requireRole(ROLE_MIN.SUBMIT_TO_PROVIDER),
+  requireRoleOrPermission(ROLE_MIN.SUBMIT_TO_PROVIDER, PERMISSIONS.APPROVE_TEMPLATES),
   validateIdParam,
   templateApprovalController.submitToProvider,
 );

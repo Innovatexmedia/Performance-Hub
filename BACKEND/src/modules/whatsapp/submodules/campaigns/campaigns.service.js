@@ -9,6 +9,8 @@
  * logging, and all lifecycle methods.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { hasRole, ROLES } from '../../../auth/constants/roles.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
 import { Lead } from '../../../leads/lead/lead.model.js';
@@ -202,6 +204,33 @@ export const campaignsService = {
     await logActivity(ctx, campaign, ACTIVITY_TYPE.WHATSAPP_CAMPAIGN_CREATED,
       `Campaign "${campaign.name}" created`,
       { type: campaign.type, templateId: String(templateId) });
+
+    // Owner bypass: per product decision, a Tenant Owner creating a
+    // campaign should never see a separate "Approve" step -- just
+    // Start/Schedule. approveCampaign() has no self-approval guard (unlike
+    // templates), so this is safe to call with the same ctx unconditionally
+    // for Owner/Super Admin. Non-owners (even with a custom
+    // APPROVE_CAMPAIGNS grant elsewhere) still land in DRAFT here --
+    // that permission is for approving OTHER people's campaigns from the
+    // Campaigns tab, not for silently auto-approving their own creations.
+    // Auto-approve on create for anyone who can self-approve anyway --
+    // Tenant Admin/Owner/Super Admin by rank, OR a Sales User individually
+    // granted APPROVE_CAMPAIGNS. Unlike templates, approving a campaign
+    // never itself triggers a real send -- only startCampaign() does that,
+    // and that always stays a separate, deliberate click for everyone
+    // regardless of role -- so there's no equivalent "stop before the
+    // real external action" concern here; auto-approving is safe as-is.
+    const canSelfApprove = hasRole(ctx.role, ROLES.TENANT_ADMIN) || (ctx.permissions || []).includes(PERMISSIONS.APPROVE_CAMPAIGNS);
+    if (canSelfApprove) {
+      try {
+        return await this.approveCampaign(ctx, campaign._id, { comment: 'Auto-approved: created by a user with approval rights' });
+      } catch (err) {
+        const current = await campaignsRepository.findById(ctx.tenantId, campaign._id);
+        const dto = toCampaignDTO(current);
+        dto.autoApproveError = err.message;
+        return dto;
+      }
+    }
 
     return toCampaignDTO(campaign);
   },

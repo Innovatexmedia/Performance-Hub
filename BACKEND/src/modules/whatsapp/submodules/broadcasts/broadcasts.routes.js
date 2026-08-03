@@ -6,7 +6,8 @@
  */
 import { Router } from 'express';
 import { authenticate } from '../../../../shared/middlewares/auth.middleware.js';
-import { requireRole }  from '../../../../shared/middlewares/role.middleware.js';
+import { requireRole, requireRoleOrPermission } from '../../../../shared/middlewares/role.middleware.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 import { ROLE_MIN }     from './broadcasts.constants.js';
 import { broadcastsController } from './broadcasts.controller.js';
 import {
@@ -58,7 +59,7 @@ router.delete('/:id',
 
 // ── Lifecycle ──────────────────────────────────────────────────────────────────
 router.post('/:id/approve',
-  authenticate, requireRole(ROLE_MIN.APPROVE),
+  authenticate, requireRoleOrPermission(ROLE_MIN.APPROVE, PERMISSIONS.APPROVE_CAMPAIGNS),
   validateWithComment, broadcastsController.approve,
 );
 
@@ -68,7 +69,7 @@ router.post('/:id/schedule',
 );
 
 router.post('/:id/start',
-  authenticate, requireRole(ROLE_MIN.START),
+  authenticate, requireRoleOrPermission(ROLE_MIN.START, PERMISSIONS.APPROVE_CAMPAIGNS),
   validateWithComment, broadcastsController.start,
 );
 

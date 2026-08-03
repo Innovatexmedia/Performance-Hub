@@ -4,10 +4,13 @@ import {
   ChevronLeft, ChevronRight, Trash2, Unplug,
 } from 'lucide-react';
 import { useStore } from '@/store/store';
+import { useAuthStore } from '@/store/authStore';
+import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
+import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
 import { useDb, useSettings, userName } from '@/store/hooks';
 import {
   PageHeader, Card, CardHeader, Tabs, Table, Th, Td, Tr, Badge, StatusBadge, Button,
-  Avatar, EmptyState, Toggle, Field, Input, Select, Modal,
+  Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
 } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
@@ -62,6 +65,55 @@ const PROVIDERS: WhatsAppProvider[] = ['Native Meta Cloud API', 'WATI', 'Interak
 
 export function WhatsAppPanel() {
   const [tab, setTab] = useState('inbox');
+  const currentUser = useAuthStore((s) => s.user);
+  const canApproveTemplates = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
+
+  // Lightweight instance just for the badge/toast logic below -- each tab
+  // component already fetches its own copy when open, this is a small
+  // extra read so notifications work even while looking at a different tab.
+  const { templates, refetch: refetchTemplatesForBadge } = useWhatsAppTemplates();
+
+  // Red = something needs THIS user's action right now:
+  //  - an approver sees how many submissions are waiting on them
+  //  - a regular creator sees how many of their OWN templates got sent
+  //    back (rejected, or changes requested) and need fixing/resubmitting
+  const approvalBadgeCount = canApproveTemplates
+    ? templates.filter((t) => t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW').length
+    : templates.filter((t) => t.createdBy === currentUser?.id && (
+        t.approvalStatus === 'REJECTED'
+        || (t.approvalStatus === 'DRAFT' && t.transitionHistory?.some((h) => h.action === 'REQUEST_CHANGES'))
+      ) && !isTemplateStatusSeen(currentUser?.id, t.id, t.approvalStatus)).length;
+
+  // Real-time toast, independent of the badge -- fires the instant the
+  // socket event lands, regardless of which tab is open. Uses the LAST
+  // transitionHistory entry's `action` (not just the current status) to
+  // know exactly what just happened, since e.g. REJECTED and "sent back
+  // to DRAFT via request changes" need different messages but can share
+  // similar resulting statuses.
+  useWhatsAppRealtime({
+    onTemplate: (payload) => {
+      refetchTemplatesForBadge();
+      const t = payload.template;
+      const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
+      const isMine = t.createdBy === currentUser?.id;
+
+      if (isMine && lastAction === 'REQUEST_CHANGES') {
+        toast.error(`Changes requested on "${t.name}"`, 'Open Template Approval to see what\'s needed and resubmit.');
+      } else if (isMine && lastAction === 'REJECT') {
+        toast.error(`"${t.name}" was rejected`, 'Open Template Approval to see why.');
+      } else if (isMine && (lastAction === 'APPROVE' || lastAction === 'PROVIDER_APPROVED' || t.approvalStatus === 'PROVIDER_APPROVED')) {
+        toast.success(`"${t.name}" was approved!`, t.approvalStatus === 'PROVIDER_APPROVED' ? 'Approved by Meta — ready to activate.' : 'Approved internally.');
+      } else if (canApproveTemplates && !isMine && lastAction === 'SUBMIT_FOR_REVIEW') {
+        toast.info(`New template awaiting your approval`, `"${t.name}" was just submitted for internal review.`);
+      }
+    },
+  });
+
+  const tabsWithBadges = TABS.map((t) =>
+    t.id === 'approval' && approvalBadgeCount > 0
+      ? { ...t, count: approvalBadgeCount, tone: 'red' as const }
+      : t,
+  );
 
   return (
     <div>
@@ -70,7 +122,7 @@ export function WhatsAppPanel() {
         description="Native InnovateX panel + multi-provider simulation — inbox, templates, campaigns & analytics."
         breadcrumb={['Revenue', 'WhatsApp Panel']}
       />
-      <div className="mb-4"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
+      <div className="mb-4"><Tabs tabs={tabsWithBadges} active={tab} onChange={setTab} /></div>
 
       {tab === 'inbox' && <Inbox />}
       {tab === 'contacts' && <ContactsTab />}
@@ -133,6 +185,55 @@ function ConfirmDialog({
           </div>
         )}
       </div>
+    </Modal>
+  );
+}
+
+// ---- PromptDialog: replaces window.prompt with real app UI -----------------
+// For a required free-text reason/comment (e.g. "why are changes needed").
+// requireNonEmpty defaults to true since every current use of this needs a
+// real comment before the action can go through.
+function PromptDialog({
+  open, title, label, placeholder, confirmLabel = 'Submit', destructive = false,
+  requireNonEmpty = true, onConfirm, onClose,
+}: {
+  open: boolean;
+  title: string;
+  label: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  destructive?: boolean;
+  requireNonEmpty?: boolean;
+  onConfirm: (value: string) => void;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState('');
+  useEffect(() => { if (open) setValue(''); }, [open]);
+  if (!open) return null;
+  const locked = requireNonEmpty && !value.trim();
+
+  return (
+    <Modal open onClose={onClose} title={title} size="sm" footer={
+      <>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button
+          className={destructive ? 'bg-red-600 hover:bg-red-700' : ''}
+          disabled={locked}
+          onClick={() => { onConfirm(value.trim()); onClose(); }}
+        >
+          {confirmLabel}
+        </Button>
+      </>
+    }>
+      <Field label={label}>
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={placeholder}
+          autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter' && !locked) { onConfirm(value.trim()); onClose(); } }}
+        />
+      </Field>
     </Modal>
   );
 }
@@ -442,9 +543,27 @@ function GroupsTab() {
 }
 function TemplatesTab() {
   const { templates, loading, error, refetch, deleteTemplate, duplicateTemplate, activateTemplate, pauseTemplate, archiveTemplate } = useWhatsAppTemplates();
+  const { submitForReview, submitToProvider } = useTemplateApproval(refetch);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editTpl, setEditTpl] = useState<WhatsAppTemplateReal | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const currentUser = useAuthStore((s) => s.user);
+
+  // Mirrors templates.service.js's activateTemplate guard exactly: the
+  // owner can only bypass real approval for templates they PERSONALLY
+  // created -- for anyone else's template (even as owner), Activate only
+  // shows once it's actually been submitted/approved, so a Sales User's
+  // untouched draft can't be activated straight from this tab, skipping
+  // their own "submit for review" step.
+  const canActivateDirectly = (t: WhatsAppTemplateReal) => {
+    const APPROVED_ENOUGH = ['INTERNALLY_APPROVED', 'SUBMITTED_TO_PROVIDER', 'PROVIDER_APPROVED', 'PAUSED'];
+    if (APPROVED_ENOUGH.includes(t.approvalStatus)) return true;
+    return atLeast(currentUser?.role, 'tenant_owner') && t.createdBy === currentUser?.id;
+  };
+
+  // Mirrors requireRoleOrPermission(ROLE_MIN.SUBMIT_TO_PROVIDER, PERMISSIONS.APPROVE_TEMPLATES)
+  // on the real templateApproval route.
+  const canSubmitToProvider = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
   const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
     setBusyId(id);
@@ -466,11 +585,16 @@ function TemplatesTab() {
   if (loading && templates.length === 0) return <p className="p-8 text-center text-sm text-ink-400">Loading templates…</p>;
   if (error) return <Card className="p-4 text-sm text-red-600">{error}</Card>;
 
+  // Same rule as the Template Approval tab: an untouched DRAFT (never
+  // submitted) is only relevant to its own creator -- everyone else,
+  // owner included, sees it once it's actually been submitted.
+  const visibleTemplates = templates.filter((t) => t.approvalStatus !== 'DRAFT' || t.createdBy === currentUser?.id);
+
   return (
     <div>
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {templates.map((t) => (
-          <Card key={t.id} className="flex flex-col p-4">
+        {visibleTemplates.map((t) => (
+          <Card key={t.id} className={cn('flex flex-col p-4', t.approvalStatus === 'REJECTED' && 'opacity-70')}>
             <div className="flex items-start justify-between">
               <div>
                 <p className="font-semibold text-ink-900">{t.name}</p>
@@ -479,17 +603,39 @@ function TemplatesTab() {
               <StatusBadge status={t.status} />
             </div>
             <p className="mt-3 line-clamp-3 flex-1 rounded-lg bg-ink-50 p-2.5 text-sm text-ink-600">{t.body}</p>
+            {t.approvalStatus === 'REJECTED' && (
+              <p className="mt-2 text-xs font-medium text-red-600">Rejected — read-only. Duplicate to start a fresh, editable copy.</p>
+            )}
             {t.variables.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{t.variables.map((v) => <span key={v} className="font-mono text-[11px] text-brand-600">{`{{${v}}}`}</span>)}</div>}
             <div className="mt-3 flex flex-wrap gap-1.5">
-              <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
+              {t.approvalStatus === 'DRAFT' && (
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
+              )}
               <Button
                 variant="ghost" className="px-2.5 py-1 text-xs" disabled={busyId === t.id}
                 onClick={() => void runAction(t.id, () => duplicateTemplate(t.id), 'Template duplicated', 'Could not duplicate template')}
               ><Copy size={12} /> Duplicate</Button>
-              {(t.status === 'DRAFT' || t.status === 'PAUSED') && (
+              {t.approvalStatus === 'DRAFT' && t.createdBy === currentUser?.id && !canActivateDirectly(t) && (
+                <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitForReview(t.id), 'Submitted for internal review', 'Could not submit for review')}>
+                  <Send size={12} /> Submit for Internal Review
+                </Button>
+              )}
+              {(t.status === 'DRAFT' || t.status === 'PAUSED') && canActivateDirectly(t) && (
                 <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => activateTemplate(t.id), 'Template activated', 'Could not activate template')}>
                   {t.status === 'PAUSED' ? 'Resume' : 'Activate'}
                 </Button>
+              )}
+              {t.approvalStatus === 'DRAFT' && t.createdBy !== currentUser?.id && !canActivateDirectly(t) && (
+                <span className="px-2.5 py-1 text-xs text-ink-400">Awaiting submission by its creator</span>
+              )}
+              {t.approvalStatus === 'INTERNALLY_APPROVED' && (
+                canSubmitToProvider ? (
+                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider')}>
+                    <Send size={12} /> Submit to provider
+                  </Button>
+                ) : (
+                  <span className="px-2.5 py-1 text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights</span>
+                )
               )}
               {t.status === 'ACTIVE' && (
                 <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => pauseTemplate(t.id), 'Template paused', 'Could not pause template')}>
@@ -549,6 +695,27 @@ function ApprovalTab() {
   useWhatsAppRealtime({ onTemplate: refetch });
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  const currentUser = useAuthStore((s) => s.user);
+  // Mirrors requireRoleOrPermission(ROLE_MIN.APPROVE, PERMISSIONS.APPROVE_TEMPLATES)
+  // on the real route -- if this is false, the button shouldn't render at
+  // all, not just fail with a 403 after being clicked.
+  const canApprove = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
+  // Request changes / Reject stayed pure role-gated on the backend (no
+  // permission override was added for those two specifically), so this
+  // check intentionally does NOT accept the permission -- matches
+  // templateApproval.routes.js exactly.
+  const canRequestChangesOrReject = atLeast(currentUser?.role, 'tenant_admin');
+
+  // Mirrors validateApprover() in templateApproval.service.js exactly:
+  // approving your OWN submission is blocked below Tenant Admin rank --
+  // Admin and Owner are both exempt (matches how "Admin" works in most
+  // real SaaS products: a fully trusted operator, not blocked by
+  // internal-only red tape). Sales User/Read-only (or anyone with a
+  // custom permission that doesn't reach Admin rank) still need someone
+  // else to approve their own submissions.
+  const isSelfSubmission = (t: WhatsAppTemplateReal) =>
+    !!t.submittedBy && t.submittedBy === currentUser?.id && !atLeast(currentUser?.role, 'tenant_admin');
+
   const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
     setBusyId(id);
     try {
@@ -567,22 +734,53 @@ function ApprovalTab() {
   const handleApprove = (t: WhatsAppTemplateReal) =>
     runAction(t.id, () => approve(t.id), 'Template internally approved', 'Could not approve template');
 
-  const handleRequestChanges = (t: WhatsAppTemplateReal) => {
-    const comment = window.prompt('What changes are needed? (required)');
-    if (comment === null) return;
-    if (!comment.trim()) return toast.error('A comment is required to request changes');
-    return runAction(t.id, () => requestChanges(t.id, comment), 'Changes requested', 'Could not request changes');
-  };
+  // Both "Request changes" and "Reject" need a required text comment --
+  // promptTarget drives a single shared PromptDialog instead of a native
+  // window.prompt(), so the required-field validation and styling match
+  // the rest of the app instead of looking like a raw browser popup.
+  const [promptTarget, setPromptTarget] = useState<{ template: WhatsAppTemplateReal; kind: 'requestChanges' | 'reject' } | null>(null);
 
-  const handleReject = (t: WhatsAppTemplateReal) => {
-    const comment = window.prompt('Reason for rejection (required)');
-    if (comment === null) return;
-    if (!comment.trim()) return toast.error('A comment is required to reject');
-    return runAction(t.id, () => reject(t.id, comment), 'Template rejected', 'Could not reject template');
+  const submitPrompt = (comment: string) => {
+    if (!promptTarget) return;
+    const { template: t, kind } = promptTarget;
+    if (kind === 'requestChanges') {
+      void runAction(t.id, () => requestChanges(t.id, comment), 'Changes requested', 'Could not request changes');
+    } else {
+      void runAction(t.id, () => reject(t.id, comment), 'Template rejected', 'Could not reject template');
+    }
   };
 
   const handleSubmitToProvider = (t: WhatsAppTemplateReal) =>
     runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider');
+
+  // A DRAFT template hasn't entered the approval pipeline yet -- there's
+  // nothing here for anyone but its own creator to act on (they need to
+  // submit it). Showing it to everyone else (including the owner) just
+  // clutters the approval queue with things that were never actually
+  // submitted, which is exactly what looked like "why is this here?".
+  //
+  // NOTE: this (and the useEffect right below it) must stay BEFORE the
+  // loading/error early returns -- React requires every hook to run in
+  // the same order on every render. Having the useEffect after a
+  // conditional `return` meant it simply didn't run at all while
+  // `loading` was true, then started running once data arrived -- a real
+  // "rendered more hooks than the previous render" crash, not a fluke.
+  const visibleTemplates = templates.filter((t) => t.approvalStatus !== 'DRAFT' || t.createdBy === currentUser?.id);
+
+  // The user is now actually looking at these -- mark their own
+  // rejected/sent-back-for-changes templates as seen, so the tab badge
+  // (computed in the parent WhatsAppPanel) clears. Only fires for items
+  // that genuinely belong to this user and are in one of those two
+  // "needs your attention" states -- everything else is left alone.
+  useEffect(() => {
+    for (const t of visibleTemplates) {
+      if (t.createdBy !== currentUser?.id) continue;
+      const needsAttention = t.approvalStatus === 'REJECTED'
+        || (t.approvalStatus === 'DRAFT' && t.transitionHistory?.some((h) => h.action === 'REQUEST_CHANGES'));
+      if (needsAttention) markTemplateStatusSeen(currentUser?.id, t.id, t.approvalStatus);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTemplates, currentUser?.id]);
 
   if (loading && templates.length === 0) return <p className="p-8 text-center text-sm text-ink-400">Loading templates…</p>;
   if (error) return <Card className="p-4 text-sm text-red-600">{error}</Card>;
@@ -591,7 +789,10 @@ function ApprovalTab() {
     <Card>
       <CardHeader title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
       <div className="divide-y divide-ink-100">
-        {templates.map((t) => (
+        {visibleTemplates.length === 0 && (
+          <p className="p-8 text-center text-sm text-ink-400">Nothing here right now — templates appear once someone submits them for review.</p>
+        )}
+        {visibleTemplates.map((t) => (
           <div key={t.id} className="px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -608,9 +809,25 @@ function ApprovalTab() {
                 Meta rejection{t.providerRejectionReason ? ` (${t.providerRejectionReason})` : ''}: {t.providerRejectionMessage || 'No message provided'}
               </p>
             )}
-            {t.approvalComments && (
-              <p className="mt-2 rounded-lg bg-ink-50 px-3 py-1.5 text-xs text-ink-600">💬 {t.approvalComments}</p>
-            )}
+            {t.approvalComments && (() => {
+              const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
+              const isRejection = lastAction === 'REJECT';
+              const isChangesRequested = lastAction === 'REQUEST_CHANGES' || t.approvalStatus === 'DRAFT';
+              const label = isRejection ? 'Rejection reason' : isChangesRequested ? 'Changes requested' : 'Comment';
+              return (
+                <div className={cn(
+                  'mt-3 rounded-xl border-l-4 px-3.5 py-2.5',
+                  isRejection ? 'border-red-500 bg-red-50' : isChangesRequested ? 'border-amber-500 bg-amber-50' : 'border-ink-300 bg-ink-50',
+                )}>
+                  <p className={cn(
+                    'text-xs font-semibold uppercase tracking-wide',
+                    isRejection ? 'text-red-700' : isChangesRequested ? 'text-amber-700' : 'text-ink-500',
+                  )}>{label}</p>
+                  <p className={cn('mt-0.5 text-sm', isRejection ? 'text-red-800' : isChangesRequested ? 'text-amber-900' : 'text-ink-700')}>{t.approvalComments}</p>
+                </div>
+              );
+            })()}
+
 
             {t.transitionHistory.length > 0 ? (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-400">
@@ -634,21 +851,37 @@ function ApprovalTab() {
               )}
               {t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW' && (
                 <>
-                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
-                    <CheckCircle2 size={13} /> Approve internally
-                  </Button>
-                  <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleRequestChanges(t)}>
-                    Request changes
-                  </Button>
-                  <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => void handleReject(t)}>
-                    <XCircle size={13} /> Reject
-                  </Button>
+                  {canApprove && !isSelfSubmission(t) && (
+                    <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
+                      <CheckCircle2 size={13} /> Approve internally
+                    </Button>
+                  )}
+                  {canRequestChangesOrReject && (
+                    <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'requestChanges' })}>
+                      Request changes
+                    </Button>
+                  )}
+                  {canRequestChangesOrReject && (
+                    <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'reject' })}>
+                      <XCircle size={13} /> Reject
+                    </Button>
+                  )}
+                  {canApprove && isSelfSubmission(t) && (
+                    <p className="text-xs text-amber-600">You submitted this yourself — someone else needs to approve it (you can still request changes or reject).</p>
+                  )}
+                  {!canApprove && !canRequestChangesOrReject && (
+                    <p className="text-xs text-ink-400">Awaiting approval from someone with template-approval rights.</p>
+                  )}
                 </>
               )}
               {t.approvalStatus === 'INTERNALLY_APPROVED' && (
-                <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
-                  <Send size={13} /> Submit to provider
-                </Button>
+                canApprove ? (
+                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
+                    <Send size={13} /> Submit to provider
+                  </Button>
+                ) : (
+                  <p className="text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights.</p>
+                )
               )}
               {t.approvalStatus === 'SUBMITTED_TO_PROVIDER' && (
                 <p className="text-xs text-ink-400">Awaiting Meta's review — this updates automatically via webhook.</p>
@@ -662,10 +895,17 @@ function ApprovalTab() {
             </div>
           </div>
         ))}
-        {templates.length === 0 && (
-          <div className="px-5 py-10 text-center text-sm text-ink-400">No templates yet — create one in the Templates tab first.</div>
-        )}
       </div>
+      <PromptDialog
+        open={!!promptTarget}
+        onClose={() => setPromptTarget(null)}
+        title={promptTarget?.kind === 'reject' ? 'Reject template' : 'Request changes'}
+        label={promptTarget?.kind === 'reject' ? 'Reason for rejection' : 'What changes are needed?'}
+        placeholder={promptTarget?.kind === 'reject' ? 'e.g. Wording doesn\'t match brand voice' : 'e.g. Please shorten the body text'}
+        confirmLabel={promptTarget?.kind === 'reject' ? 'Reject' : 'Request changes'}
+        destructive={promptTarget?.kind === 'reject'}
+        onConfirm={submitPrompt}
+      />
     </Card>
   );
 }
@@ -689,6 +929,15 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const usableTemplates = templates.filter((t) => t.approvalStatus === USABLE_APPROVAL_STATUS);
   const { groups } = useGroups();
 
+  const currentUser = useAuthStore((s) => s.user);
+  // Mirrors requireRoleOrPermission(ROLE_MIN.APPROVE/START, PERMISSIONS.APPROVE_CAMPAIGNS)
+  // on the real campaigns/broadcasts routes -- if false, Approve/Start
+  // shouldn't render at all, not just 403 after being clicked.
+  const canApproveOrSend = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_campaigns');
+  // Cancel stayed pure role-gated on the backend (no permission override
+  // was added for it), so this intentionally does NOT accept the permission.
+  const canCancel = atLeast(currentUser?.role, 'tenant_admin');
+
   // Live updates while a campaign/broadcast is actually sending -- fires on
   // every per-recipient send AND the final auto COMPLETED/FAILED
   // transition (see campaignSender.service.js). Merges the pushed
@@ -703,6 +952,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
   const [form, setForm] = useState({
     name: '', type: typeOptions[0], templateId: '', groupId: '',
@@ -753,9 +1003,11 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   };
 
   const create = async () => {
+    if (submitting) return; // guards against a double-click firing two creates
     if (!form.name.trim()) return toast.error('Name required');
     if (!form.templateId) return toast.error('An approved template is required');
     if (!form.groupId) return toast.error('A target group is required — campaigns send to a group, not individual contacts');
+    setSubmitting(true);
     try {
       if (editingId) {
         await updateCampaign(editingId, {
@@ -778,6 +1030,8 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
       resetForm();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : `Failed to ${editingId ? 'update' : 'create'}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -838,19 +1092,20 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                   <p className="mt-2 text-[11px] text-ink-400">Sending now — counts update live as Meta reports delivery, read, and reply status.</p>
                 )}
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {c.status === 'DRAFT' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
-                  {c.status === 'DRAFT' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
-                  {c.status === 'APPROVED' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'DRAFT' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
+                  {c.status === 'DRAFT' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'DRAFT' && !canApproveOrSend && <p className="text-xs text-ink-400">Awaiting approval from someone with campaign-sending rights.</p>}
+                  {c.status === 'APPROVED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
                   {c.status === 'APPROVED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => {
                     const dt = window.prompt('Schedule for (ISO date/time, e.g. 2026-08-05T10:00:00)');
                     if (dt) runAction(c.id, () => scheduleCampaign(c.id, new Date(dt).toISOString()), 'Scheduled');
                   }}>Schedule</Button>}
-                  {c.status === 'SCHEDULED' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
-                  {c.status === 'SCHEDULED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
-                  {c.status === 'RUNNING' && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => completeCampaign(c.id), 'Completed')}>Mark completed</Button>}
-                  {c.status === 'RUNNING' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => failCampaign(c.id, 'Manually marked as failed'), 'Marked failed')}>Mark failed</Button>}
-                  {c.status === 'RUNNING' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
-                  {c.status === 'FAILED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'SCHEDULED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'SCHEDULED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => completeCampaign(c.id), 'Completed')}>Mark completed</Button>}
+                  {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => failCampaign(c.id, 'Manually marked as failed'), 'Marked failed')}>Mark failed</Button>}
+                  {c.status === 'RUNNING' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'FAILED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
                   {!EDIT_LOCKED.includes(c.status) && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEdit(c)}>Edit</Button>}
                   {!DELETE_LOCKED.includes(c.status) && (
                     <button
@@ -870,7 +1125,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
       )}
       {show && (
         <Modal open onClose={() => { setShow(false); resetForm(); }} title={editingId ? `Edit ${broadcast ? 'Broadcast' : 'Campaign'}` : `New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
-          footer={<><Button variant="secondary" onClick={() => { setShow(false); resetForm(); }}>Cancel</Button><Button onClick={create}>{editingId ? 'Save changes' : 'Create'}</Button></>}>
+          footer={<><Button variant="secondary" onClick={() => { setShow(false); resetForm(); }} disabled={submitting}>Cancel</Button><Button onClick={create} disabled={submitting}>{submitting ? (editingId ? 'Saving…' : 'Creating…') : (editingId ? 'Save changes' : 'Create')}</Button></>}>
           <div className="space-y-4">
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>

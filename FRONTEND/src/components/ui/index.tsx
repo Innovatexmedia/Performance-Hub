@@ -200,7 +200,7 @@ export function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: 
 }
 
 // ---- Tabs ------------------------------------------------------------------
-export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: string; count?: number }[]; active: string; onChange: (id: string) => void }) {
+export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: string; count?: number; tone?: 'red' | 'green' }[]; active: string; onChange: (id: string) => void }) {
   return (
     <div className="flex gap-1 overflow-x-auto border-b border-ink-200">
       {tabs.map((t) => (
@@ -214,7 +214,16 @@ export function Tabs({ tabs, active, onChange }: { tabs: { id: string; label: st
         >
           {t.label}
           {t.count != null && (
-            <span className={cn('ml-1.5 rounded-full px-1.5 py-0.5 text-xs', active === t.id ? 'bg-brand-100 text-brand-700' : 'bg-ink-100 text-ink-500')}>{t.count}</span>
+            <span
+              className={cn(
+                'ml-1.5 rounded-full px-1.5 py-0.5 text-xs font-semibold',
+                t.tone === 'red' ? 'bg-red-100 text-red-700'
+                  : t.tone === 'green' ? 'bg-emerald-100 text-emerald-700'
+                  : active === t.id ? 'bg-brand-100 text-brand-700' : 'bg-ink-100 text-ink-500',
+              )}
+            >
+              {t.count}
+            </span>
           )}
           {active === t.id && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-brand-600" />}
         </button>

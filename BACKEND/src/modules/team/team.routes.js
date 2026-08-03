@@ -23,6 +23,7 @@ import {
   validateAddMember,
   validateUpdateRole,
   validateSetStatus,
+  validateUpdatePermissions,
 } from './team.validator.js';
 
 import { authenticate }  from '../../shared/middlewares/auth.middleware.js';
@@ -36,6 +37,12 @@ router.use(authenticate);
 router.use(resolveTenant);
 
 // ── Static routes before /:id ─────────────────────────────────────────────────
+
+// Permission catalog + role-default lookups -- static paths, must be
+// registered before '/:id' or Express would try to match "permissions"
+// as a member ID.
+router.get('/permissions/catalog', controller.getPermissionCatalog);
+router.get('/permissions/role-default/:role', requireRole('tenant_admin'), controller.getRoleDefaultPermissions);
 
 // Collection — GET all members + POST new member
 router
@@ -62,6 +69,14 @@ router.patch(
   requireRole('tenant_admin'),
   validateSetStatus,
   controller.setStatus
+);
+
+// Granular permission overrides — tenant_admin and above
+router.patch(
+  '/:id/permissions',
+  requireRole('tenant_admin'),
+  validateUpdatePermissions,
+  controller.updatePermissions
 );
 
 export default router;

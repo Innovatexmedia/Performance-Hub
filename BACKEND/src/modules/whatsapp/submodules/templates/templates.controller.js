@@ -24,6 +24,10 @@ function buildCtx(req) {
     userId: user.id || user._id || fallback.userId || null,
     userName: user.name || user.fullName || null,
     role: user.role || fallback.role || null,
+    // Same JWT-claim convention as shared/middlewares/permission.middleware.js's
+    // requirePermission() -- reflects permissions AT LOGIN, not necessarily
+    // live if they were changed mid-session (documented tradeoff, not new).
+    permissions: user.permissions || fallback.permissions || [],
   };
 }
 

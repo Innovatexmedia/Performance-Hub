@@ -2,10 +2,34 @@ import { create } from 'zustand';
 import { authApi } from '@/lib/authApi';
 import { ApiError, setAuthHandlers } from '@/lib/apiClient';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
+import { toast } from '@/store/toastStore';
 import { isWorkspaceSelectionResult } from '@/types/auth';
 import type { AuthUser, LoginPayload, RegisterPayload, WorkspaceOption, WorkspaceSelectionResult } from '@/types/auth';
 
 export type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated';
+
+/**
+ * connectSocketAndListen -- every call site that used to call connectSocket()
+ * directly now goes through this instead, so the live permissions/role
+ * listener is always attached exactly once per connection, regardless of
+ * which of the 6 call sites (initialize/login/register/selectWorkspace/
+ * switchWorkspace) established it.
+ *
+ * Real-time permission propagation: when an owner grants/changes a
+ * permission or role for this user (see team.service.js's emitToUser),
+ * this fires -- silently re-runs the token refresh (which re-derives a
+ * fresh JWT from the DB, already fixed to include live permissions), so
+ * the user's session picks up the change immediately, with zero manual
+ * refresh or re-login needed.
+ */
+function connectSocketAndListen() {
+  const sock = connectSocket(() => useAuthStore.getState().accessToken);
+  sock.off('auth:permissions-updated');
+  sock.on('auth:permissions-updated', () => {
+    useAuthStore.getState().refreshPermissions();
+  });
+  return sock;
+}
 
 interface AuthState {
   user: AuthUser | null;
@@ -44,6 +68,14 @@ interface AuthState {
 
   logout: () => Promise<void>;
 
+  /**
+   * Silently re-fetches the current user + a fresh access token (which
+   * re-derives permissions from the DB, see token.service.js). Called
+   * automatically when the server pushes 'auth:permissions-updated' over
+   * the socket -- not normally something to call by hand.
+   */
+  refreshPermissions: () => Promise<void>;
+
   clearError: () => void;
 }
 
@@ -61,7 +93,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { user, accessToken } = await authApi.refresh();
       set({ user, accessToken, status: 'authenticated', error: null });
-      connectSocket(() => useAuthStore.getState().accessToken);
+      connectSocketAndListen();
     } catch {
       // No valid session cookie -- this is the normal logged-out state, not an error.
       set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
@@ -84,7 +116,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       const { user, accessToken } = result;
       set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null });
-      connectSocket(() => useAuthStore.getState().accessToken);
+      connectSocketAndListen();
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to sign in. Please try again.';
@@ -98,7 +130,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { user, accessToken } = await authApi.register(payload);
       set({ user, accessToken, status: 'authenticated', error: null });
-      connectSocket(() => useAuthStore.getState().accessToken);
+      connectSocketAndListen();
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to create account. Please try again.';
@@ -115,7 +147,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const { user, accessToken } = await authApi.switchWorkspace(tenantId, pending.selectionToken);
       set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null });
-      connectSocket(() => useAuthStore.getState().accessToken);
+      connectSocketAndListen();
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Could not enter that workspace. Please try again.';
@@ -134,7 +166,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       // with the new token, joining the correct room this time.
       disconnectSocket();
       set({ user, accessToken, status: 'authenticated', error: null });
-      connectSocket(() => useAuthStore.getState().accessToken);
+      connectSocketAndListen();
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Could not switch workspace. Please try again.';
@@ -162,6 +194,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     disconnectSocket();
     set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
+  },
+
+  refreshPermissions: async () => {
+    try {
+      const { user, accessToken } = await authApi.refresh();
+      set({ user, accessToken });
+      toast.success('Your permissions were updated', 'Some actions may now be available or restricted.');
+    } catch {
+      // If this silently fails (e.g. session already expired), the next
+      // real request will surface the normal 401 flow -- no need to
+      // interrupt the user just because this background sync didn't land.
+    }
   },
 
   clearError: () => set({ error: null }),

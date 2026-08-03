@@ -58,11 +58,38 @@ export const requireRole = (...roles) => (req, res, next) => {
 };
 
 /**
- * requireExactRole — allows access ONLY if user has this exact role.
- * Use sparingly — prefer requireRole (hierarchy-based) for most cases.
+ * requireRoleOrPermission — passes if EITHER the normal role-rank gate
+ * (requireRole's hasRole check) OR the user's own permissions array
+ * contains the given permission string.
  *
- * @param {...string} roles — exact role values (OR logic)
+ * Why this exists: requireRole alone means an owner's custom permission
+ * grant to a lower-ranked user (e.g. giving one specific sales_user
+ * APPROVE_CAMPAIGNS) would be silently useless -- the route would still
+ * reject them by rank before the request ever reaches code that checks
+ * permissions. This is the piece that makes that grant actually work.
+ *
+ * @param {string} minRole - minimum role rank that passes regardless of permissions
+ * @param {string} permission - a PERMISSIONS.* value that also passes, at any rank
  */
+export const requireRoleOrPermission = (minRole, permission) => (req, res, next) => {
+  if (!req.user) {
+    return next(new AppError('Authentication required', 401));
+  }
+
+  const roleOk = hasRole(req.user.role, minRole);
+  const permissionOk = (req.user.permissions || []).includes(permission);
+
+  if (!roleOk && !permissionOk) {
+    return next(
+      new AppError(
+        `Access denied. Required role: ${minRole} or permission: ${permission}. Your role: ${req.user.role}`,
+        403
+      )
+    );
+  }
+
+  next();
+};
 export const requireExactRole = (...roles) => (req, res, next) => {
   if (!req.user) {
     return next(new AppError('Authentication required', 401));

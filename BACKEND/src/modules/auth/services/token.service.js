@@ -40,6 +40,11 @@ export const issueTokenPair = async (user, meta = {}) => {
     userId:   user._id.toString(),
     tenantId: user.tenantId?.toString() ?? null,
     role:     user.role,
+    // Without this, req.user.permissions is always empty everywhere
+    // downstream (requirePermission, ctx.permissions in service layers,
+    // etc.) -- the whole per-user permission-override feature is inert
+    // without it actually being on the token.
+    permissions: user.permissions || [],
     sessionId,
   });
 

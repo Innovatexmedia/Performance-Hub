@@ -12,6 +12,7 @@ export interface UseTeamResult {
   addMember: (input: AddTeamMemberInput) => Promise<void>;
   updateRole: (id: string, role: string) => Promise<void>;
   setStatus: (id: string, status: MemberStatus) => Promise<void>;
+  updatePermissions: (id: string, permissions: string[]) => Promise<void>;
 }
 
 /**
@@ -63,5 +64,10 @@ export function useTeam(): UseTeamResult {
     refetch();
   }, [refetch]);
 
-  return { members, kpis, loading, error, refetch, addMember, updateRole, setStatus };
+  const updatePermissions = useCallback(async (id: string, permissions: string[]) => {
+    await teamApi.updatePermissions(id, permissions);
+    refetch();
+  }, [refetch]);
+
+  return { members, kpis, loading, error, refetch, addMember, updateRole, setStatus, updatePermissions };
 }

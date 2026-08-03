@@ -36,6 +36,9 @@ export interface AuthUser {
   role: AuthRole;
   tenantId: string | null;
   status: 'active' | 'inactive' | 'suspended';
+  /** Individual permission overrides beyond role defaults -- see
+   * rolePermissions.js / team.service.js's updateMemberPermissions. */
+  permissions: string[];
   createdAt: string;
   updatedAt: string;
 }
