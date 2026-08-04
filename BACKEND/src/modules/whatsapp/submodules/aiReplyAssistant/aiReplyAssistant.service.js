@@ -34,7 +34,7 @@ import {
 // ── Real Gemini call (same pattern as leads/ai/qualification-ai.service.js) ──
 
 const SERVER_GEMINI_API_KEY = () => process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = "gemini-2.5-flash-lite";
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 const geminiUrl = (apiKey) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
@@ -72,7 +72,6 @@ async function resolveGeminiApiKey(ctx) {
 
 /** Plain-text Gemini call -- for generate/rewrite/summarize, which just need natural language back, not structured JSON. */
 async function callGeminiText(prompt, apiKey) {
-  console.log("Gemini URL:", geminiUrl(apiKey));
   const response = await fetch(geminiUrl(apiKey), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -373,9 +372,17 @@ Rules: Sound like a real person texting, not a corporate email. Keep it under 60
         isLive: true,
       };
     } catch (err) {
-      console.error("========== GEMINI ERROR ==========");
-      console.error(err);
-      throw err;
+      console.warn(
+        `[aiReplyAssistant] Gemini generate() failed, using mock fallback: ${err.message}`,
+      );
+      const fallback = await mockProvider.generate({
+        conversation,
+        lead,
+        goal,
+        tone,
+        language,
+      });
+      return { ...fallback, isLive: false };
     }
   },
 
@@ -516,24 +523,15 @@ Return ONLY a valid JSON object, no markdown, no explanation:
  * burning real API calls.
  */
 async function getProvider(ctx, name = ACTIVE_AI_PROVIDER) {
-  console.log("================================");
-  console.log("ACTIVE_AI_PROVIDER:", name);
-
-  const apiKey = await resolveGeminiApiKey(ctx);
-
-  console.log("API Key Exists:", !!apiKey);
-
   if (name === AI_PROVIDER.MOCK) {
-    console.log("Using MOCK because AI_PROVIDER=MOCK");
     return mockProvider;
   }
 
+  const apiKey = await resolveGeminiApiKey(ctx);
   if (apiKey) {
-    console.log("Using GEMINI");
     return createGeminiProvider(apiKey);
   }
 
-  console.log("No API key -> MOCK");
   return mockProvider;
 }
 
