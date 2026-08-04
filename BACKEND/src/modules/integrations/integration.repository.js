@@ -53,6 +53,10 @@ export const ensureCatalogSeeded = (tenantId) =>
 export const findById = (tenantId, id) =>
   Integration.findOne({ _id: id, tenant_id: tenantId });
 
+/** Looks up one tenant's integration record by its stable catalog key (e.g. 'gemini'). */
+export const findByKey = (tenantId, key) =>
+  Integration.findOne({ tenant_id: tenantId, key });
+
 export const list = (tenantId, filter, options) => {
   const opts = options || {};
   const query = buildQuery(tenantId, filter);

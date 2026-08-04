@@ -6,6 +6,8 @@ import {
 import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
+import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
+import type { ReplyGoal, RewriteStyle } from '@/lib/aiReplyAssistantApi';
 import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
 import { useDb, useSettings, userName } from '@/store/hooks';
 import {
@@ -17,7 +19,6 @@ import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts
 import { Inbox } from './Inbox';
 import { TemplateBuilder } from './TemplateBuilder';
 import { conversationsTrend } from '@/utils/calculations';
-import { generateWhatsAppReply, rewriteWhatsAppMessage } from '@/services/aiService';
 import { syncFromProvider } from '@/services/whatsappService';
 import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
@@ -1176,13 +1177,46 @@ function NurtureMessagesTab() {
 function AIAssistantTab() {
   const [input, setInput] = useState('Hi, I saw your webinar and I\'m interested but pricing is a concern.');
   const [output, setOutput] = useState('');
+  const [isLive, setIsLive] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const actions = [
-    { label: 'Generate reply', mode: 'default' as const },
-    { label: 'Booking message', mode: 'booking' as const },
-    { label: 'Payment reminder', mode: 'payment' as const },
-    { label: 'Objection handling', mode: 'objection' as const },
-    { label: 'Follow-up after call', mode: 'followup' as const },
+    { label: 'Generate reply', goal: '' as const },
+    { label: 'Booking message', goal: 'booking' as const },
+    { label: 'Payment reminder', goal: 'payment' as const },
+    { label: 'Objection handling', goal: 'objection' as const },
+    { label: 'Follow-up after call', goal: 'follow_up' as const },
   ];
+
+  const generate = async (goal: ReplyGoal, label: string) => {
+    setBusy(label);
+    try {
+      const result = await aiReplyAssistantApi.generate({
+        goal,
+        conversation: input.trim() ? [{ direction: 'INBOUND', content: input.trim() }] : [],
+      });
+      setOutput(result.generatedReply);
+      setIsLive(result.isLive);
+    } catch (err) {
+      toast.error('Could not generate reply', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rewrite = async (style: RewriteStyle, label: string) => {
+    if (!output) return;
+    setBusy(label);
+    try {
+      const result = await aiReplyAssistantApi.rewrite(output, style);
+      setOutput(result.rewritten);
+      setIsLive(result.isLive);
+    } catch (err) {
+      toast.error('Could not rewrite reply', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <Card className="p-5">
@@ -1190,18 +1224,27 @@ function AIAssistantTab() {
         <p className="mt-1 text-xs text-ink-500">Paste an inbound message and generate context-aware replies.</p>
         <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={4} className="input mt-3" />
         <div className="mt-3 flex flex-wrap gap-2">
-          {actions.map((a) => <Button key={a.label} variant="secondary" className="px-3 py-1.5 text-xs" onClick={() => setOutput(generateWhatsAppReply(input, a.mode))}>{a.label}</Button>)}
+          {actions.map((a) => (
+            <Button key={a.label} variant="secondary" className="px-3 py-1.5 text-xs" disabled={busy === a.label} onClick={() => void generate(a.goal, a.label)}>
+              {busy === a.label ? 'Thinking…' : a.label}
+            </Button>
+          ))}
         </div>
         {output && (
           <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'shorter'))}>Make shorter</Button>
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'professional'))}>Professional</Button>
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'persuasive'))}>Persuasive</Button>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('SHORTER', 'shorter')}>Make shorter</Button>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('PROFESSIONAL', 'professional')}>Professional</Button>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('PERSUASIVE', 'persuasive')}>Persuasive</Button>
           </div>
         )}
       </Card>
       <Card className="p-5">
-        <h3 className="text-sm font-semibold text-ink-900">Generated reply</h3>
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-ink-900">Generated reply</h3>
+          {output && isLive !== null && (
+            <Badge tone={isLive ? 'green' : 'amber'}>{isLive ? 'Live AI' : 'Fallback (no AI key / call failed)'}</Badge>
+          )}
+        </div>
         {output ? (
           <>
             <div className="mt-3 rounded-xl rounded-tl-sm bg-brand-50 p-4 text-sm text-ink-800 whitespace-pre-line">{output}</div>
