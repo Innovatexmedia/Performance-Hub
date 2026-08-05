@@ -1,24 +1,25 @@
 import { useEffect, useState } from 'react';
 import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
-  ChevronLeft, ChevronRight, Trash2, Unplug,
+  ChevronLeft, ChevronRight, Trash2, Unplug, Pencil, Play, History as HistoryIcon,
 } from 'lucide-react';
-import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
 import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
 import type { ReplyGoal, RewriteStyle } from '@/lib/aiReplyAssistantApi';
+import { whatsappAnalyticsApi } from '@/lib/whatsappAnalyticsApi';
+import type { DashboardAnalytics, CampaignAnalytics, TemplateAnalytics, Trends, ConversationAnalytics } from '@/lib/whatsappAnalyticsApi';
 import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
 import { useDb, useSettings, userName } from '@/store/hooks';
 import {
   PageHeader, Card, CardHeader, Tabs, Table, Th, Td, Tr, Badge, StatusBadge, Button,
-  Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
+  Avatar, EmptyState, Toggle, Field, Input, Select, Textarea, Modal, cn,
 } from '@/components/ui';
+import type { BadgeTone } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
 import { Inbox } from './Inbox';
 import { TemplateBuilder } from './TemplateBuilder';
-import { conversationsTrend } from '@/utils/calculations';
 import { syncFromProvider } from '@/services/whatsappService';
 import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
@@ -27,6 +28,18 @@ import { useGroups } from '@/hooks/useGroups';
 import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
+import { useAutomationRules } from '@/hooks/useAutomationRules';
+import { automationRulesApi } from '@/lib/automationRulesApi';
+import {
+  TRIGGER_TYPE_VALUES, CONDITION_OPERATOR_VALUES, CONDITION_LOGIC_VALUES,
+  ACTION_TYPE_VALUES, EXECUTION_MODE_VALUES, DELAY_UNIT_VALUES, RULE_STATUS_VALUES,
+  PRIORITY_MIN, PRIORITY_MAX,
+} from '@/types/automationRule';
+import type {
+  AutomationRule, AutomationRuleInput, RuleCondition, RuleAction,
+  TriggerType, ConditionOperator, ConditionLogic, ActionType, ExecutionMode, DelayUnit, RuleStatus,
+  AutomationRuleHistoryEntry,
+} from '@/types/automationRule';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
 import { USABLE_APPROVAL_STATUS } from '@/types/whatsappTemplate';
 import { useWhatsAppCampaigns } from '@/hooks/useWhatsAppCampaigns';
@@ -1257,28 +1270,416 @@ function AIAssistantTab() {
 }
 
 // ---- Rules -----------------------------------------------------------------
+/**
+ * SOURCE: BACKEND/src/modules/whatsapp/submodules/automationRules/*
+ *
+ * Previously this tab read/wrote local mock data (db.automations,
+ * toggleAutomation from the client store) with no create/edit UI at all,
+ * completely disconnected from the real backend module (full CRUD +
+ * conditions/actions engine + execution history). Rebuilt against the
+ * real API below.
+ */
+
+const TRIGGER_LABEL_MAP: Record<TriggerType, string> = {
+  LEAD_CREATED: 'Lead created', LEAD_UPDATED: 'Lead updated', LEAD_QUALIFIED: 'Lead qualified',
+  PIPELINE_STAGE_CHANGED: 'Pipeline stage changed', MESSAGE_RECEIVED: 'Message received',
+  MESSAGE_SENT: 'Message sent', BOOKING_CREATED: 'Booking created', BOOKING_CONFIRMED: 'Booking confirmed',
+  PAYMENT_PENDING: 'Payment pending', PAYMENT_RECEIVED: 'Payment received',
+  CAMPAIGN_COMPLETED: 'Campaign completed', CAMPAIGN_FAILED: 'Campaign failed', NO_REPLY: 'No reply',
+  TAG_ADDED: 'Tag added', TAG_REMOVED: 'Tag removed', CONTACT_CREATED: 'Contact created',
+  CONTACT_UPDATED: 'Contact updated', CUSTOM_EVENT: 'Custom event',
+};
+
+const ACTION_LABEL_MAP: Record<ActionType, string> = {
+  SEND_TEMPLATE: 'Send template', START_NURTURE: 'Start nurture', STOP_NURTURE: 'Stop nurture',
+  SEND_BROADCAST: 'Send broadcast', GENERATE_AI_REPLY: 'Generate AI reply', ASSIGN_USER: 'Assign user',
+  CHANGE_PIPELINE_STAGE: 'Change pipeline stage', ADD_TAG: 'Add tag', REMOVE_TAG: 'Remove tag',
+  CREATE_TASK: 'Create task', CREATE_NOTE: 'Create note', NOTIFY_USER: 'Notify user',
+  SEND_EMAIL: 'Send email', CALL_WEBHOOK: 'Call webhook', WAIT: 'Wait', END_WORKFLOW: 'End workflow',
+};
+
+/** Per-action-type params the simulated backend engine actually reads (see
+ * ACTION_HANDLERS in automationRules.service.js) -- keeps the builder's
+ * params fields honest instead of a free-form JSON blob. */
+const ACTION_PARAM_FIELDS: Record<ActionType, { key: string; label: string; placeholder?: string }[]> = {
+  SEND_TEMPLATE: [{ key: 'templateId', label: 'Template ID' }],
+  START_NURTURE: [{ key: 'sequenceId', label: 'Nurture sequence ID' }],
+  STOP_NURTURE: [{ key: 'enrollmentId', label: 'Enrollment ID' }],
+  SEND_BROADCAST: [{ key: 'broadcastId', label: 'Broadcast ID' }],
+  GENERATE_AI_REPLY: [{ key: 'goal', label: 'Reply goal', placeholder: 'booking / payment / objection…' }],
+  ASSIGN_USER: [{ key: 'userId', label: 'User ID' }],
+  CHANGE_PIPELINE_STAGE: [{ key: 'stage', label: 'Pipeline stage' }],
+  ADD_TAG: [{ key: 'tag', label: 'Tag' }],
+  REMOVE_TAG: [{ key: 'tag', label: 'Tag' }],
+  CREATE_TASK: [{ key: 'title', label: 'Task title' }],
+  CREATE_NOTE: [{ key: 'text', label: 'Note text' }],
+  NOTIFY_USER: [{ key: 'userId', label: 'User ID' }, { key: 'message', label: 'Message' }],
+  SEND_EMAIL: [{ key: 'to', label: 'To' }, { key: 'subject', label: 'Subject' }],
+  CALL_WEBHOOK: [{ key: 'url', label: 'Webhook URL' }, { key: 'method', label: 'HTTP method', placeholder: 'POST' }],
+  WAIT: [],
+  END_WORKFLOW: [],
+};
+
+const STATUS_TONE: Record<RuleStatus, BadgeTone> = {
+  DRAFT: 'gray', ACTIVE: 'green', PAUSED: 'amber', DISABLED: 'gray', ARCHIVED: 'red',
+};
+
+function emptyRuleForm(): AutomationRuleInput {
+  return {
+    name: '',
+    description: '',
+    trigger: { type: 'LEAD_CREATED', params: {} },
+    conditions: [],
+    conditionLogic: 'AND',
+    actions: [],
+    status: 'DRAFT',
+    priority: 50,
+    executionMode: 'IMMEDIATELY',
+    delay: { value: 0, unit: 'minutes' },
+  };
+}
+
+function ruleToForm(r: AutomationRule): AutomationRuleInput {
+  return {
+    name: r.name,
+    description: r.description ?? '',
+    trigger: { type: r.trigger.type, params: r.trigger.params ?? {} },
+    conditions: r.conditions.map((c) => ({ ...c })),
+    conditionLogic: r.conditionLogic,
+    actions: r.actions.map((a) => ({ ...a, params: { ...(a.params ?? {}) } })),
+    status: r.status,
+    priority: r.priority,
+    executionMode: r.executionMode,
+    delay: { ...r.delay },
+  };
+}
+
 function RulesTab() {
-  const { db, tenantId } = useDb();
-  const { toggleAutomation } = useStore();
-  const autos = db.automations.filter((a) => a.tenant_id === tenantId);
+  const { rules, loading, error, refetch, createRule, updateRule, deleteRule, duplicateRule, toggleRule } = useAutomationRules({ active: true });
+
+  const [show, setShow] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<AutomationRuleInput>(emptyRuleForm());
+  const [saving, setSaving] = useState(false);
+
+  const [historyRuleId, setHistoryRuleId] = useState<string | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<AutomationRuleHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const [runningId, setRunningId] = useState<string | null>(null);
+
+  const openCreate = () => { setEditingId(null); setForm(emptyRuleForm()); setShow(true); };
+  const openEdit = (r: AutomationRule) => { setEditingId(r.id); setForm(ruleToForm(r)); setShow(true); };
+
+  const setCondition = (i: number, patch: Partial<RuleCondition>) => {
+    setForm((f) => ({ ...f, conditions: (f.conditions ?? []).map((c, idx) => (idx === i ? { ...c, ...patch } : c)) }));
+  };
+  const addCondition = () => {
+    setForm((f) => ({ ...f, conditions: [...(f.conditions ?? []), { field: '', operator: 'EQUALS' as ConditionOperator, value: '' }] }));
+  };
+  const removeCondition = (i: number) => {
+    setForm((f) => ({ ...f, conditions: (f.conditions ?? []).filter((_, idx) => idx !== i) }));
+  };
+
+  const setAction = (i: number, patch: Partial<RuleAction>) => {
+    setForm((f) => ({ ...f, actions: (f.actions ?? []).map((a, idx) => (idx === i ? { ...a, ...patch } : a)) }));
+  };
+  const setActionParam = (i: number, key: string, value: string) => {
+    setForm((f) => ({
+      ...f,
+      actions: (f.actions ?? []).map((a, idx) => (idx === i ? { ...a, params: { ...(a.params ?? {}), [key]: value } } : a)),
+    }));
+  };
+  const addAction = () => {
+    setForm((f) => {
+      const actions = f.actions ?? [];
+      return { ...f, actions: [...actions, { order: actions.length + 1, type: 'SEND_TEMPLATE' as ActionType, params: {}, delayValue: 0, delayUnit: 'minutes' as DelayUnit, description: '' }] };
+    });
+  };
+  const removeAction = (i: number) => {
+    setForm((f) => ({ ...f, actions: (f.actions ?? []).filter((_, idx) => idx !== i).map((a, idx) => ({ ...a, order: idx + 1 })) }));
+  };
+
+  const handleSave = async () => {
+    if (!form.name.trim()) return toast.error('Name is required');
+    if (!form.actions?.length) return toast.error('Add at least one action', 'A rule with no actions does nothing when it fires.');
+    setSaving(true);
+    try {
+      if (editingId) {
+        await updateRule(editingId, form);
+        toast.success('Rule updated');
+      } else {
+        await createRule(form);
+        toast.success('Rule created');
+      }
+      setShow(false);
+    } catch (err) {
+      toast.error(editingId ? 'Could not update rule' : 'Could not create rule', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (r: AutomationRule) => {
+    if (!window.confirm(`Delete "${r.name}"? This can't be undone.`)) return;
+    try {
+      await deleteRule(r.id);
+      toast.success('Rule deleted');
+    } catch (err) {
+      toast.error('Could not delete rule', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleDuplicate = async (r: AutomationRule) => {
+    try {
+      await duplicateRule(r.id);
+      toast.success('Rule duplicated', 'The copy was created as a draft.');
+    } catch (err) {
+      toast.error('Could not duplicate rule', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleToggle = async (r: AutomationRule) => {
+    try {
+      const updated = await toggleRule(r.id);
+      toast.success(updated.status === 'ACTIVE' ? 'Rule activated' : 'Rule paused');
+    } catch (err) {
+      toast.error('Could not toggle rule', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleRun = async (r: AutomationRule) => {
+    setRunningId(r.id);
+    try {
+      const result = await automationRulesApi.run(r.id, {});
+      toast[result.success ? 'success' : 'error'](
+        `Test run: ${result.status}`,
+        `${result.actionsExecuted} action(s) executed in ${result.executionTime}ms${result.failureReason ? ` — ${result.failureReason}` : ''}`,
+      );
+      refetch();
+    } catch (err) {
+      toast.error('Test run failed', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setRunningId(null);
+    }
+  };
+
+  const openHistory = async (r: AutomationRule) => {
+    setHistoryRuleId(r.id);
+    setHistoryLoading(true);
+    try {
+      const result = await automationRulesApi.history(r.id, { limit: 20 });
+      setHistoryEntries(result.data);
+    } catch (err) {
+      toast.error('Could not load history', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   return (
-    <Card>
-      <CardHeader title="WhatsApp Automation Rules" subtitle="Trigger-based WhatsApp actions" />
-      <div className="divide-y divide-ink-100">
-        {autos.map((a) => (
-          <div key={a.id} className="flex items-center justify-between px-5 py-3.5">
-            <div>
-              <p className="font-medium text-ink-900">{a.name}</p>
-              <p className="text-xs text-ink-500">When <span className="font-medium text-ink-700">{a.trigger}</span> → {a.action}</p>
+    <div>
+      <Card>
+        <CardHeader
+          title="WhatsApp Automation Rules"
+          subtitle="Trigger-based WhatsApp actions"
+          action={<Button onClick={openCreate}><Plus size={16} /> New rule</Button>}
+        />
+        {loading ? (
+          <div className="py-16 text-center text-sm text-ink-400">Loading rules…</div>
+        ) : error ? (
+          <div className="p-5"><EmptyState title="Could not load rules" description={error} /></div>
+        ) : rules.length === 0 ? (
+          <div className="p-5"><EmptyState title="No automation rules yet" description="Create a rule to trigger WhatsApp actions automatically." action={<Button onClick={openCreate}><Plus size={16} /> New rule</Button>} /></div>
+        ) : (
+          <div className="divide-y divide-ink-100">
+            {rules.map((r) => (
+              <div key={r.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="truncate font-medium text-ink-900">{r.name}</p>
+                    <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
+                    <Badge tone="blue">Priority {r.priority}</Badge>
+                  </div>
+                  <p className="mt-0.5 text-xs text-ink-500">
+                    When <span className="font-medium text-ink-700">{TRIGGER_LABEL_MAP[r.trigger.type]}</span>
+                    {' → '}
+                    {r.actions.length ? r.actions.map((a) => ACTION_LABEL_MAP[a.type]).join(', ') : 'no actions'}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-ink-400">
+                    Ran {r.executionCount} time{r.executionCount === 1 ? '' : 's'}
+                    {r.lastExecutedAt ? ` · last ${timeAgo(r.lastExecutedAt)}` : ''}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button variant="ghost" onClick={() => handleRun(r)} disabled={runningId === r.id} title="Test run">
+                    <Play size={15} />
+                  </Button>
+                  <Button variant="ghost" onClick={() => openHistory(r)} title="Execution history">
+                    <HistoryIcon size={15} />
+                  </Button>
+                  <Button variant="ghost" onClick={() => openEdit(r)} title="Edit"><Pencil size={15} /></Button>
+                  <Button variant="ghost" onClick={() => handleDuplicate(r)} title="Duplicate"><Copy size={15} /></Button>
+                  <Button variant="ghost" onClick={() => handleDelete(r)} title="Delete"><Trash2 size={15} className="text-red-500" /></Button>
+                  <Toggle checked={r.status === 'ACTIVE'} onChange={() => handleToggle(r)} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ---- Create / Edit modal ---- */}
+      <Modal
+        open={show}
+        onClose={() => setShow(false)}
+        title={editingId ? 'Edit automation rule' : 'New automation rule'}
+        size="xl"
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setShow(false)}>Cancel</Button>
+            <Button onClick={() => void handleSave()} disabled={saving}>{saving ? 'Saving…' : editingId ? 'Save changes' : 'Create rule'}</Button>
+          </>
+        )}
+      >
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Welcome new leads" /></Field>
+            <Field label="Status">
+              <Select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as RuleStatus })}>
+                {RULE_STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            </Field>
+          </div>
+          <Field label="Description"><Textarea rows={2} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="What does this rule do?" /></Field>
+
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Trigger">
+              <Select value={form.trigger.type} onChange={(e) => setForm({ ...form, trigger: { ...form.trigger, type: e.target.value as TriggerType } })}>
+                {TRIGGER_TYPE_VALUES.map((t) => <option key={t} value={t}>{TRIGGER_LABEL_MAP[t]}</option>)}
+              </Select>
+            </Field>
+            <Field label="Priority" hint={`${PRIORITY_MIN}–${PRIORITY_MAX}, higher runs first`}>
+              <Input type="number" min={PRIORITY_MIN} max={PRIORITY_MAX} value={form.priority}
+                onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })} />
+            </Field>
+            <Field label="Execution mode">
+              <Select value={form.executionMode} onChange={(e) => setForm({ ...form, executionMode: e.target.value as ExecutionMode })}>
+                {EXECUTION_MODE_VALUES.map((m) => <option key={m} value={m}>{m}</option>)}
+              </Select>
+            </Field>
+          </div>
+
+          {form.executionMode === 'DELAYED' && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Delay value">
+                <Input type="number" min={0} value={form.delay?.value ?? 0}
+                  onChange={(e) => setForm({ ...form, delay: { value: Number(e.target.value), unit: form.delay?.unit ?? 'minutes' } })} />
+              </Field>
+              <Field label="Delay unit">
+                <Select value={form.delay?.unit ?? 'minutes'} onChange={(e) => setForm({ ...form, delay: { value: form.delay?.value ?? 0, unit: e.target.value as DelayUnit } })}>
+                  {DELAY_UNIT_VALUES.map((u) => <option key={u} value={u}>{u}</option>)}
+                </Select>
+              </Field>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge tone={a.status === 'active' ? 'green' : 'gray'}>{a.status}</Badge>
-              <Toggle checked={a.status === 'active'} onChange={() => toggleAutomation(a.id)} />
+          )}
+
+          {/* ---- Conditions ---- */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="label mb-0">Conditions (optional)</label>
+              <div className="flex items-center gap-2">
+                {(form.conditions?.length ?? 0) > 1 && (
+                  <Select
+                    className="!w-auto py-1 text-xs"
+                    value={form.conditionLogic}
+                    onChange={(e) => setForm({ ...form, conditionLogic: e.target.value as ConditionLogic })}
+                  >
+                    {CONDITION_LOGIC_VALUES.map((l) => <option key={l} value={l}>Match {l}</option>)}
+                  </Select>
+                )}
+                <Button variant="secondary" onClick={addCondition} className="!px-2 !py-1 text-xs"><Plus size={13} /> Condition</Button>
+              </div>
+            </div>
+            {!form.conditions?.length && <p className="text-xs text-ink-400">No conditions — the rule always fires when the trigger occurs.</p>}
+            <div className="space-y-2">
+              {(form.conditions ?? []).map((c, i) => (
+                <div key={i} className="flex items-center gap-2 rounded-lg border border-ink-100 p-2">
+                  <Input className="flex-1" placeholder="field, e.g. lead.score" value={c.field} onChange={(e) => setCondition(i, { field: e.target.value })} />
+                  <Select className="!w-44" value={c.operator} onChange={(e) => setCondition(i, { operator: e.target.value as ConditionOperator })}>
+                    {CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{op}</option>)}
+                  </Select>
+                  <Input className="flex-1" placeholder="value" value={String(c.value ?? '')} onChange={(e) => setCondition(i, { value: e.target.value })} />
+                  <Button variant="ghost" onClick={() => removeCondition(i)}><Trash2 size={14} className="text-red-500" /></Button>
+                </div>
+              ))}
             </div>
           </div>
-        ))}
-      </div>
-    </Card>
+
+          {/* ---- Actions ---- */}
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="label mb-0">Actions</label>
+              <Button variant="secondary" onClick={addAction} className="!px-2 !py-1 text-xs"><Plus size={13} /> Action</Button>
+            </div>
+            {!form.actions?.length && <p className="text-xs text-red-500">Add at least one action for this rule to do anything.</p>}
+            <div className="space-y-2">
+              {(form.actions ?? []).map((a, i) => (
+                <div key={i} className="rounded-lg border border-ink-100 p-3">
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 shrink-0 text-center text-xs font-semibold text-ink-400">{a.order}</span>
+                    <Select className="flex-1" value={a.type} onChange={(e) => setAction(i, { type: e.target.value as ActionType, params: {} })}>
+                      {ACTION_TYPE_VALUES.map((t) => <option key={t} value={t}>{ACTION_LABEL_MAP[t]}</option>)}
+                    </Select>
+                    <Button variant="ghost" onClick={() => removeAction(i)}><Trash2 size={14} className="text-red-500" /></Button>
+                  </div>
+                  {a.type === 'WAIT' ? (
+                    <div className="mt-2 grid grid-cols-2 gap-2 pl-7">
+                      <Input type="number" min={0} placeholder="Delay value" value={a.delayValue ?? 0} onChange={(e) => setAction(i, { delayValue: Number(e.target.value) })} />
+                      <Select value={a.delayUnit ?? 'minutes'} onChange={(e) => setAction(i, { delayUnit: e.target.value as DelayUnit })}>
+                        {DELAY_UNIT_VALUES.map((u) => <option key={u} value={u}>{u}</option>)}
+                      </Select>
+                    </div>
+                  ) : ACTION_PARAM_FIELDS[a.type].length > 0 ? (
+                    <div className="mt-2 grid grid-cols-2 gap-2 pl-7">
+                      {ACTION_PARAM_FIELDS[a.type].map((f) => (
+                        <Input
+                          key={f.key}
+                          placeholder={f.placeholder ?? f.label}
+                          value={String(a.params?.[f.key] ?? '')}
+                          onChange={(e) => setActionParam(i, f.key, e.target.value)}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ---- History modal ---- */}
+      <Modal open={!!historyRuleId} onClose={() => setHistoryRuleId(null)} title="Execution history" size="lg">
+        {historyLoading ? (
+          <div className="py-10 text-center text-sm text-ink-400">Loading…</div>
+        ) : historyEntries.length === 0 ? (
+          <EmptyState title="No runs yet" description="This rule hasn't executed — trigger it or use the test run button." />
+        ) : (
+          <div className="space-y-2">
+            {historyEntries.map((h) => (
+              <div key={h.id} className="rounded-lg border border-ink-100 p-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <Badge tone={h.status === 'SUCCESS' ? 'green' : h.status === 'PARTIAL' ? 'amber' : h.status === 'SKIPPED' ? 'gray' : 'red'}>{h.status}</Badge>
+                  <span className="text-xs text-ink-400">{formatDateTime(h.startedAt)} · {h.duration}ms</span>
+                </div>
+                <p className="mt-1 text-xs text-ink-500">{h.actionsExecuted} action(s) executed{h.error ? ` — ${h.error}` : ''}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
+    </div>
   );
 }
 
@@ -1678,42 +2079,94 @@ function LogsTab() {
 }
 
 // ---- Analytics -------------------------------------------------------------
+/**
+ * SOURCE: src/modules/whatsapp/submodules/whatsappAnalytics/*
+ *
+ * Previously this tab computed everything from the local seed-data store
+ * (useDb()) instead of the real backend analytics module -- so it never
+ * reflected actual tenant activity, and "Template performance" was
+ * Math.random() on every render. Now backed by whatsappAnalyticsApi.
+ */
 function AnalyticsTab() {
-  const { db, tenantId } = useDb();
-  const convos = db.conversations.filter((c) => c.tenant_id === tenantId);
-  const msgs = db.messages.filter((m) => m.tenant_id === tenantId);
-  const sent = msgs.filter((m) => m.direction === 'outbound').length;
-  const campaigns = db.campaigns.filter((c) => c.tenant_id === tenantId);
-  const totalSent = campaigns.reduce((s, c) => s + c.metrics.sent, 0);
-  const totalDelivered = campaigns.reduce((s, c) => s + c.metrics.delivered, 0);
-  const totalRead = campaigns.reduce((s, c) => s + c.metrics.read, 0);
-  const totalReplied = campaigns.reduce((s, c) => s + c.metrics.replied, 0);
-  const revenue = campaigns.reduce((s, c) => s + c.metrics.revenue, 0);
+  const { tenantId } = useDb();
 
-  const trend = conversationsTrend(db, tenantId);
-  const replyByCampaign = campaigns.slice(0, 6).map((c) => ({ name: c.name.slice(0, 12), value: c.metrics.replied }));
-  const tplPerf = db.templates.filter((t) => t.tenant_id === tenantId).slice(0, 6).map((t) => ({ name: t.template_name.slice(0, 12), value: Math.floor(Math.random() * 80) + 20 }));
+  const [dashboard, setDashboard] = useState<DashboardAnalytics | null>(null);
+  const [campaignStats, setCampaignStats] = useState<CampaignAnalytics | null>(null);
+  const [templateStats, setTemplateStats] = useState<TemplateAnalytics | null>(null);
+  const [conversationStats, setConversationStats] = useState<ConversationAnalytics | null>(null);
+  const [trends, setTrends] = useState<Trends | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    Promise.all([
+      whatsappAnalyticsApi.dashboard(),
+      whatsappAnalyticsApi.campaigns(),
+      whatsappAnalyticsApi.templates(),
+      whatsappAnalyticsApi.conversations(),
+      whatsappAnalyticsApi.trends('DAILY'),
+    ])
+      .then(([d, c, t, conv, tr]) => {
+        if (cancelled) return;
+        setDashboard(d);
+        setCampaignStats(c);
+        setTemplateStats(t);
+        setConversationStats(conv);
+        setTrends(tr);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : 'Could not load analytics.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [tenantId]);
+
+  if (loading) {
+    return <div className="py-16 text-center text-sm text-ink-400">Loading analytics…</div>;
+  }
+  if (error) {
+    return <EmptyState title="Could not load analytics" description={error} />;
+  }
+  if (!dashboard || !campaignStats || !templateStats || !conversationStats || !trends) {
+    return <EmptyState title="No analytics yet" description="Analytics will appear once WhatsApp activity starts." />;
+  }
+
+  const trend = trends.conversations.map((p) => ({ name: p.period, value: p.total }));
+  const tplPerf = templateStats.top10Templates.slice(0, 6).map((t) => ({ name: t.templateName.slice(0, 12), value: t.successRate }));
   const funnel = [
-    { name: 'Sent', value: totalSent }, { name: 'Delivered', value: totalDelivered },
-    { name: 'Read', value: totalRead }, { name: 'Replied', value: totalReplied },
+    { name: 'Sent', value: campaignStats.recipients },
+    { name: 'Delivered', value: campaignStats.delivered },
+    { name: 'Read', value: campaignStats.read },
+    { name: 'Failed', value: campaignStats.failedMessages },
   ];
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Conversations" value={convos.length} icon={<MessageSquare size={18} />} accent="#22c55e" />
-        <KpiCard label="Messages sent" value={sent} icon={<Send size={18} />} accent="#6366f1" />
-        <KpiCard label="Delivery rate" value={percent(totalSent ? (totalDelivered / totalSent) * 100 : 0)} icon={<CheckCircle2 size={18} />} accent="#3b82f6" />
-        <KpiCard label="Reply rate" value={percent(totalRead ? (totalReplied / totalRead) * 100 : 0)} icon={<MessageSquare size={18} />} accent="#8b5cf6" />
-        <KpiCard label="Read rate" value={percent(totalDelivered ? (totalRead / totalDelivered) * 100 : 0)} icon={<CheckCircle2 size={18} />} accent="#06b6d4" />
-        <KpiCard label="Avg response" value="14m" icon={<RefreshCw size={18} />} accent="#14b8a6" />
-        <KpiCard label="WA Revenue" value={formatCurrency(revenue)} icon={<Server size={18} />} accent="#10b981" />
-        <KpiCard label="Pending replies" value={convos.filter((c) => c.unread_count > 0).length} icon={<MessageSquare size={18} />} accent="#f97316" />
+        <KpiCard label="Conversations" value={dashboard.totalConversations} icon={<MessageSquare size={18} />} accent="#22c55e" />
+        <KpiCard label="Messages sent" value={dashboard.outgoingMessages} icon={<Send size={18} />} accent="#6366f1" />
+        <KpiCard label="Delivery rate" value={percent(dashboard.deliverySuccessRate)} icon={<CheckCircle2 size={18} />} accent="#3b82f6" />
+        <KpiCard label="Campaign success rate" value={percent(campaignStats.successRate)} icon={<MessageSquare size={18} />} accent="#8b5cf6" />
+        <KpiCard label="Read rate" value={percent(dashboard.readRate)} icon={<CheckCircle2 size={18} />} accent="#06b6d4" />
+        <KpiCard label="Active automations" value={dashboard.activeAutomations} icon={<RefreshCw size={18} />} accent="#14b8a6" />
+        <KpiCard label="Templates" value={dashboard.templates} icon={<Server size={18} />} accent="#10b981" />
+        <KpiCard label="Pending replies" value={conversationStats.unread} icon={<MessageSquare size={18} />} accent="#f97316" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <LineChartCard title="Conversations over time" data={trend} color="#22c55e" area />
-        <BarChartCard title="Reply rate by campaign" data={replyByCampaign} color="#8b5cf6" />
-        <BarChartCard title="Template performance" data={tplPerf} color="#6366f1" />
+        <BarChartCard title="Campaigns by status" data={[
+          { name: 'Running', value: campaignStats.running },
+          { name: 'Scheduled', value: campaignStats.scheduled },
+          { name: 'Completed', value: campaignStats.completed },
+          { name: 'Failed', value: campaignStats.failed },
+        ]} color="#8b5cf6" />
+        <BarChartCard title="Template success rate (top 6)" data={tplPerf} color="#6366f1" />
         <DonutChartCard title="Message delivery funnel" data={funnel} />
       </div>
     </div>
