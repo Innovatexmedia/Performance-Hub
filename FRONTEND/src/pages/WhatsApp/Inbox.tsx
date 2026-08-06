@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { MessageSquarePlus, Tag, UserPlus, StickyNote, Search } from 'lucide-react';
 import { Avatar, Badge, StatusBadge, Button, Select, cn } from '@/components/ui';
@@ -35,6 +35,7 @@ export function Inbox() {
   const {
     details, notes, loading: detailLoading, refetch: refetchDetails,
     sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag,
+    loadOlder, loadingOlder,
   } = useConversationDetails(activeId);
 
   // Realtime: a message anywhere should refresh the sidebar (last_message_at,
@@ -62,6 +63,82 @@ export function Inbox() {
   const active = details?.conversation ?? null;
   const leadContext = details?.leadContext ?? null;
   const messages = details?.messages ?? [];
+
+  // Real WhatsApp-like scroll behavior, not just "always jump to bottom":
+  //  - Switching conversations: instant snap, no animation (matches how
+  //    WhatsApp opens a chat -- animating through possibly thousands of
+  //    messages would look slow and janky, so it just snaps).
+  //  - A new message arriving in the conversation you're already viewing:
+  //    smooth scroll down, but ONLY if you were already at/near the
+  //    bottom. If you've scrolled up to read older messages, nothing
+  //    force-scrolls you away from what you're reading -- exactly like
+  //    real WhatsApp never yanks you down mid-read.
+  //  - Scrolling near the TOP loads the next batch of older messages
+  //    (real infinite-scroll-up, same as WhatsApp's own chat history) --
+  //    and preserves exactly where you were looking, since prepending
+  //    older messages above your current view would otherwise silently
+  //    shove the whole conversation down and disorient you.
+  //  - useLayoutEffect (not useEffect) so the scroll position is already
+  //    correct before the browser paints -- no visible flash of the top
+  //    of the conversation before it snaps down.
+  const containerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const isNearBottomRef = useRef(true);
+  const prevScrollHeightRef = useRef<number | null>(null);
+  // True whenever the NEXT time messages actually change should be an
+  // instant snap, not a smooth scroll. Set the moment the user switches
+  // conversations (activeId changes) -- but the real message data for
+  // that conversation doesn't arrive until the async fetch resolves,
+  // which is a LATER, separate render. Without splitting these into two
+  // effects, "did we just switch conversations" was being computed at the
+  // same time as "did messages change" -- which fired once prematurely
+  // (while the OLD conversation's messages were still showing, comparing
+  // activeId against its previous value) and then again when the new
+  // messages actually arrived, by which point the switch had already been
+  // marked "handled" -- so the real snap-to-bottom for the NEW
+  // conversation incorrectly fell through to the smooth-scroll branch
+  // instead, producing a visible flash of the top followed by a smooth
+  // slide down.
+  const pendingSnapRef = useRef(true);
+
+  const handleScroll = () => {
+    const el = containerRef.current;
+    if (!el) return;
+    isNearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (el.scrollTop < 80 && !loadingOlder) {
+      prevScrollHeightRef.current = el.scrollHeight;
+      void loadOlder();
+    }
+  };
+
+  // Fires immediately on conversation switch, independent of when the
+  // actual message data shows up.
+  useEffect(() => {
+    pendingSnapRef.current = true;
+    isNearBottomRef.current = true;
+  }, [activeId]);
+
+  // After older messages are prepended, restore the exact same visual
+  // position instead of letting the browser reset scrollTop to 0 (which
+  // is what happens by default when content is added above the fold).
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || prevScrollHeightRef.current == null) return;
+    el.scrollTop = el.scrollHeight - prevScrollHeightRef.current;
+    prevScrollHeightRef.current = null;
+  }, [messages]);
+
+  // Fires whenever the actual message array changes -- for a conversation
+  // switch, this is the LATER render where the real data has arrived, not
+  // the one where activeId first changed.
+  useLayoutEffect(() => {
+    if (pendingSnapRef.current) {
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+      pendingSnapRef.current = false;
+    } else if (isNearBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+    }
+  }, [messages]);
 
   const handleSimulateInbound = async () => {
     try {
@@ -154,7 +231,10 @@ export function Inbox() {
               </div>
             </div>
 
-            <div className="max-h-[50vh] space-y-2 overflow-y-auto bg-ink-50/60 p-4" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)', backgroundSize: '24px 24px' }}>
+            <div ref={containerRef} onScroll={handleScroll} className="max-h-[50vh] space-y-2 overflow-y-auto bg-ink-50/60 p-4" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)', backgroundSize: '24px 24px' }}>
+              {loadingOlder && (
+                <p className="py-2 text-center text-xs text-ink-400">Loading older messages…</p>
+              )}
               {messages.map((m) => (
                 <div key={m.id} className={cn('flex', m.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
                   <div className={cn(
@@ -170,6 +250,7 @@ export function Inbox() {
                 </div>
               ))}
               {messages.length === 0 && <p className="py-8 text-center text-sm text-ink-400">No messages yet — send the first one below.</p>}
+              <div ref={bottomRef} />
             </div>
 
             <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-2">

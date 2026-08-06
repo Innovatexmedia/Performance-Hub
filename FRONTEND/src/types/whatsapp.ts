@@ -85,6 +85,13 @@ export interface ConversationDetails {
   conversation: Conversation;
   messages: Message[];
   leadContext: LeadContext | null;
+  /** Whether there are older messages beyond the initial batch -- drives infinite-scroll-up in the Inbox. */
+  hasMoreOlder: boolean;
+}
+
+export interface LoadOlderMessagesResult {
+  messages: Message[];
+  hasMoreOlder: boolean;
 }
 
 export interface ConversationNote {

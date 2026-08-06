@@ -1,7 +1,7 @@
 import { apiClientRaw } from '@/lib/apiClient';
 import type {
   Conversation, ConversationDetails, ConversationListQuery, ConversationListResult,
-  ConversationNote, Message, MessageType, SendMessageResult,
+  ConversationNote, Message, MessageType, SendMessageResult, LoadOlderMessagesResult,
 } from '@/types/whatsapp';
 
 /**
@@ -19,6 +19,10 @@ export const whatsappInboxApi = {
 
   getConversationDetails: (id: string) =>
     apiClientRaw.get<ConversationDetails>(`/whatsapp/conversations/${id}`),
+
+  /** Real infinite-scroll-up backing -- fetches messages strictly older than the given timestamp. */
+  loadOlderMessages: (id: string, beforeCreatedAt: string) =>
+    apiClientRaw.get<LoadOlderMessagesResult>(`/whatsapp/conversations/${id}/older-messages`, { before: beforeCreatedAt }),
 
   /** Real, safe entry point for "open WhatsApp for this lead" — used by the Lead Detail drawer's WhatsApp quick action. */
   findOrCreateForLead: (leadId: string) =>

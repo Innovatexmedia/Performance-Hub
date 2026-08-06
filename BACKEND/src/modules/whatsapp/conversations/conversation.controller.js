@@ -30,6 +30,18 @@ export const conversationController = {
     res.json(result);
   }),
 
+  // GET /api/whatsapp/conversations/:id/older-messages?before=<ISO timestamp>
+  // Real backing for infinite-scroll-up in the Inbox.
+  loadOlderMessages: asyncHandler(async (req, res) => {
+    const result = await conversationService.loadOlderMessages(
+      req.context,
+      req.params.id,
+      req.query.before,
+      req.query.limit ? Number(req.query.limit) : undefined,
+    );
+    res.json(result);
+  }),
+
   // POST /api/whatsapp/conversations/:id/assign
   assign: asyncHandler(async (req, res) => {
     const conversation = await conversationService.assign(req.context, req.params.id, req.body.userId);
