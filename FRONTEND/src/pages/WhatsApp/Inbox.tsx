@@ -82,7 +82,6 @@ export function Inbox() {
   //    correct before the browser paints -- no visible flash of the top
   //    of the conversation before it snaps down.
   const containerRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const isNearBottomRef = useRef(true);
   const prevScrollHeightRef = useRef<number | null>(null);
   // True whenever the NEXT time messages actually change should be an
@@ -131,12 +130,24 @@ export function Inbox() {
   // Fires whenever the actual message array changes -- for a conversation
   // switch, this is the LATER render where the real data has arrived, not
   // the one where activeId first changed.
+  //
+  // Uses direct scrollTop assignment on the container, NOT
+  // bottomRef.scrollIntoView(). scrollIntoView() walks up through every
+  // scrollable ancestor to bring the target into view -- if the page
+  // itself is scrollable at that moment (e.g. content above/below the
+  // Inbox), it can end up scrolling the WHOLE PAGE in addition to the
+  // message pane, which looks exactly like "scrolls from the top of the
+  // page down to the current chat" instead of a clean, contained snap
+  // inside just the chat panel. Setting scrollTop directly touches only
+  // this one element, with zero chance of affecting anything outside it.
   useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
     if (pendingSnapRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end' });
+      el.scrollTop = el.scrollHeight;
       pendingSnapRef.current = false;
     } else if (isNearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' });
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }
   }, [messages]);
 
@@ -250,7 +261,6 @@ export function Inbox() {
                 </div>
               ))}
               {messages.length === 0 && <p className="py-8 text-center text-sm text-ink-400">No messages yet — send the first one below.</p>}
-              <div ref={bottomRef} />
             </div>
 
             <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-2">
@@ -267,7 +277,7 @@ export function Inbox() {
                 <Button onClick={() => void handleAddNote()} className="text-xs">Save note</Button>
               </div>
             )}
-            <Composer conversationId={active.id} onSend={sendMessage} />
+            <Composer conversationId={active.id} onSend={sendMessage} messages={messages} leadContext={leadContext} />
           </>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-ink-400">Select a conversation</div>

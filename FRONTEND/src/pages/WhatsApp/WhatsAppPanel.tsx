@@ -27,6 +27,7 @@ import { syncFromProvider } from '@/services/whatsappService';
 import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
+import type { LeadListItem } from '@/types/lead';
 import { useGroups } from '@/hooks/useGroups';
 import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
@@ -317,11 +318,33 @@ function ContactsTab() {
 
 // ---- Groups: own tab, professional CRUD + bulk member management ----------
 function GroupsTab() {
-  const { groups, loading, error, createGroup, updateGroup, deleteGroup, setMembers } = useGroups();
+  const { groups, loading, error, createGroup, updateGroup, deleteGroup } = useGroups();
   // Large limit -- member-management checklist needs the full contact list,
   // not a paginated slice. Fine at current scale; would need a real search-
   // as-you-type server query if the contact base grows much larger.
-  const { leads, loading: leadsLoading } = useLeads({ page: 1, limit: 500 });
+  // Member management deliberately does NOT load the full contact list
+  // into the browser -- at 10k+ contacts that would be slow, wasteful,
+  // and (worse) silently incomplete if capped at some arbitrary limit.
+  // Instead: current members are fetched server-side scoped to just this
+  // group (naturally small regardless of total contact count), and the
+  // "add members" list is a real debounced server-side search bounded to
+  // a handful of results at a time -- the same pattern as any real
+  // contact-picker at scale.
+  const [managingGroup, setManagingGroup] = useState<Group | null>(null);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [debouncedMemberSearch, setDebouncedMemberSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMemberSearch(memberSearch), 300);
+    return () => clearTimeout(t);
+  }, [memberSearch]);
+
+  const { leads: currentMembers, loading: membersLoading, updateLead } = useLeads(
+    managingGroup ? { group_id: managingGroup.id, limit: 200 } : { group_id: '__none__', limit: 1 },
+  );
+  const { leads: searchResults, loading: searchLoading, refetch: refetchSearch } = useLeads(
+    managingGroup ? { search: debouncedMemberSearch.trim() || undefined, limit: 20 } : { group_id: '__none__', limit: 1 },
+  );
+  const leadsLoading = membersLoading || searchLoading;
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', description: '' });
@@ -333,10 +356,8 @@ function GroupsTab() {
 
   const [deletingGroup, setDeletingGroup] = useState<Group | null>(null);
 
-  const [managingGroup, setManagingGroup] = useState<Group | null>(null);
-  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
-  const [memberSearch, setMemberSearch] = useState('');
-  const [savingMembers, setSavingMembers] = useState(false);
+  const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
+  const [removingMember, setRemovingMember] = useState<{ id: string; name: string } | null>(null);
 
   const openCreate = () => { setCreateForm({ name: '', description: '' }); setShowCreate(true); };
 
@@ -383,47 +404,56 @@ function GroupsTab() {
 
   const openManageMembers = (g: Group) => {
     setManagingGroup(g);
-    setSelectedLeadIds(new Set(leads.filter((l) => l.group_id === g.id).map((l) => l.id)));
     setMemberSearch('');
   };
 
-  const toggleMember = (leadId: string) => {
-    setSelectedLeadIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(leadId)) next.delete(leadId); else next.add(leadId);
-      return next;
-    });
-  };
-
-  const filteredLeads = leads.filter((l) =>
-    !memberSearch.trim() || l.name.toLowerCase().includes(memberSearch.trim().toLowerCase()) ||
-    (l.whatsapp_number || l.phone || '').includes(memberSearch.trim()),
-  );
-
-  const selectAllFiltered = () => setSelectedLeadIds((prev) => {
-    const next = new Set(prev);
-    filteredLeads.forEach((l) => next.add(l.id));
-    return next;
-  });
-  const clearAllFiltered = () => setSelectedLeadIds((prev) => {
-    const next = new Set(prev);
-    filteredLeads.forEach((l) => next.delete(l.id));
-    return next;
-  });
-
-  const saveMembers = async () => {
+  // Additive action -- no confirmation needed, matches standard UX
+  // convention (only the destructive removal below asks "are you sure").
+  // If the lead was already in a different group, this silently moves
+  // them (a Lead only ever belongs to one group), which the UI surfaces
+  // clearly via the "Currently in X" note before the click, not as a
+  // surprise afterward.
+  const addMember = async (lead: LeadListItem) => {
     if (!managingGroup) return;
-    setSavingMembers(true);
+    setBusyLeadId(lead.id);
     try {
-      await setMembers(managingGroup.id, Array.from(selectedLeadIds));
-      toast.success('Members updated');
-      setManagingGroup(null);
+      await updateLead(lead.id, { group_id: managingGroup.id });
+      toast.success(`${lead.name} added to ${managingGroup.name}`);
+      // updateLead only auto-refetches the "current members" hook it came
+      // from -- the separate search-results hook has no way to know
+      // anything changed, so without this it keeps showing this exact
+      // person as still addable even though they're now already a member.
+      refetchSearch();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update members');
+      toast.error(err instanceof ApiError ? err.message : 'Could not add member');
     } finally {
-      setSavingMembers(false);
+      setBusyLeadId(null);
     }
   };
+
+  const confirmRemoveMember = async () => {
+    if (!removingMember || !managingGroup) return;
+    setBusyLeadId(removingMember.id);
+    try {
+      await updateLead(removingMember.id, { group_id: null });
+      toast.success(`${removingMember.name} removed from ${managingGroup.name}`);
+      refetchSearch();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not remove member');
+    } finally {
+      setBusyLeadId(null);
+      setRemovingMember(null);
+    }
+  };
+
+  // currentMembers is already server-scoped to this exact group (see the
+  // useLeads call above) -- no client-side filtering needed. filteredLeads
+  // only needs a cheap exclude-current-members pass, since searchResults
+  // is already bounded to a small server-side page, never the full
+  // contact base.
+  const filteredLeads = managingGroup
+    ? searchResults.filter((l) => l.group_id !== managingGroup.id)
+    : [];
 
   if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading groups…</div>;
   if (error) return <div className="py-12 text-center text-sm text-red-600">{error}</div>;
@@ -505,44 +535,90 @@ function GroupsTab() {
         }
       />
 
-      {/* Manage members -- bulk selective add/remove via checklist */}
+      {/* Manage members -- real single add/remove, each action applies
+          immediately (no batch "save" step), with a confirm step before
+          any removal since that's the one destructive action here. */}
       {managingGroup && (
         <Modal open onClose={() => setManagingGroup(null)} title={`Manage members — ${managingGroup.name}`} size="lg"
-          footer={<>
-            <p className="mr-auto self-center text-xs text-ink-500">{selectedLeadIds.size} selected</p>
-            <Button variant="secondary" onClick={() => setManagingGroup(null)}>Cancel</Button>
-            <Button onClick={saveMembers} disabled={savingMembers}>Save members</Button>
-          </>}>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="flex-1" />
-              <Button variant="secondary" className="whitespace-nowrap px-3 py-1.5 text-xs" onClick={selectAllFiltered}>Select all</Button>
-              <Button variant="secondary" className="whitespace-nowrap px-3 py-1.5 text-xs" onClick={clearAllFiltered}>Clear all</Button>
-            </div>
-            {leadsLoading ? (
-              <p className="py-8 text-center text-sm text-ink-400">Loading contacts…</p>
-            ) : filteredLeads.length === 0 ? (
-              <p className="py-8 text-center text-sm text-ink-400">No contacts match.</p>
-            ) : (
-              <div className="max-h-80 overflow-y-auto rounded-xl border border-ink-100">
-                {filteredLeads.map((l) => (
-                  <label key={l.id} className="flex cursor-pointer items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0 hover:bg-ink-50">
-                    <input type="checkbox" checked={selectedLeadIds.has(l.id)} onChange={() => toggleMember(l.id)} className="h-4 w-4 rounded border-ink-300 text-brand-600" />
-                    <Avatar name={l.name} color="#22c55e" size={26} />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
-                      <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+          footer={<Button onClick={() => setManagingGroup(null)}>Done</Button>}>
+          <div className="space-y-5">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Current members ({currentMembers.length})</p>
+              {leadsLoading ? (
+                <p className="py-4 text-center text-sm text-ink-400">Loading…</p>
+              ) : currentMembers.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-ink-200 py-4 text-center text-sm text-ink-400">No members yet — add some below.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto rounded-xl border border-ink-100">
+                  {currentMembers.map((l) => (
+                    <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0">
+                      <Avatar name={l.name} color="#22c55e" size={26} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                        <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        className="whitespace-nowrap border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
+                        disabled={busyLeadId === l.id}
+                        onClick={() => setRemovingMember({ id: l.id, name: l.name })}
+                      >
+                        Remove
+                      </Button>
                     </div>
-                    {l.group_id && l.group_id !== managingGroup.id && (
-                      <span className="whitespace-nowrap text-[10px] text-amber-600">in another group</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-            )}
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Add members</p>
+              <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="mb-2" />
+              {leadsLoading ? (
+                <p className="py-4 text-center text-sm text-ink-400">Loading contacts…</p>
+              ) : filteredLeads.length === 0 ? (
+                <p className="py-4 text-center text-sm text-ink-400">{memberSearch.trim() ? 'No contacts match.' : 'Search by name or number to find someone to add.'}</p>
+              ) : (
+                <div className="max-h-56 overflow-y-auto rounded-xl border border-ink-100">
+                  {filteredLeads.map((l) => {
+                    const otherGroupName = l.group_id ? groups.find((g) => g.id === l.group_id)?.name : null;
+                    return (
+                      <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0 hover:bg-ink-50">
+                        <Avatar name={l.name} color="#94a3b8" size={26} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                          <p className="truncate text-xs text-ink-500">
+                            {l.whatsapp_number || l.phone}
+                            {otherGroupName && <span className="ml-1.5 text-amber-600">· currently in {otherGroupName}</span>}
+                          </p>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          className="whitespace-nowrap px-2.5 py-1 text-xs"
+                          disabled={busyLeadId === l.id}
+                          onClick={() => void addMember(l)}
+                        >
+                          {otherGroupName ? 'Move here' : 'Add'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </Modal>
       )}
+
+      <ConfirmDialog
+        open={!!removingMember}
+        title="Remove member"
+        message={<>Remove <strong>{removingMember?.name}</strong> from <strong>{managingGroup?.name}</strong>? They can be added back at any time.</>}
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => void confirmRemoveMember()}
+        onClose={() => setRemovingMember(null)}
+      />
     </div>
   );
 }
