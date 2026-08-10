@@ -41,6 +41,8 @@ export interface AuthUser {
   status: 'active' | 'inactive' | 'suspended' | 'pending' | 'deleted';
   isActive: boolean;
   isEmailVerified: boolean;
+  /** Individual permission overrides beyond role defaults -- see
+   * rolePermissions.js / team.service.js's updateMemberPermissions. */
   permissions: string[];
   lastLogin: string | null;
   createdAt: string;

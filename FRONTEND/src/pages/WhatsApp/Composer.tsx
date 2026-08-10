@@ -1,37 +1,46 @@
 import { useState } from 'react';
 import { Send, Sparkles, FileText, Wand2, Clock, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { generateWhatsAppReply, rewriteWhatsAppMessage } from '@/services/aiService';
+import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
-import type { MessageType } from '@/types/whatsapp';
+import type { MessageType, Message, LeadContext } from '@/types/whatsapp';
+import type { ReplyGoal, RewriteStyle } from '@/lib/aiReplyAssistantApi';
 
 const VARIABLES = ['{{lead_name}}', '{{company_name}}', '{{offer_name}}', '{{booking_link}}', '{{payment_link}}', '{{sales_rep_name}}', '{{call_date}}', '{{lead_problem}}', '{{campaign_name}}'];
 
-const AI_ACTIONS = [
-  { label: 'Generate reply', mode: 'default' as const },
-  { label: 'Booking message', mode: 'booking' as const },
-  { label: 'Payment reminder', mode: 'payment' as const },
-  { label: 'Objection handling', mode: 'objection' as const },
-  { label: 'Follow-up after call', mode: 'followup' as const },
+const AI_ACTIONS: { label: string; goal: ReplyGoal }[] = [
+  { label: 'Generate reply', goal: '' },
+  { label: 'Booking message', goal: 'booking' },
+  { label: 'Payment reminder', goal: 'payment' },
+  { label: 'Objection handling', goal: 'objection' },
+  { label: 'Follow-up after call', goal: 'follow_up' },
+];
+
+const REWRITE_ACTIONS: { label: string; style: RewriteStyle }[] = [
+  { label: 'Shorter', style: 'SHORTER' },
+  { label: 'Professional', style: 'PROFESSIONAL' },
+  { label: 'Persuasive', style: 'PERSUASIVE' },
 ];
 
 /**
- * Composer -- send is now real (backend). AI Reply/Rewrite buttons are
- * STILL the client-side mock from services/aiService.ts -- that's the
- * "AI Reply Assistant" tab's job (a separate, not-yet-migrated tab with
- * its own real backend at /api/whatsapp/ai/*), not this one. Flagged
- * clearly rather than silently left looking real. Template insert is
- * empty for the same reason -- WhatsApp Templates isn't wired yet either.
+ * Composer -- AI Reply / Rewrite now call the SAME real backend
+ * (/api/whatsapp/ai/*) as the standalone "AI Reply Assistant" tab, using
+ * this conversation's actual message history + the lead's real context,
+ * not the old client-side canned-string mock. Template insert is still
+ * empty -- WhatsApp Templates isn't wired into the Composer yet.
  */
-export function Composer({ conversationId, onSend }: {
+export function Composer({ conversationId, onSend, messages, leadContext }: {
   conversationId: string;
   onSend: (content: string, type?: MessageType) => Promise<{ blocked: boolean }>;
+  messages: Message[];
+  leadContext: LeadContext | null;
 }) {
   const [text, setText] = useState('');
   const [showVars, setShowVars] = useState(false);
   const [showAi, setShowAi] = useState(false);
   const [sending, setSending] = useState(false);
+  const [aiBusy, setAiBusy] = useState<string | null>(null);
 
   const insert = (s: string) => setText((t) => (t ? t + ' ' + s : s));
 
@@ -52,9 +61,44 @@ export function Composer({ conversationId, onSend }: {
     }
   };
 
-  const rewrite = (mode: 'shorter' | 'professional' | 'persuasive') => {
+  // Last 10 turns is plenty of real context for a reply suggestion without
+  // sending an ever-growing conversation to the AI on every keystroke.
+  const recentConversation = () =>
+    messages.slice(-10).map((m) => ({
+      direction: (m.direction === 'inbound' ? 'INBOUND' : 'OUTBOUND') as 'INBOUND' | 'OUTBOUND',
+      content: m.content,
+    }));
+
+  const generateAI = async (goal: ReplyGoal, label: string) => {
+    setAiBusy(label);
+    setShowAi(false);
+    try {
+      const result = await aiReplyAssistantApi.generate({
+        goal,
+        conversation: recentConversation(),
+        lead: leadContext ? { name: leadContext.name, company: leadContext.company } : undefined,
+      });
+      setText(result.generatedReply);
+      if (!result.isLive) toast.warning('Using fallback reply', 'Live AI wasn\'t available -- edit before sending.');
+    } catch (err) {
+      toast.error('Could not generate reply', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setAiBusy(null);
+    }
+  };
+
+  const rewrite = async (style: RewriteStyle, label: string) => {
     if (!text.trim()) return toast.error('Write a message first');
-    setText(rewriteWhatsAppMessage(text, mode));
+    setAiBusy(label);
+    try {
+      const result = await aiReplyAssistantApi.rewrite(text, style);
+      setText(result.rewritten);
+      if (!result.isLive) toast.warning('Using fallback rewrite', 'Live AI wasn\'t available -- edit before sending.');
+    } catch (err) {
+      toast.error('Could not rewrite message', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setAiBusy(null);
+    }
   };
 
   return (
@@ -62,14 +106,13 @@ export function Composer({ conversationId, onSend }: {
       {/* Tool row */}
       <div className="mb-2 flex flex-wrap items-center gap-1.5">
         <div className="relative">
-          <button onClick={() => { setShowAi((v) => !v); setShowVars(false); }} className="inline-flex items-center gap-1 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100">
-            <Sparkles size={13} /> AI Reply <ChevronDown size={12} />
+          <button onClick={() => { setShowAi((v) => !v); setShowVars(false); }} disabled={!!aiBusy} className="inline-flex items-center gap-1 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-60">
+            <Sparkles size={13} className={aiBusy && AI_ACTIONS.some((a) => a.label === aiBusy) ? 'animate-pulse' : ''} /> {aiBusy && AI_ACTIONS.some((a) => a.label === aiBusy) ? 'Thinking…' : 'AI Reply'} <ChevronDown size={12} />
           </button>
           {showAi && (
-            <div className="absolute bottom-10 left-0 z-20 w-52 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
-              <p className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">Preview only — not yet backend-wired</p>
+            <div className="absolute bottom-10 left-0 z-20 w-56 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
               {AI_ACTIONS.map((a) => (
-                <button key={a.label} onClick={() => { setText(generateWhatsAppReply('', a.mode)); setShowAi(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-ink-50">
+                <button key={a.label} onClick={() => void generateAI(a.goal, a.label)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-ink-50">
                   <Sparkles size={14} className="text-brand-500" /> {a.label}
                 </button>
               ))}
@@ -77,9 +120,11 @@ export function Composer({ conversationId, onSend }: {
           )}
         </div>
 
-        <button onClick={() => rewrite('shorter')} className="inline-flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50"><Wand2 size={13} /> Shorter</button>
-        <button onClick={() => rewrite('professional')} className="rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50">Professional</button>
-        <button onClick={() => rewrite('persuasive')} className="rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50">Persuasive</button>
+        {REWRITE_ACTIONS.map((r) => (
+          <button key={r.style} onClick={() => void rewrite(r.style, r.label)} disabled={!!aiBusy} className="inline-flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50 disabled:opacity-60">
+            {r.style === 'SHORTER' && <Wand2 size={13} />} {aiBusy === r.label ? 'Thinking…' : r.label}
+          </button>
+        ))}
 
         <button disabled className="inline-flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-300" title="Templates tab not migrated yet"><FileText size={13} /> Template</button>
 

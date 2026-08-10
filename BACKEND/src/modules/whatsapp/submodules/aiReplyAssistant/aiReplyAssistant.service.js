@@ -16,6 +16,8 @@
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { aiReplyAssistantRepository } from './aiReplyAssistant.repository.js';
 import { templatesService } from '../templates/templates.service.js';
+import { findByKey as findIntegrationByKey } from '../../../integrations/integration.repository.js';
+import { tenantProfileService } from '../../../tenant/tenantProfile.service.js';
 import {
   PROMPT_CATEGORY,
   TONE,
@@ -29,6 +31,79 @@ import {
   MAX_PROMPT_LENGTH,
   MAX_GENERATED_TEXT_LENGTH,
 } from './aiReplyAssistant.constants.js';
+
+// ── Real Gemini call (same pattern as leads/ai/qualification-ai.service.js) ──
+
+const SERVER_GEMINI_API_KEY = () => process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = 'gemini-3.5-flash-lite';
+const geminiUrl = (apiKey) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+
+/**
+ * Resolves which Gemini API key to actually use for this tenant:
+ *   1. The tenant's OWN key, saved via Integrations → Google Gemini
+ *      (config.api_key, real per-tenant storage -- see integration.model.js).
+ *      Previously this was saved but never read by anything ("simulation
+ *      mode" per that page's own disclaimer) -- this is the first real
+ *      consumer of it.
+ *   2. Falls back to the server-wide GEMINI_API_KEY env var if the tenant
+ *      hasn't configured their own (or their integration isn't marked
+ *      'connected').
+ *   3. Returns null if neither exists -- caller falls back to the mock.
+ */
+async function resolveGeminiApiKey(ctx) {
+  try {
+    const integration = ctx?.tenantId ? await findIntegrationByKey(ctx.tenantId, 'gemini') : null;
+    const tenantKey = integration?.config?.api_key;
+    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
+      return tenantKey.trim();
+    }
+  } catch {
+    // DB hiccup looking up the integration -- fall through to the server key rather than fail the whole request.
+  }
+  return SERVER_GEMINI_API_KEY() || null;
+}
+
+/** Plain-text Gemini call -- for generate/rewrite/summarize, which just need natural language back, not structured JSON. */
+async function callGeminiText(prompt, apiKey) {
+  const response = await fetch(geminiUrl(apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 512 },
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Gemini returned empty response');
+  return text.trim();
+}
+
+/** Structured-JSON Gemini call -- for suggestions, which needs 4 distinct fields back. */
+async function callGeminiJSON(prompt, apiKey) {
+  const response = await fetch(geminiUrl(apiKey), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { maxOutputTokens: 512 },
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini API error ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Gemini returned empty response');
+  const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(clean);
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -108,7 +183,7 @@ function paging(query = {}) {
 // To add OpenAI: create providers/openai.js with the same exports and import
 // it in the factory below.
 
-const mockProvider = {
+const createMockProvider = (businessContext) => ({
   async generate({ conversation = [], lead = {}, goal = '', tone = 'Professional', language = 'en' }) {
     const start = Date.now();
     const leadName = lead.name || 'there';
@@ -133,7 +208,7 @@ const mockProvider = {
     };
 
     const opener = toneMap[tone] || toneMap['Professional'];
-    const body   = goalMap[goal] || `Thank you for your interest in InnovateX.`;
+    const body   = goalMap[goal] || `Thank you for your interest in ${businessContext?.name || 'our business'}.`;
 
     const text = `${opener}\n\n${body}\n\nLooking forward to hearing from you, ${leadName}!`;
 
@@ -143,6 +218,7 @@ const mockProvider = {
       confidence:  0.87,
       tokens:      text.split(' ').length * 1.3 | 0,
       latency:     Date.now() - start,
+      isLive:      false,
     };
   },
 
@@ -166,6 +242,7 @@ const mockProvider = {
       provider:  AI_PROVIDER.MOCK,
       tokens:    rewritten.split(' ').length | 0,
       latency:   Date.now() - start,
+      isLive:    false,
     };
   },
 
@@ -186,6 +263,7 @@ const mockProvider = {
       provider: AI_PROVIDER.MOCK,
       tokens:   summary.split(' ').length | 0,
       latency:  Date.now() - start,
+      isLive:   false,
     };
   },
 
@@ -199,26 +277,178 @@ const mockProvider = {
       followUp:           `Hi ${leadName}! Just checking in — were you able to review the information I sent? Happy to jump on a quick call!`,
       provider:           AI_PROVIDER.MOCK,
       latency:            Date.now() - start,
+      isLive:             false,
     };
   },
-};
+});
+
+/**
+ * Real Gemini provider -- same interface/result shape as mockProvider so
+ * nothing else in the service needs to change. Falls back to mockProvider
+ * on any Gemini failure (bad key, rate limit, network issue, malformed
+ * response) rather than surfacing a 500 to the user -- the app should
+ * never actually break because of an AI provider hiccup.
+ */
+const createGeminiProvider = (apiKey, businessContext) => ({
+  async generate({ conversation = [], lead = {}, goal = '', tone = 'Professional', language = 'en' }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no prior conversation history)';
+
+      const businessLine = businessContext?.name
+        ? `You are a helpful, natural-sounding WhatsApp assistant for ${businessContext.name}${businessContext.industry ? ` (${businessContext.industry})` : ''}.${businessContext.description ? ` About this business: ${businessContext.description}` : ''}`
+        : 'You are a helpful, natural-sounding WhatsApp sales assistant.';
+
+      const prompt = `${businessLine}
+
+CONVERSATION SO FAR:
+${history}
+
+LEAD CONTEXT:
+- Name: ${lead.name || 'the customer'}
+- Company: ${lead.company || 'unknown'}
+
+TASK: Write a WhatsApp reply.
+- Tone: ${tone}
+- Goal: ${goal || 'continue the conversation naturally and helpfully'}
+- Language: ${language}
+
+Rules: Sound like a real person texting, not a corporate email. Keep it under 60 words. No markdown, no headers -- just the message text, ready to send as-is. Do not include quotation marks around it.`;
+
+      const text = await callGeminiText(prompt, apiKey);
+      return { text, provider: AI_PROVIDER.GEMINI, confidence: 0.9, tokens: text.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Gemini generate() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).generate({ conversation, lead, goal, tone, language });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async rewrite({ text = '', style = 'PROFESSIONAL' }) {
+    const start = Date.now();
+    try {
+      const styleInstruction = {
+        SHORTER: 'Make it noticeably shorter while keeping the core message.',
+        LONGER: 'Expand it with a bit more helpful detail.',
+        PROFESSIONAL: 'Rewrite it in a more professional, polished tone.',
+        FRIENDLY: 'Rewrite it in a warmer, more friendly and casual tone.',
+        PERSUASIVE: 'Rewrite it to be more persuasive and compelling, without being pushy.',
+        FORMAL: 'Rewrite it in a formal, business-letter style tone.',
+        EMPATHETIC: 'Rewrite it to lead with empathy and understanding.',
+        GRAMMAR: 'Fix any grammar, spelling, or punctuation issues -- keep the meaning and tone exactly the same.',
+        SIMPLIFY: 'Simplify the language -- shorter words, simpler sentences, same meaning.',
+      }[style] || 'Rewrite it to be clearer and more polished.';
+
+      const prompt = `Rewrite this WhatsApp message. ${styleInstruction}
+
+ORIGINAL MESSAGE:
+${text}
+
+Return ONLY the rewritten message, ready to send as-is -- no explanation, no quotation marks, no markdown.`;
+
+      const rewritten = await callGeminiText(prompt, apiKey);
+      return { text: rewritten, provider: AI_PROVIDER.GEMINI, tokens: rewritten.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Gemini rewrite() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).rewrite({ text, style });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async summarize({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Summarize this WhatsApp conversation with ${lead.name || 'a customer'} in 2-3 sentences. Include overall sentiment and a recommended next step.
+
+CONVERSATION:
+${history}
+
+Return ONLY the summary text, no markdown, no headers.`;
+
+      const summary = await callGeminiText(prompt, apiKey);
+      return { summary, provider: AI_PROVIDER.GEMINI, tokens: summary.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Gemini summarize() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).summarize({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async suggestions({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Based on this WhatsApp conversation with ${lead.name || 'a customer'}, suggest next steps.
+
+CONVERSATION:
+${history}
+
+Return ONLY a valid JSON object, no markdown, no explanation:
+{
+  "nextAction": "<one sentence recommended next action>",
+  "bookingSuggestion": "<one sentence suggestion for booking a call, or empty string if not relevant>",
+  "paymentSuggestion": "<one sentence suggestion about payment follow-up, or empty string if not relevant>",
+  "followUp": "<a ready-to-send WhatsApp follow-up message>"
+}`;
+
+      const result = await callGeminiJSON(prompt, apiKey);
+      return {
+        nextAction: result.nextAction || '',
+        bookingSuggestion: result.bookingSuggestion || '',
+        paymentSuggestion: result.paymentSuggestion || '',
+        followUp: result.followUp || '',
+        provider: AI_PROVIDER.GEMINI,
+        latency: Date.now() - start,
+        isLive: true,
+      };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Gemini suggestions() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).suggestions({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+});
 
 /**
  * Provider factory.
  * Add new providers here — the rest of the service is unchanged.
+ *
+ * Real Gemini is used whenever a usable API key is available -- checked
+ * in order: the tenant's OWN key (Integrations → Google Gemini), then the
+ * server-wide GEMINI_API_KEY env var. Explicitly setting AI_PROVIDER=MOCK
+ * still forces mock even with a key present, for local testing without
+ * burning real API calls.
  */
-function getProvider(name = ACTIVE_AI_PROVIDER) {
+async function getProvider(ctx, name = ACTIVE_AI_PROVIDER) {
+  // Real business context (name/description/industry) -- replaces the
+  // previously hardcoded "InnovateX Revenue OS" in every generated prompt
+  // with whatever the TENANT actually told us about their own business
+  // (see tenant/tenantProfile.service.js). Never throws -- returns null on
+  // any lookup failure, and every prompt already handles a null context
+  // gracefully (falls back to generic wording, not an error).
+  const businessContext = await tenantProfileService.getContextForAI(ctx?.tenantId);
+
+  if (name === AI_PROVIDER.MOCK) return createMockProvider(businessContext);
+  const apiKey = await resolveGeminiApiKey(ctx);
+  if (apiKey) return createGeminiProvider(apiKey, businessContext);
   switch (name) {
     case AI_PROVIDER.MOCK:
-      return mockProvider;
+      return createMockProvider(businessContext);
     // case AI_PROVIDER.OPENAI:
     //   return openaiProvider;   // import and implement in providers/openai.js
-    // case AI_PROVIDER.GEMINI:
-    //   return geminiProvider;
     // case AI_PROVIDER.CLAUDE:
     //   return claudeProvider;
     default:
-      return mockProvider;
+      return createMockProvider(businessContext);
   }
 }
 
@@ -331,7 +561,7 @@ export const aiReplyAssistantService = {
   // ── AI Generation ──────────────────────────────────────────────────────────
 
   async generateReply(ctx, { conversation, lead, goal, tone, language, variables = {} }) {
-    const provider = getProvider();
+    const provider = await getProvider(ctx);
     const result   = await provider.generate({ conversation, lead, goal, tone, language });
     // Replace variables in the generated text.
     result.text = interpolate(result.text, { ...this._leadVariables(lead), ...variables });
@@ -341,7 +571,7 @@ export const aiReplyAssistantService = {
   },
 
   async rewriteText(ctx, { text, style, variables = {} }) {
-    const provider  = getProvider();
+    const provider  = await getProvider(ctx);
     const result    = await provider.rewrite({ text, style });
     result.rewritten = interpolate(result.text, variables);
     delete result.text;
@@ -349,12 +579,12 @@ export const aiReplyAssistantService = {
   },
 
   async summarizeConversation(ctx, { conversation, lead }) {
-    const provider = getProvider();
+    const provider = await getProvider(ctx);
     return provider.summarize({ conversation, lead });
   },
 
   async generateSuggestions(ctx, { conversation, lead, variables = {} }) {
-    const provider = getProvider();
+    const provider = await getProvider(ctx);
     const result   = await provider.suggestions({ conversation, lead });
     // Interpolate variables into all text fields.
     const vars = { ...this._leadVariables(lead), ...variables };

@@ -5,12 +5,19 @@
  * calculateAudience returns a breakdown of eligible vs excluded contacts.
  * Excluded contacts are logged as individual activity records.
  * templateApprovalService.assertUsable enforces PROVIDER_APPROVED templates.
+ *
+ * Audience resolution queries the real Lead collection (the data your
+ * Contacts/Leads tab and the real inbound-webhook pipeline actually
+ * populate) -- NOT the separate, unused WhatsAppContact collection this
+ * file previously queried.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
-import { WhatsAppContact } from '../contacts/contacts.model.js';
+import { Lead } from '../../../leads/lead/lead.model.js';
+import { CONSENT_STATUS as LEAD_CONSENT_STATUS } from '../../../leads/lead/lead.constants.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
+import { campaignSenderService } from '../../campaignSender.service.js';
 import { broadcastsRepository } from './broadcasts.repository.js';
 import {
   BROADCAST_STATUS,
@@ -18,8 +25,6 @@ import {
   ALLOWED_TRANSITIONS,
   READ_ONLY_STATUSES,
   LOCKED_STATUSES,
-  CONSENTED_STATUS,
-  OPTED_OUT_STATUS,
   SEARCHABLE_FIELDS,
   SORTABLE_FIELDS,
   DEFAULT_PAGE,
@@ -99,33 +104,35 @@ function paging(query = {}) {
 
 /**
  * Build the MongoDB query for eligible recipients.
- * Broadcasts enforce: consentStatus=CONSENTED + optOutStatus=ACTIVE only.
+ * Broadcasts enforce: consent_status='granted' + opt_out_status is not true.
  */
-function buildBaseContactQuery(tenantId, filters = {}) {
+export function buildBaseContactQuery(tenantId, filters = {}) {
   const query = {
-    tenantId,
-    consentStatus: CONSENTED_STATUS,
-    optOutStatus:  { $ne: OPTED_OUT_STATUS },
+    tenant_id: tenantId,
+    consent_status: LEAD_CONSENT_STATUS.GRANTED,
+    opt_out_status: { $ne: true },
   };
 
   if (filters.tags?.length)         query.tags = { $all: filters.tags };
   if (filters.source)               query.source = filters.source;
-  if (filters.assignedUserId)       query.assignedUserId = filters.assignedUserId;
-  if (filters.status)               query.status = filters.status;
+  if (filters.assignedUserId)       query.assigned_user_id = filters.assignedUserId;
+  if (filters.groupId)              query.group_id = filters.groupId;
+  // NOTE: filters.status intentionally not mapped -- see comment in
+  // campaigns.service.js buildAudienceQuery for why.
   if (filters.minimumScore !== undefined || filters.maximumScore !== undefined) {
-    query.score = {};
-    if (filters.minimumScore !== undefined) query.score.$gte = Number(filters.minimumScore);
-    if (filters.maximumScore !== undefined) query.score.$lte = Number(filters.maximumScore);
+    query.qualification_score = {};
+    if (filters.minimumScore !== undefined) query.qualification_score.$gte = Number(filters.minimumScore);
+    if (filters.maximumScore !== undefined) query.qualification_score.$lte = Number(filters.maximumScore);
   }
   if (filters.createdAfter || filters.createdBefore) {
-    query.createdAt = {};
-    if (filters.createdAfter)  query.createdAt.$gte = new Date(filters.createdAfter);
-    if (filters.createdBefore) query.createdAt.$lte = new Date(filters.createdBefore);
+    query.created_at = {};
+    if (filters.createdAfter)  query.created_at.$gte = new Date(filters.createdAfter);
+    if (filters.createdBefore) query.created_at.$lte = new Date(filters.createdBefore);
   }
   if (filters.lastContactedAfter || filters.lastContactedBefore) {
-    query.lastContactedAt = {};
-    if (filters.lastContactedAfter)  query.lastContactedAt.$gte = new Date(filters.lastContactedAfter);
-    if (filters.lastContactedBefore) query.lastContactedAt.$lte = new Date(filters.lastContactedBefore);
+    query.last_contacted_at = {};
+    if (filters.lastContactedAfter)  query.last_contacted_at.$gte = new Date(filters.lastContactedAfter);
+    if (filters.lastContactedBefore) query.last_contacted_at.$lte = new Date(filters.lastContactedBefore);
   }
   return query;
 }
@@ -143,38 +150,40 @@ async function resolveAudienceSummary(tenantId, audience = {}) {
 
   // Total contacts that match the raw filters (no consent filter).
   const rawQuery = {
-    tenantId,
-    ...(filters.tags?.length         ? { tags: { $all: filters.tags } }           : {}),
-    ...(filters.source               ? { source: filters.source }                  : {}),
-    ...(filters.assignedUserId       ? { assignedUserId: filters.assignedUserId }  : {}),
-    ...(filters.status               ? { status: filters.status }                  : {}),
+    tenant_id: tenantId,
+    ...(filters.tags?.length         ? { tags: { $all: filters.tags } }             : {}),
+    ...(filters.source               ? { source: filters.source }                    : {}),
+    ...(filters.assignedUserId       ? { assigned_user_id: filters.assignedUserId }  : {}),
+    ...(filters.groupId              ? { group_id: filters.groupId }                  : {}),
+    // NOTE: filters.status intentionally not mapped -- see comment in
+    // campaigns.service.js buildAudienceQuery for why.
   };
   if (filters.minimumScore !== undefined || filters.maximumScore !== undefined) {
-    rawQuery.score = {};
-    if (filters.minimumScore !== undefined) rawQuery.score.$gte = Number(filters.minimumScore);
-    if (filters.maximumScore !== undefined) rawQuery.score.$lte = Number(filters.maximumScore);
+    rawQuery.qualification_score = {};
+    if (filters.minimumScore !== undefined) rawQuery.qualification_score.$gte = Number(filters.minimumScore);
+    if (filters.maximumScore !== undefined) rawQuery.qualification_score.$lte = Number(filters.maximumScore);
   }
   if (includedContacts?.length) rawQuery._id = { $in: includedContacts };
   if (excludedContacts?.length) rawQuery._id = { ...(rawQuery._id || {}), $nin: excludedContacts };
 
   const [totalMatched, optedOutCount, suppressedCount, recipientCount] = await Promise.all([
-    WhatsAppContact.countDocuments(rawQuery),
+    Lead.countDocuments(rawQuery),
 
     // Opted-out within that raw set.
-    WhatsAppContact.countDocuments({ ...rawQuery, optOutStatus: OPTED_OUT_STATUS }),
+    Lead.countDocuments({ ...rawQuery, opt_out_status: true }),
 
     // Non-consented (but not opted-out) within that raw set.
-    WhatsAppContact.countDocuments({
+    Lead.countDocuments({
       ...rawQuery,
-      optOutStatus:  { $ne: OPTED_OUT_STATUS },
-      consentStatus: { $ne: CONSENTED_STATUS },
+      opt_out_status:  { $ne: true },
+      consent_status: { $ne: LEAD_CONSENT_STATUS.GRANTED },
     }),
 
     // Eligible (consent + not opted-out) within that raw set.
-    WhatsAppContact.countDocuments({
+    Lead.countDocuments({
       ...rawQuery,
-      consentStatus: CONSENTED_STATUS,
-      optOutStatus:  { $ne: OPTED_OUT_STATUS },
+      consent_status: LEAD_CONSENT_STATUS.GRANTED,
+      opt_out_status:  { $ne: true },
     }),
   ]);
 
@@ -410,6 +419,14 @@ export const broadcastsService = {
         recipientCount:         audienceSummary.recipientCount,
         excludedRecipientCount: audienceSummary.excludedRecipientCount,
       });
+
+    campaignSenderService
+      .dispatch(ctx, { id, kind: 'broadcast' })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('campaignSenderService.dispatch threw unexpectedly for broadcast', id, err);
+      });
+
     return toBroadcastDTO(updated);
   },
 
@@ -473,12 +490,12 @@ export const broadcastsService = {
    * Throws 403 with the reason if not, and logs the exclusion.
    */
   async validateRecipients(ctx, broadcastId, contactOptOutStatus, contactConsentStatus) {
-    if (contactOptOutStatus === OPTED_OUT_STATUS) {
+    if (contactOptOutStatus === true) {
       await logActivity(ctx, { _id: broadcastId }, ACTIVITY_TYPE.WHATSAPP_CONTACT_EXCLUDED_OPT_OUT,
         'Contact skipped: opted out');
       throw new AppError(403, 'Contact has opted out of WhatsApp messaging');
     }
-    if (contactConsentStatus !== CONSENTED_STATUS) {
+    if (contactConsentStatus !== LEAD_CONSENT_STATUS.GRANTED) {
       await logActivity(ctx, { _id: broadcastId }, ACTIVITY_TYPE.WHATSAPP_CONTACT_EXCLUDED_SUPPRESSED,
         'Contact skipped: no consent');
       throw new AppError(403, 'Contact has not given consent for WhatsApp messaging');

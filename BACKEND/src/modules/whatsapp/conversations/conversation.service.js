@@ -186,14 +186,18 @@ export const conversationService = {
   async getConversationDetails(ctx, id) {
     const conversation = await this.getConversationOrThrow(ctx, id);
 
-    const [messages] = await Promise.all([
-      messageRepository.findByConversation(ctx.tenantId, id, {
-        sort: { created_at: 1 },
-        skip: 0,
-        limit: 200,
-      }),
-      messageRepository.markConversationRead(ctx.tenantId, id),
+    // FIX: this used to be sort:ascending + skip:0 + limit:200 -- for any
+    // conversation with MORE than 200 messages, that returned the OLDEST
+    // 200, silently dropping every actually-recent message from the
+    // initial view. Fetch the newest N instead (descending), then reverse
+    // for correct oldest-to-newest display order.
+    const MESSAGE_PAGE_SIZE = 50;
+    const [recentDesc, totalCount] = await Promise.all([
+      messageRepository.findMostRecent(ctx.tenantId, id, MESSAGE_PAGE_SIZE),
+      messageRepository.countByConversation(ctx.tenantId, id),
     ]);
+    await messageRepository.markConversationRead(ctx.tenantId, id);
+    const messages = recentDesc.slice().reverse();
 
     const fresh = await conversationRepository.resetUnread(ctx.tenantId, id);
     const leadContext = await buildLeadContext(ctx, conversation.lead_id);
@@ -206,6 +210,32 @@ export const conversationService = {
         return { id: String(_id), ...rest };
       }),
       leadContext,
+      // Lets the frontend know whether "load older messages" (scrolling
+      // up) has anything left to fetch, without a separate round-trip.
+      hasMoreOlder: totalCount > messages.length,
+    };
+  },
+
+  /**
+   * loadOlderMessages -- the real backing for infinite-scroll-up in the
+   * Inbox. Cursor-based on the oldest currently-loaded message's
+   * created_at, so it stays correct regardless of how many new messages
+   * have arrived at the bottom since the conversation was opened.
+   */
+  async loadOlderMessages(ctx, id, beforeCreatedAt, limit = 50) {
+    await this.getConversationOrThrow(ctx, id);
+    if (!beforeCreatedAt) throw AppError.badRequest('beforeCreatedAt is required');
+
+    const olderDesc = await messageRepository.findOlderThan(ctx.tenantId, id, new Date(beforeCreatedAt), limit);
+    const messages = olderDesc.slice().reverse();
+
+    return {
+      messages: messages.map((m) => {
+        const o = m.toObject();
+        const { _id, ...rest } = o;
+        return { id: String(_id), ...rest };
+      }),
+      hasMoreOlder: messages.length === limit,
     };
   },
 

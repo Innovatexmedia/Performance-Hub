@@ -31,10 +31,14 @@ import Membership, { MEMBERSHIP_STATUS } from '../auth/models/Membership.js';
 import { Lead }         from '../leads/lead/lead.model.js';
 import { AppError }     from '../../shared/helpers/lead.helpers.js';
 import { ROLES, ROLE_HIERARCHY, isTenantScopedRole } from '../auth/constants/roles.js';
+import { PERMISSIONS } from '../auth/constants/permissions.js';
+import { getRolePermissions } from '../auth/constants/rolePermissions.js';
 import { USER_STATUS, TOKEN_EXPIRY } from '../auth/constants/auth.constants.js';
+import { hashPassword } from '../../utils/password.js';
 import { generateSecureToken, hashToken } from '../../utils/crypto.js';
 import * as tokenRepo    from '../auth/repositories/token.repository.js';
 import { sendTeamInvite } from '../auth/services/email.service.js';
+import { emitToUser } from '../../realtime/socket.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -114,6 +118,7 @@ export const getTeamMembers = async (tenantId) => {
     profileImage:    u.profileImage,
     lastLogin:       u.lastLogin,
     createdAt:       u.createdAt,
+    permissions:     u.permissions,
     assignedLeads:   leadCounts[String(u._id)] || 0,
   }));
 
@@ -310,8 +315,140 @@ export const updateMemberRole = async (memberId, newRole, reqUser) => {
     $set: { role: newRole, updatedBy: ctx.userId },
   });
 
+  emitToUser(memberId, 'auth:permissions-updated', { role: updated.role, permissions: updated.permissions });
+
   return updated.getPublicProfile();
 };
+
+// =============================================================================
+// UPDATE TEAM MEMBER PERMISSIONS — granular overrides beyond role defaults
+// =============================================================================
+
+/**
+ * A human-readable catalog of every definable permission, grouped for the
+ * Team page's permissions modal. Purely presentational metadata -- the
+ * actual enforced values are always PERMISSIONS.* from permissions.js.
+ * Platform-only permissions (manage_tenants etc.) are deliberately
+ * excluded -- a tenant owner granting a sales user platform-level access
+ * makes no sense and isn't offered as an option.
+ */
+const PERMISSION_CATALOG = Object.freeze([
+  {
+    group: 'Team & Settings',
+    items: [
+      { value: PERMISSIONS.MANAGE_TEAM, label: 'Manage team members' },
+      { value: PERMISSIONS.MANAGE_SETTINGS, label: 'Manage workspace settings' },
+      { value: PERMISSIONS.MANAGE_INTEGRATIONS, label: 'Manage integrations' },
+    ],
+  },
+  {
+    group: 'Leads & Pipeline',
+    items: [
+      { value: PERMISSIONS.MANAGE_LEADS, label: 'Manage all leads (not just assigned)' },
+      { value: PERMISSIONS.VIEW_LEADS, label: 'View all leads' },
+      { value: PERMISSIONS.UPDATE_LEADS, label: 'Edit leads' },
+      { value: PERMISSIONS.UPDATE_PIPELINE, label: 'Move deals through pipeline' },
+    ],
+  },
+  {
+    group: 'WhatsApp Templates',
+    items: [
+      { value: PERMISSIONS.SUBMIT_TEMPLATES, label: 'Create & submit templates for review' },
+      { value: PERMISSIONS.APPROVE_TEMPLATES, label: 'Approve templates & submit directly to Meta (skips internal review)' },
+      { value: PERMISSIONS.MANAGE_TEMPLATES, label: 'Full template management' },
+    ],
+  },
+  {
+    group: 'Campaigns & Broadcasts',
+    items: [
+      { value: PERMISSIONS.MANAGE_CAMPAIGNS, label: 'Create campaigns/broadcasts' },
+      { value: PERMISSIONS.APPROVE_CAMPAIGNS, label: 'Approve & send campaigns directly (skips owner approval)' },
+    ],
+  },
+  {
+    group: 'Conversations & Bookings',
+    items: [
+      { value: PERMISSIONS.MANAGE_CONVERSATIONS, label: 'Manage WhatsApp conversations' },
+      { value: PERMISSIONS.MANAGE_BOOKINGS, label: 'Manage bookings' },
+      { value: PERMISSIONS.MANAGE_CALLS, label: 'Manage call records' },
+      { value: PERMISSIONS.MANAGE_PAYMENTS, label: 'Manage payments' },
+    ],
+  },
+  {
+    group: 'Automation & AI',
+    items: [
+      { value: PERMISSIONS.MANAGE_AUTOMATIONS, label: 'Manage automation rules' },
+      { value: PERMISSIONS.MANAGE_NURTURE, label: 'Manage nurture sequences' },
+      { value: PERMISSIONS.MANAGE_AI, label: 'Manage AI reply assistant' },
+    ],
+  },
+  {
+    group: 'Reporting',
+    items: [
+      { value: PERMISSIONS.VIEW_DASHBOARD, label: 'View dashboard' },
+      { value: PERMISSIONS.VIEW_REPORTS, label: 'View reports' },
+      { value: PERMISSIONS.MANAGE_REPORTS, label: 'Manage/export reports' },
+      { value: PERMISSIONS.VIEW_ATTRIBUTION, label: 'View attribution' },
+      { value: PERMISSIONS.MANAGE_ATTRIBUTION, label: 'Manage attribution settings' },
+    ],
+  },
+]);
+
+/** GET /api/team/permissions/catalog -- feeds the permissions modal's checklist. */
+export const getPermissionCatalog = () => PERMISSION_CATALOG;
+
+/**
+ * updateMemberPermissions — full replace of a member's permission set.
+ * This is what lets an owner give one specific sales_user extra rights
+ * (e.g. APPROVE_CAMPAIGNS so they can send without waiting for the
+ * owner) without changing their role or affecting anyone else with that
+ * same role -- permissions here are per-user, not per-role.
+ *
+ * RULES (mirrors updateMemberRole's guard shape):
+ *   - Cannot edit your own permissions (self-escalation risk)
+ *   - Cannot edit a member whose role rank >= your own
+ *   - Cannot touch the tenant_owner's permissions unless you ARE super_admin
+ *   - Every value must be a real PERMISSIONS.* string (validator also
+ *     checks this, but re-checked here since this is the actual guard
+ *     that matters for anyone calling the service directly)
+ */
+export const updateMemberPermissions = async (memberId, permissions, reqUser) => {
+  const ctx = buildCtx(reqUser);
+
+  if (String(memberId) === String(ctx.userId)) {
+    throw AppError.badRequest('You cannot change your own permissions');
+  }
+
+  const member = await User.findOne({ _id: memberId, tenantId: ctx.tenantId });
+  if (!member) throw AppError.notFound('Team member not found');
+
+  if (member.role === ROLES.TENANT_OWNER && ctx.role !== ROLES.SUPER_ADMIN) {
+    throw AppError.forbidden('Only Super Admin can change the Tenant Owner\'s permissions');
+  }
+  assertCanManageRole(ctx.role, member.role);
+
+  const validValues = Object.values(PERMISSIONS);
+  const invalid = permissions.filter((p) => !validValues.includes(p));
+  if (invalid.length) {
+    throw AppError.badRequest(`Unknown permission(s): ${invalid.join(', ')}`);
+  }
+
+  const updated = await userRepo.updateById(memberId, {
+    $set: { permissions, updatedBy: ctx.userId },
+  });
+
+  // The whole point: the affected user's live session should reflect this
+  // immediately, not just on their next login. Their frontend listens for
+  // this and silently calls /api/auth/refresh, which re-derives a fresh
+  // JWT from THIS updated DB record (see token.service.js's issueTokenPair
+  // -- it already reads user.permissions fresh, not cached).
+  emitToUser(memberId, 'auth:permissions-updated', { role: updated.role, permissions: updated.permissions });
+
+  return updated.getPublicProfile();
+};
+
+/** Used by the permissions modal to show "reset to role default". */
+export const getRoleDefaultPermissions = (role) => getRolePermissions(role);
 
 // =============================================================================
 // ACTIVATE / DEACTIVATE TEAM MEMBER
@@ -382,5 +519,31 @@ export const getTeamMember = async (memberId, tenantId) => {
 // PRIVATE UTILITIES
 // =============================================================================
 
+/**
+ * generateTempPassword — creates a temp password for invited team members.
+ *
+ * ⚠️ TEMPORARY TESTING OVERRIDE ⚠️
+ * Currently returns a FIXED password instead of a random one, purely so
+ * you can predict new team members' login credentials while testing
+ * locally (no real email sending is wired up yet -- see team.service.js
+ * addTeamMember()'s comment about sendTeamInvite() only logging to
+ * console right now). REVERT THIS before any real/shared use -- a fixed,
+ * predictable password for every new account is a genuine security
+ * issue the moment more than one person can reach this app.
+ *
+ * To revert: restore the random generation below (kept, just commented
+ * out) and delete the fixed return.
+ */
+const generateTempPassword = () => {
+  return 'Test@1234'; // TEMP: fixed for local testing only -- see warning above
+
+  // Original random version -- restore this, delete the line above, when done testing:
+  // const chars  = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
+  // let password = '';
+  // for (let i = 0; i < 12; i++) {
+  //   password += chars.charAt(Math.floor(Math.random() * Math.random()));
+  // }
+  // return password;
+};
 const isValidRole = (role) =>
   Object.values(ROLES).includes(role);

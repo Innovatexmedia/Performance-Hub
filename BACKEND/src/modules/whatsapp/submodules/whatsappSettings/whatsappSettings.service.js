@@ -29,6 +29,7 @@
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import config from '../../../../config/config.js';
 import { whatsappSettingsRepository } from './whatsappSettings.repository.js';
+import { templatesService } from '../templates/templates.service.js';
 import {
   DEFAULT_SETTINGS,
   SENSITIVE_FIELDS,
@@ -622,6 +623,19 @@ export const whatsappSettingsService = {
   async sync(ctx, entity) {
     await this._ensureExists(ctx);
     const now = new Date();
+
+    // TEMPLATES is the only entity with a REAL sync implementation --
+    // it actually calls Meta's GET /message_templates and reconciles our
+    // DB against it (see templatesService.syncFromMeta). CONTACTS/MESSAGES/
+    // PROFILE below remain the original stub: they only stamp a
+    // "last synced" timestamp and don't call any real API yet. Flagged
+    // here explicitly rather than silently -- these three still need
+    // their own real implementations as a separate piece of work.
+    let result = null;
+    if (entity === SYNC_ENTITY.TEMPLATES) {
+      result = await templatesService.syncFromMeta(ctx);
+    }
+
     const setOps = { 'sync.lastSyncAt': now, updatedBy: ctx.userId };
 
     // Stamp the per-entity flag as recently exercised (kept simple + honest).
@@ -638,6 +652,10 @@ export const whatsappSettingsService = {
       syncedAt: now,
       flagField: entityFlag || null,
       settings: sanitize(updated),
+      // null for CONTACTS/MESSAGES/PROFILE -- honestly reflects that
+      // nothing real happened for those yet, rather than implying it did.
+      result,
+      implemented: entity === SYNC_ENTITY.TEMPLATES,
     };
   },
 

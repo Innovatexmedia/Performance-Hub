@@ -1,14 +1,18 @@
 // Shared utilities (adjust paths if your shared utils live elsewhere).
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { hasRole, ROLES } from '../../../auth/constants/roles.js';
+import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 
 // Reused activity system from the Lead module (extended with logEntity).
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE } from '../../../leads/activities/activity.model.js';
 
 import { templatesRepository } from './templates.repository.js';
+import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
+import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
 import {
   TEMPLATE_STATUS,
+  TEMPLATE_CATEGORY_VALUES,
   APPROVAL_STATUS,
   PROVIDER_STATUS,
   HEADER_TYPE,
@@ -195,6 +199,72 @@ async function logTemplate(ctx, template, type, message, meta = {}) {
   );
 }
 
+/**
+ * Meta's real template status values -> our (status, approvalStatus) pair.
+ * Meta also uses IN_APPEAL/APPEALED in some cases; unmapped values fall
+ * back to SUBMITTED_TO_PROVIDER/SUBMITTED rather than silently guessing
+ * ACTIVE/APPROVED for something we don't actually recognize.
+ */
+const META_TEMPLATE_STATUS_MAP = {
+  APPROVED: { status: TEMPLATE_STATUS.ACTIVE, approvalStatus: APPROVAL_STATUS.PROVIDER_APPROVED },
+  REJECTED: { status: TEMPLATE_STATUS.REJECTED, approvalStatus: APPROVAL_STATUS.PROVIDER_REJECTED },
+  PENDING: { status: TEMPLATE_STATUS.SUBMITTED, approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER },
+  PAUSED: { status: TEMPLATE_STATUS.PAUSED, approvalStatus: APPROVAL_STATUS.PAUSED },
+  DISABLED: { status: TEMPLATE_STATUS.PAUSED, approvalStatus: APPROVAL_STATUS.DISABLED },
+};
+
+function mapMetaCategory(metaCategory) {
+  return TEMPLATE_CATEGORY_VALUES.includes(metaCategory) ? metaCategory : 'CUSTOM';
+}
+
+/** Meta's BUTTONS component types line up 1:1 with ours for the common
+ * cases (QUICK_REPLY/PHONE_NUMBER/URL); anything else falls back to
+ * CUSTOM rather than failing the whole sync over one unusual button. */
+function mapMetaButtonType(metaType) {
+  return BUTTON_TYPE_VALUES.includes(metaType) ? metaType : 'CUSTOM';
+}
+
+/** Extracts our (header, body, footer, buttons, variables) shape from
+ * Meta's `components` array. Only the BODY component's example values are
+ * used as `variables` -- header/button dynamic params aren't tracked
+ * separately in our schema today (matches MetaProvider.sendTemplate's own
+ * documented body-only scope). */
+function mapMetaComponents(components = []) {
+  const result = {
+    header: { type: 'NONE', text: '', mediaUrl: '' },
+    body: '',
+    footer: '',
+    buttons: [],
+    variables: [],
+  };
+
+  for (const c of components) {
+    const type = c.type?.toUpperCase();
+    if (type === 'HEADER') {
+      const format = c.format?.toUpperCase() || 'TEXT';
+      result.header = {
+        type: HEADER_TYPE_VALUES.includes(format) ? format : 'TEXT',
+        text: format === 'TEXT' ? (c.text || '') : '',
+        mediaUrl: '',
+      };
+    } else if (type === 'BODY') {
+      result.body = c.text || '';
+      result.variables = c.example?.body_text?.[0] || [];
+    } else if (type === 'FOOTER') {
+      result.footer = c.text || '';
+    } else if (type === 'BUTTONS') {
+      result.buttons = (c.buttons || []).map((b) => ({
+        type: mapMetaButtonType(b.type?.toUpperCase()),
+        text: b.text || '',
+        value: b.url || b.phone_number || '',
+      }));
+    }
+  }
+
+  return result;
+}
+
+
 async function generateUniqueSlug(ctx, base, excludeId = null) {
   const root = slugify(base);
   let slug = root;
@@ -251,6 +321,36 @@ export const templatesService = {
     await logTemplate(ctx, template, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_CREATED,
       `Template "${template.name}" created`);
 
+    // Auto-collapse internal review + approval for anyone who can
+    // self-approve anyway -- Tenant Admin/Owner/Super Admin by rank, OR
+    // a Sales User individually granted APPROVE_TEMPLATES. There's no
+    // point making someone review-then-approve their own submission when
+    // they already have full approval rights; that's pure ceremony.
+    //
+    // What this does NOT do: auto-submit to Meta. That's the one step
+    // with a real external consequence (uses live API quota, isn't
+    // something to silently undo), so it always requires a deliberate,
+    // visible "Submit to provider" click -- for Owner, Admin, and anyone
+    // else alike. No one gets a template silently shipped to Meta the
+    // instant they hit Create.
+    const canSelfApprove = hasRole(ctx.role, ROLES.TENANT_ADMIN) || (ctx.permissions || []).includes(PERMISSIONS.APPROVE_TEMPLATES);
+    if (canSelfApprove) {
+      try {
+        await templateApprovalService.submitForReview(ctx, template._id, {});
+        const approved = await templateApprovalService.approveInternally(ctx, template._id, {});
+        return approved;
+      } catch (err) {
+        // The template genuinely exists either way -- if the auto-chain
+        // stalls partway, surface that clearly rather than silently
+        // leaving the caller thinking a plain DRAFT was created when
+        // it's actually further along.
+        const current = await templatesRepository.findById(ctx.tenantId, template._id);
+        const dto = toTemplateDTO(current);
+        dto.autoSubmitError = err.message;
+        return dto;
+      }
+    }
+
     return toTemplateDTO(template);
   },
 
@@ -288,6 +388,23 @@ export const templatesService = {
     if (!existing) throw new AppError(404, 'Template not found');
     if (existing.status === TEMPLATE_STATUS.ARCHIVED) {
       throw new AppError(409, 'Archived templates are read-only');
+    }
+
+    // REAL EDIT LOCK: a template can only be edited while it's still an
+    // untouched DRAFT. REJECTED is a genuine terminal state -- per product
+    // decision, a rejected template is never patched in place, only
+    // duplicated into a fresh DRAFT. Everything past DRAFT (in review,
+    // internally approved, submitted to Meta, rejected) is locked, since
+    // editing it here would silently desync it from whatever Meta
+    // actually has on file, or resurrect a dead template as if nothing happened.
+    const EDITABLE_APPROVAL_STATUSES = [APPROVAL_STATUS.DRAFT];
+    if (!EDITABLE_APPROVAL_STATUSES.includes(existing.approvalStatus)) {
+      throw new AppError(
+        409,
+        existing.approvalStatus === APPROVAL_STATUS.REJECTED
+          ? 'This template was rejected and is now read-only. Duplicate it to create a fresh, editable copy.'
+          : `This template can't be edited once it's ${existing.approvalStatus === APPROVAL_STATUS.SUBMITTED_FOR_INTERNAL_REVIEW || existing.approvalStatus === APPROVAL_STATUS.INTERNALLY_APPROVED ? 'in review' : 'been submitted to the provider'} (current status: ${existing.approvalStatus}). Duplicate it to create an editable copy instead.`,
+      );
     }
 
     // approvalStatus is NOT settable through this endpoint, full stop.
@@ -391,13 +508,15 @@ export const templatesService = {
       throw new AppError(409, 'Archived templates are read-only and cannot be activated');
     }
 
-    // Approval gate: a template created by a non-owner must go through real
-    // approval (approvalStatus reaching INTERNALLY_APPROVED or further)
-    // before it can be activated -- the tenant owner can bypass this and
-    // activate directly, matching standard "owner override" authority.
-    // Without this, any authenticated user could activate any DRAFT
-    // template just by calling this endpoint directly, regardless of
-    // whether the tenant owner had reviewed it at all.
+    // Approval gate: a template must go through real approval
+    // (approvalStatus reaching INTERNALLY_APPROVED or further) before it
+    // can be activated. The tenant owner bypasses this ONLY for templates
+    // they personally created -- NOT for anyone else's, even as owner.
+    // Without the createdBy check, an owner could activate a Sales User's
+    // untouched DRAFT template straight from this tab, skipping that
+    // person's own "submit for review" step entirely -- which defeats the
+    // whole point of routing other people's templates through the
+    // Template Approval tab in the first place.
     //
     // NOTE: this list uses ONLY the canonical APPROVAL_STATUS values from
     // templateApproval.constants.js. It used to also check
@@ -405,17 +524,19 @@ export const templatesService = {
     // (ACTIVE is a TEMPLATE_STATUS, not an approval status) -- a leftover
     // from the old, separate templates.constants.js APPROVAL_STATUS this
     // module no longer defines.
-    const isOwner = hasRole(ctx.role, ROLES.TENANT_OWNER);
+    const isOwnerAndCreator = hasRole(ctx.role, ROLES.TENANT_OWNER) && String(existing.createdBy) === String(ctx.userId);
     const APPROVED_ENOUGH = [
       APPROVAL_STATUS.INTERNALLY_APPROVED,
       APPROVAL_STATUS.SUBMITTED_TO_PROVIDER,
       APPROVAL_STATUS.PROVIDER_APPROVED,
       APPROVAL_STATUS.PAUSED, // reactivating a previously-approved template
     ];
-    if (!isOwner && !APPROVED_ENOUGH.includes(existing.approvalStatus)) {
+    if (!isOwnerAndCreator && !APPROVED_ENOUGH.includes(existing.approvalStatus)) {
       throw new AppError(
         403,
-        'This template has not been approved by the tenant owner yet. Submit it for review first.',
+        existing.approvalStatus === APPROVAL_STATUS.DRAFT
+          ? 'This template hasn\'t been submitted for review yet -- ask its creator to submit it first.'
+          : 'This template has not been approved by the tenant owner yet. Submit it for review first.',
       );
     }
 
@@ -524,5 +645,117 @@ export const templatesService = {
     await this.assertUsable(ctx, id);
     const updated = await templatesRepository.incrementUsageCount(ctx.tenantId, id);
     return toTemplateDTO(updated);
+  },
+
+  // ---- real sync from Meta -------------------------------------------------
+  /**
+   * Pulls every template that genuinely exists on Meta's side right now
+   * (GET /{waba_id}/message_templates) and reconciles our DB against it:
+   *   - Existing local record (matched by providerMetadata.providerTemplateId,
+   *     falling back to name+languageCode for one that was deleted locally
+   *     and needs recovering) -> updated in place, including approvalStatus/
+   *     status, so a template Meta already approved/rejected days ago but
+   *     that our webhook missed (e.g. app was unpublished at the time) gets
+   *     corrected here too.
+   *   - No local match at all -> created fresh, with fields read directly
+   *     from Meta's response (bypassing the normal DRAFT-only createTemplate
+   *     path deliberately: a synced-back record reflects Meta's already-real
+   *     state, not a brand new user draft that hasn't been through review).
+   *
+   * Previously this whole thing was a no-op stub in whatsappSettingsService
+   * that only stamped a lastSyncAt timestamp -- see that file's own comment
+   * admitting as much. This is the first real implementation.
+   */
+  async syncFromMeta(ctx) {
+    const config = await whatsappSettingsService.getProviderConfig(ctx);
+    const { accessToken, businessAccountId, graphApiVersion } = config.meta || {};
+    if (config.provider !== 'META_CLOUD' || config.providerMode === 'SIMULATION') {
+      throw new AppError(400, 'WhatsApp Settings must be configured for the real Meta Cloud API (not Simulation) to sync templates');
+    }
+    if (!accessToken || !businessAccountId) {
+      throw new AppError(400, 'Meta access token and Business Account ID must be configured before syncing');
+    }
+
+    const version = graphApiVersion || 'v21.0';
+    let url = `https://graph.facebook.com/${version}/${businessAccountId}/message_templates?limit=100`;
+
+    let created = 0;
+    let updated = 0;
+    const errors = [];
+
+    // Meta paginates via `paging.next` -- a bounded loop (not `while(true)`
+    // forever) so a misbehaving API can't hang this request indefinitely.
+    for (let page = 0; page < 20 && url; page += 1) {
+      let response;
+      try {
+        response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+      } catch (networkErr) {
+        throw new AppError(502, `Could not reach Meta's API -- ${networkErr.message}`);
+      }
+      const json = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const msg = json?.error?.message || `HTTP ${response.status}`;
+        throw new AppError(502, `Meta rejected the template list request -- ${msg}`);
+      }
+
+      for (const metaTemplate of json.data || []) {
+        try {
+          const mapped = mapMetaComponents(metaTemplate.components);
+          const statusInfo = META_TEMPLATE_STATUS_MAP[metaTemplate.status]
+            || { status: TEMPLATE_STATUS.SUBMITTED, approvalStatus: APPROVAL_STATUS.SUBMITTED_TO_PROVIDER };
+
+          let existing = await templatesRepository.findByProviderTemplateId(ctx.tenantId, String(metaTemplate.id));
+          if (!existing) {
+            existing = await templatesRepository.findByNameAndLanguage(ctx.tenantId, metaTemplate.name, metaTemplate.language);
+          }
+
+          const patch = {
+            name: metaTemplate.name,
+            category: mapMetaCategory(metaTemplate.category),
+            languageCode: metaTemplate.language,
+            status: statusInfo.status,
+            approvalStatus: statusInfo.approvalStatus,
+            header: mapped.header,
+            body: mapped.body,
+            footer: mapped.footer,
+            buttons: mapped.buttons,
+            variables: mapped.variables,
+            isActive: statusInfo.status === TEMPLATE_STATUS.ACTIVE,
+            providerMetadata: {
+              providerTemplateId: String(metaTemplate.id),
+              providerStatus: metaTemplate.status,
+              providerError: null,
+              syncedAt: new Date(),
+              rawResponse: metaTemplate,
+            },
+          };
+
+          if (existing) {
+            await templatesRepository.updateTemplate(ctx.tenantId, existing._id, patch);
+            updated += 1;
+          } else {
+            const slug = await generateUniqueSlug(ctx, metaTemplate.name);
+            await templatesRepository.createTemplate({
+              ...patch,
+              tenantId: ctx.tenantId,
+              slug,
+              description: '',
+              provider: 'META_CLOUD',
+              version: 1,
+              usageCount: 0,
+              createdBy: ctx.userId,
+              updatedBy: ctx.userId,
+            });
+            created += 1;
+          }
+        } catch (itemErr) {
+          errors.push({ name: metaTemplate?.name, message: itemErr.message });
+        }
+      }
+
+      url = json.paging?.next || null;
+    }
+
+    return { created, updated, total: created + updated, errors, syncedAt: new Date() };
   },
 };

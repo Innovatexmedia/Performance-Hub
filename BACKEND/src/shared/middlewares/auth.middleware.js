@@ -49,6 +49,7 @@ export const authenticate = asyncHandler(async (req, res, next) => {
     sub:       decoded.sub,        // userId
     tenantId:  decoded.tenantId,   // null for super_admin
     role:      decoded.role,
+    permissions: decoded.permissions || [],
     sessionId: decoded.sessionId,
   };
 
@@ -71,6 +72,7 @@ export const optionalAuthenticate = asyncHandler(async (req, res, next) => {
       sub:       decoded.sub,
       tenantId:  decoded.tenantId,
       role:      decoded.role,
+      permissions: decoded.permissions || [],
       sessionId: decoded.sessionId,
     };
   } catch {

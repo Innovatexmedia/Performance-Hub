@@ -27,6 +27,9 @@ router.post('/for-lead/:leadId', conversationController.findOrCreateForLead);
 // Conversation-scoped messages list (send/simulate live under /messages).
 router.get('/:id/messages', messageController.listForConversation);
 
+// Real infinite-scroll-up backing -- GET /:id/older-messages?before=<ISO timestamp>
+router.get('/:id/older-messages', conversationController.loadOlderMessages);
+
 router.post('/:id/assign', validateAssign, conversationController.assign);
 router.patch('/:id/status', validateStatus, conversationController.changeStatus);
 

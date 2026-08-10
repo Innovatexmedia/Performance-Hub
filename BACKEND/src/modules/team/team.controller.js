@@ -81,3 +81,36 @@ export const setStatus = asyncHandler(async (req, res) => {
     `Member ${req.body.status === 'active' ? 'activated' : 'deactivated'} successfully`
   );
 });
+
+/**
+ * updatePermissions — PATCH /api/team/:id/permissions
+ * Full replace of a member's granular permission set (beyond their role
+ * default). Powers the Team page's permissions modal.
+ */
+export const updatePermissions = asyncHandler(async (req, res) => {
+  const member = await teamService.updateMemberPermissions(
+    req.params.id,
+    req.body.permissions,
+    req.user
+  );
+  return sendSuccess(res, { member }, 'Permissions updated successfully');
+});
+
+/**
+ * getPermissionCatalog — GET /api/team/permissions/catalog
+ * Every grantable permission, grouped + labeled, for the permissions
+ * modal's checklist. Static/no DB lookup.
+ */
+export const getPermissionCatalog = asyncHandler(async (req, res) => {
+  const catalog = teamService.getPermissionCatalog();
+  return sendSuccess(res, { catalog }, 'Permission catalog fetched successfully');
+});
+
+/**
+ * getRoleDefaultPermissions — GET /api/team/permissions/role-default/:role
+ * Lets the modal offer "reset to role default".
+ */
+export const getRoleDefaultPermissions = asyncHandler(async (req, res) => {
+  const permissions = teamService.getRoleDefaultPermissions(req.params.role);
+  return sendSuccess(res, { permissions }, 'Role default permissions fetched successfully');
+});

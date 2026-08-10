@@ -30,6 +30,7 @@ export function toLeadListDTO(doc) {
     qualification_score: l.qualification_score,
     source: l.source,
     assigned_user_id: l.assigned_user_id,
+    group_id: l.group_id,
     value: l.value,
     consent_status: l.consent_status,
     opt_out_status: l.opt_out_status,

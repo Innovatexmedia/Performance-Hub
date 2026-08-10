@@ -16,6 +16,7 @@ export function buildLeadFilter({
   source,
   segment,
   assigned_user_id,
+  group_id,
   includeArchived = false,
 } = {}) {
   const filter = {};
@@ -27,6 +28,7 @@ export function buildLeadFilter({
   if (source) filter.source = source;
   if (segment) filter.segment = segment;
   if (assigned_user_id) filter.assigned_user_id = assigned_user_id;
+  if (group_id) filter.group_id = group_id;
 
   if (search) {
     const rx = new RegExp(escapeRegex(search), 'i');

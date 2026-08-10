@@ -19,4 +19,25 @@ export const whatsappSettingsApi = {
     apiClient.patch<WhatsAppSettings>('/whatsapp/settings/sync', input),
 
   testConnection: () => apiClient.post<TestConnectionResult>('/whatsapp/settings/test-connection'),
+
+  /**
+   * The only one of these four with a REAL implementation -- calls Meta's
+   * actual template list API and reconciles our DB (see
+   * templatesService.syncFromMeta). Returns { created, updated, total,
+   * errors, syncedAt } inside `result`.
+   */
+  syncTemplates: () => apiClient.post<SyncResult>('/whatsapp/settings/sync/templates'),
+
+  /** NOT yet real -- backend still just stamps a timestamp. Exposed here
+   * so the button exists and is honest about what it does today. */
+  syncContacts: () => apiClient.post<SyncResult>('/whatsapp/settings/sync/contacts'),
+  syncMessages: () => apiClient.post<SyncResult>('/whatsapp/settings/sync/messages'),
+  syncProfile: () => apiClient.post<SyncResult>('/whatsapp/settings/sync/profile'),
 };
+
+export interface SyncResult {
+  entity: string;
+  syncedAt: string;
+  implemented: boolean;
+  result: { created: number; updated: number; total: number; errors: { name?: string; message: string }[] } | null;
+}

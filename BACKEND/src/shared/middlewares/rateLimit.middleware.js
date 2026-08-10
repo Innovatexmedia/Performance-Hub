@@ -70,7 +70,7 @@ export const forgotPasswordRateLimit = rateLimit({
  * -- the check silently evaluated to false for every single request. Real
  * per-user exemption would require moving auth resolution earlier in the
  * global chain (a bigger change); removed rather than leave broken dead
- * code, and the much more generous limit above makes this far less
+ * code, and the substantially raised limit above makes this far less
  * necessary anyway.
  */
 export const generalApiRateLimit = rateLimit({

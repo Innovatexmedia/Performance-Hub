@@ -36,6 +36,7 @@ export interface TeamMember {
   profileImage: string | null;
   lastLogin: string | null;
   createdAt: string;
+  permissions: string[];
   assignedLeads: number;
 }
 
@@ -78,4 +79,18 @@ export interface AddTeamMemberInput {
   email: string;
   role: AssignableRole;
   password?: string;
+}
+
+/**
+ * SOURCE: team.service.js's PERMISSION_CATALOG (GET /team/permissions/catalog).
+ * Grouped + labeled for the permissions modal's checklist -- purely
+ * presentational metadata, `value` is always a real PERMISSIONS.* string.
+ */
+export interface PermissionCatalogItem {
+  value: string;
+  label: string;
+}
+export interface PermissionCatalogGroup {
+  group: string;
+  items: PermissionCatalogItem[];
 }

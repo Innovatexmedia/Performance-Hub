@@ -38,6 +38,7 @@ export interface LeadListItem {
   qualification_score: number;
   source: string;
   assigned_user_id: string | null;
+  group_id: string | null;
   value: number;
   consent_status: ConsentStatus;
   opt_out_status: boolean;
@@ -66,6 +67,7 @@ export interface Lead {
   qualification_score: number;
   lead_temperature: LeadTemperature;
   assigned_user_id: string | null;
+  group_id: string | null;
   segment: string;
   value: number;
   notes: string;
@@ -96,6 +98,7 @@ export interface LeadInput {
   qualification_score?: number;
   lead_temperature?: LeadTemperature;
   assigned_user_id?: string | null;
+  group_id?: string | null;
   segment?: string;
   value?: number;
   notes?: string;
@@ -112,6 +115,7 @@ export interface LeadListQuery {
   source?: string;
   segment?: string;
   assigned_user_id?: string;
+  group_id?: string;
   includeArchived?: boolean;
   sort?: string;
   page?: number;

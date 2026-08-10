@@ -95,6 +95,11 @@ export function initSocketServer(httpServer) {
       socket.join(`tenant:${tenantId}`);
     }
 
+    // Per-user room -- for events meant for exactly one person (e.g. "your
+    // permissions just changed"), not the whole tenant. Keeps every other
+    // team member from having to filter out events that aren't theirs.
+    socket.join(`user:${sub}`);
+
     console.log(`🔌 Socket connected: user=${sub} tenant=${tenantId ?? 'none'} (${socket.id})`);
 
     socket.on('disconnect', () => {
@@ -115,6 +120,16 @@ export function initSocketServer(httpServer) {
 export function emitToTenant(tenantId, event, payload) {
   if (!io || !tenantId) return;
   io.to(`tenant:${tenantId}`).emit(event, payload);
+}
+
+/**
+ * emitToUser -- for events meant for exactly one person, not the whole
+ * tenant (e.g. "your role/permissions just changed"). Safe to call even
+ * if that user has no active socket connection -- just a no-op then.
+ */
+export function emitToUser(userId, event, payload) {
+  if (!io || !userId) return;
+  io.to(`user:${userId}`).emit(event, payload);
 }
 
 export function getIO() {

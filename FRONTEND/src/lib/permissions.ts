@@ -28,6 +28,23 @@ export function atLeast(role: AuthRole | null | undefined, floor: AuthRole): boo
 }
 
 /**
+ * Mirrors the backend's requireRoleOrPermission middleware exactly: passes
+ * if EITHER the role-rank floor is met OR the specific permission was
+ * individually granted. Used to decide whether to even show an
+ * approve/send-type action button, not just whether the click would
+ * succeed -- a user without either shouldn't see the button at all.
+ */
+export function hasRoleOrPermission(
+  role: AuthRole | null | undefined,
+  permissions: string[] | null | undefined,
+  floor: AuthRole,
+  permission: string,
+): boolean {
+  if (atLeast(role, floor)) return true;
+  return (permissions || []).includes(permission);
+}
+
+/**
  * Leads permissions -- mirrors src/shared/permissions/lead.permissions.js
  * EXACTLY (the backend's own action-based matrix, not a route-floor guess):
  *
@@ -196,6 +213,14 @@ export const teamPermissions = {
   },
 
   canChangeStatus: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
+    if (!atLeast(requesterRole, 'tenant_admin')) return false;
+    if (member.id === requesterUserId) return false;
+    if (member.role === 'tenant_owner' && requesterRole !== 'super_admin') return false;
+    return true;
+  },
+
+  /** Mirrors updateMemberPermissions()'s exact guard in team.service.js. */
+  canChangePermissions: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
     if (!atLeast(requesterRole, 'tenant_admin')) return false;
     if (member.id === requesterUserId) return false;
     if (member.role === 'tenant_owner' && requesterRole !== 'super_admin') return false;

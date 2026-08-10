@@ -133,7 +133,14 @@ export function Integrations() {
         toast.success('Connected', 'API key verified. Note: Interakt only supports pre-approved templates, not free text.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
-        toast.success('Settings saved');
+        // "Save & Connect" should actually connect: saving alone only
+        // persists the config, status stays 'disconnected' until toggled.
+        // Flip it now (only from disconnected, and only when a real key
+        // was entered) so the card doesn't require a separate manual click.
+        if (config.status === 'disconnected' && configForm.api_key.trim()) {
+          await toggle(config.id);
+        }
+        toast.success('Settings saved', configForm.api_key.trim() ? 'Connected' : undefined);
       }
       setConfig(null);
     } catch (err) {
@@ -233,7 +240,11 @@ export function Integrations() {
             <div className="space-y-4">
               <Field label="API Key / Token"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter API key…" /></Field>
               <Field label="Webhook URL"><Input value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} placeholder="https://…" /></Field>
-              <p className="text-xs text-ink-400">This runs in simulation mode — credentials are saved but no live connection is made to {config.name}.</p>
+              <p className="text-xs text-ink-400">
+                {config.key === 'gemini'
+                  ? 'This key is used for real, live AI calls in the AI Reply Assistant once connected.'
+                  : `This runs in simulation mode — credentials are saved but no live connection is made to ${config.name}.`}
+              </p>
             </div>
           )}
         </Modal>

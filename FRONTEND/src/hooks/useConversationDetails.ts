@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { whatsappInboxApi } from '@/lib/whatsappInboxApi';
 import { ApiError } from '@/lib/apiClient';
+import { toast } from '@/store/toastStore';
 import type { ConversationDetails, ConversationNote, MessageType } from '@/types/whatsapp';
 
 export interface UseConversationDetailsResult {
@@ -16,6 +17,9 @@ export interface UseConversationDetailsResult {
   addNote: (body: string) => Promise<void>;
   addTag: (tag: string) => Promise<void>;
   removeTag: (tag: string) => Promise<void>;
+  /** Fetches and prepends the next batch of older messages (infinite-scroll-up). No-op if already loading or nothing left. */
+  loadOlder: () => Promise<void>;
+  loadingOlder: boolean;
 }
 
 /**
@@ -31,6 +35,7 @@ export function useConversationDetails(conversationId: string | null): UseConver
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadToken, setReloadToken] = useState(0);
+  const [loadingOlder, setLoadingOlder] = useState(false);
 
   const refetch = useCallback(() => setReloadToken((n) => n + 1), []);
 
@@ -107,5 +112,31 @@ export function useConversationDetails(conversationId: string | null): UseConver
     refetch();
   }, [conversationId, refetch]);
 
-  return { details, notes, loading, error, refetch, sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag };
+  const loadOlder = useCallback(async () => {
+    if (!conversationId || loadingOlder) return;
+    if (!details || !details.hasMoreOlder || details.messages.length === 0) return;
+
+    const cursor = details.messages[0].created_at;
+    setLoadingOlder(true);
+    try {
+      const result = await whatsappInboxApi.loadOlderMessages(conversationId, cursor);
+      setDetails((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          messages: [...result.messages, ...current.messages],
+          hasMoreOlder: result.hasMoreOlder,
+        };
+      });
+    } catch (err) {
+      toast.error('Could not load older messages', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [conversationId, loadingOlder, details]);
+
+  return {
+    details, notes, loading, error, refetch, sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag,
+    loadOlder, loadingOlder,
+  };
 }

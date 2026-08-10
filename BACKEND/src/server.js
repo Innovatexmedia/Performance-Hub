@@ -17,6 +17,8 @@ import app       from './app.js';
 import config    from '../src/config/config.js';
 import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
+import dns from 'dns';
+dns.setServers(['1.1.1.1', '8.8.8.8']);
 
 const PORT = config.PORT || 4000;
 

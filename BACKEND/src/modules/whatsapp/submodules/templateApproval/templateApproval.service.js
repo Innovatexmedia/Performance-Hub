@@ -188,15 +188,21 @@ export const templateApprovalService = {
 
   /**
    * Throws if the approver is the same user who submitted the template --
-   * EXCEPT for tenant_owner (and super_admin), who are explicitly allowed
-   * to do every step of the workflow per the role table (a solo owner
-   * running their own tenant submits AND approves their own templates;
-   * there's no one else to do it). The separation-of-duties rule still
-   * applies at the manager tier (tenant_admin / sales_manager /
-   * marketing_manager) -- a manager should still get a second reviewer.
+   * EXCEPT for tenant_admin and above (tenant_owner, super_admin).
+   *
+   * Was originally stricter (owner-only exemption, separation-of-duties
+   * applying at the manager tier) -- relaxed per product decision: Admin
+   * is meant to be a fully trusted operator in this product, the same way
+   * "Admin" works in virtually every comparable SaaS product (Zendesk,
+   * Freshservice, etc. -- Admin = full access by default, no artificial
+   * self-approval block). That stricter four-eyes pattern is a real,
+   * legitimate choice for compliance-heavy tools, but isn't what this
+   * product wants. The rule still applies below Admin rank (Sales User,
+   * Read-only, or anyone with a custom-granted permission that doesn't
+   * reach Admin) -- someone else must review their submissions.
    */
   validateApprover(template, ctx) {
-    if (hasRole(ctx.role, ROLES.TENANT_OWNER)) return;
+    if (hasRole(ctx.role, ROLES.TENANT_ADMIN)) return;
     if (template.submittedBy && ctx.userId && String(template.submittedBy) === String(ctx.userId)) {
       throw new AppError(403, 'Approver must be different from the submitter');
     }

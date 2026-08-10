@@ -19,6 +19,7 @@ function buildCtx(req) {
     tenantId,
     userId: user.sub || user.id || user._id || fallback.userId || null,
     role:   user.role || fallback.role || null,
+    permissions: user.permissions || fallback.permissions || [],
   };
 }
 

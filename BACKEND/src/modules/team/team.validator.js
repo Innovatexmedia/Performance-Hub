@@ -10,10 +10,12 @@
 
 import { body, param, validationResult } from 'express-validator';
 import { ROLES }                          from '../auth/constants/roles.js';
+import { PERMISSIONS }                    from '../auth/constants/permissions.js';
 import { USER_STATUS }                    from '../auth/constants/auth.constants.js';
 import { sendError }                      from '../../utils/apiResponse.js';
 
 const ROLE_VALUES = Object.values(ROLES);
+const PERMISSION_VALUES = Object.values(PERMISSIONS);
 
 export const handleValidation = (req, res, next) => {
   const errors = validationResult(req);
@@ -86,6 +88,27 @@ export const validateSetStatus = [
     .notEmpty().withMessage('status is required')
     .isIn(Object.values(USER_STATUS))
     .withMessage(`status must be 'active' or 'inactive'`),
+
+  handleValidation,
+];
+
+/**
+ * validateUpdatePermissions — PATCH /api/team/:id/permissions
+ * Body is the COMPLETE desired permission set (a full replace, not a
+ * diff) -- matches the "set membership" pattern already used for Group
+ * membership elsewhere in this codebase, for the same reason: the
+ * frontend renders one checkbox per permission, so it always knows the
+ * complete intended state and a full replace avoids any add/remove
+ * ordering ambiguity.
+ */
+export const validateUpdatePermissions = [
+  param('id')
+    .isMongoId().withMessage('Member ID must be a valid MongoDB ObjectId'),
+
+  body('permissions')
+    .isArray().withMessage('permissions must be an array')
+    .custom((arr) => arr.every((p) => PERMISSION_VALUES.includes(p)))
+    .withMessage(`Every permission must be one of: ${PERMISSION_VALUES.join(', ')}`),
 
   handleValidation,
 ];

@@ -25,6 +25,17 @@ export const templatesRepository = {
     return WhatsAppTemplate.findOne({ tenantId, slug });
   },
 
+  /** Match an existing local record to a Meta template by its real provider id. */
+  findByProviderTemplateId(tenantId, providerTemplateId) {
+    return WhatsAppTemplate.findOne({ tenantId, 'providerMetadata.providerTemplateId': providerTemplateId });
+  },
+
+  /** Fallback match for sync: a template deleted locally (no providerTemplateId
+   * match possible) but still on Meta's side is recovered by name+language. */
+  findByNameAndLanguage(tenantId, name, languageCode) {
+    return WhatsAppTemplate.findOne({ tenantId, name, languageCode });
+  },
+
   listTemplates(tenantId, filter = {}, { sort = { createdAt: -1 }, skip = 0, limit = 20 } = {}) {
     return WhatsAppTemplate.find({ tenantId, ...filter })
       .sort(sort)

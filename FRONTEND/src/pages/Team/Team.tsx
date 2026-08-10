@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Plus, UserCog } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Plus, UserCog, Shield } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTeam } from '@/hooks/useTeam';
+import { teamApi } from '@/lib/teamApi';
 import { teamPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -10,7 +11,7 @@ import { KpiCard } from '@/components/ui/KpiCard';
 import { timeAgo } from '@/utils/formatters';
 import { ROLE_LABELS } from '@/types/auth';
 import type { AuthRole } from '@/types/auth';
-import type { TeamMember, AssignableRole } from '@/types/team';
+import type { TeamMember, AssignableRole, PermissionCatalogGroup } from '@/types/team';
 
 /**
  * Team -- confirmed spec-aligned (FRONTEND_SPEC §17, MASTER_SPEC B16):
@@ -28,12 +29,67 @@ import type { TeamMember, AssignableRole } from '@/types/team';
  */
 export function Team() {
   const user = useAuthStore((s) => s.user);
-  const { members, kpis, loading, error, addMember, updateRole, setStatus } = useTeam();
+  const { members, kpis, loading, error, addMember, updateRole, setStatus, updatePermissions } = useTeam();
 
   const [show, setShow] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [form, setForm] = useState({ firstName: '', lastName: '', email: '', role: 'sales_user' as AssignableRole });
   const [saving, setSaving] = useState(false);
+
+  // ── Permissions modal state ────────────────────────────────────────────────
+  const [catalog, setCatalog] = useState<PermissionCatalogGroup[]>([]);
+  const [permTarget, setPermTarget] = useState<TeamMember | null>(null);
+  const [selectedPerms, setSelectedPerms] = useState<Set<string>>(new Set());
+  const [savingPerms, setSavingPerms] = useState(false);
+  const [resettingPerms, setResettingPerms] = useState(false);
+
+  useEffect(() => {
+    teamApi.getPermissionCatalog().then(setCatalog).catch(() => {
+      // Non-fatal -- the modal just shows nothing to check if this fails;
+      // the rest of the Team page still works normally.
+    });
+  }, []);
+
+  const openPermissions = (member: TeamMember) => {
+    setPermTarget(member);
+    setSelectedPerms(new Set(member.permissions || []));
+  };
+
+  const togglePermission = (value: string) => {
+    setSelectedPerms((prev) => {
+      const next = new Set(prev);
+      if (next.has(value)) next.delete(value); else next.add(value);
+      return next;
+    });
+  };
+
+  const resetToRoleDefault = async () => {
+    if (!permTarget) return;
+    setResettingPerms(true);
+    try {
+      const defaults = await teamApi.getRoleDefaultPermissions(permTarget.role);
+      setSelectedPerms(new Set(defaults));
+      toast.success('Reset to role default — click Save to apply');
+    } catch (err) {
+      toast.error('Could not load role defaults', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setResettingPerms(false);
+    }
+  };
+
+  const savePermissions = async () => {
+    if (!permTarget) return;
+    setSavingPerms(true);
+    try {
+      await updatePermissions(permTarget.id, Array.from(selectedPerms));
+      toast.success('Permissions updated', `${permTarget.fullName}'s access has changed — they may need to log in again for it to fully take effect.`);
+      setPermTarget(null);
+    } catch (err) {
+      toast.error('Could not update permissions', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSavingPerms(false);
+    }
+  };
 
   if (!user) return null;
 
@@ -134,13 +190,24 @@ export function Team() {
                     <Td>{m.assignedLeads}</Td>
                     <Td className="text-ink-500">{m.lastLogin ? timeAgo(m.lastLogin) : 'Never'}</Td>
                     <Td>
-                      {canChangeStatus ? (
-                        <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === m.id} onClick={() => void handleToggleStatus(m)}>
-                          {busyId === m.id ? '…' : m.status === 'active' ? 'Deactivate' : 'Activate'}
-                        </Button>
-                      ) : (
-                        <span className="text-xs text-ink-300">—</span>
-                      )}
+                      <div className="flex items-center gap-1.5">
+                        {canChangeStatus ? (
+                          <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === m.id} onClick={() => void handleToggleStatus(m)}>
+                            {busyId === m.id ? '…' : m.status === 'active' ? 'Deactivate' : 'Activate'}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-ink-300">—</span>
+                        )}
+                        {teamPermissions.canChangePermissions(user.role, user.id, m) && (
+                          <button
+                            className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
+                            title="Manage permissions"
+                            onClick={() => openPermissions(m)}
+                          >
+                            <Shield size={14} />
+                          </button>
+                        )}
+                      </div>
                     </Td>
                   </Tr>
                 );
@@ -167,6 +234,53 @@ export function Team() {
               </Select>
             </Field>
             <p className="text-xs text-ink-400">A temporary password will be generated and emailed to them, along with a login link.</p>
+          </div>
+        </Modal>
+      )}
+      {permTarget && (
+        <Modal
+          open onClose={() => setPermTarget(null)} title={`Permissions — ${permTarget.fullName}`} size="lg"
+          footer={<>
+            <Button variant="secondary" onClick={resetToRoleDefault} disabled={resettingPerms || savingPerms}>
+              {resettingPerms ? 'Loading…' : 'Reset to role default'}
+            </Button>
+            <div className="ml-auto flex gap-2">
+              <Button variant="secondary" onClick={() => setPermTarget(null)} disabled={savingPerms}>Cancel</Button>
+              <Button onClick={() => void savePermissions()} disabled={savingPerms}>{savingPerms ? 'Saving…' : 'Save'}</Button>
+            </div>
+          </>}
+        >
+          <div className="space-y-4">
+            <p className="text-xs text-ink-500">
+              {permTarget.fullName} is a <strong>{ROLE_LABELS[permTarget.role]}</strong> by default. Toggle any
+              extra permissions below to grant them individually — e.g. letting one specific Sales User approve
+              and send campaigns/templates directly, without waiting for owner approval, while everyone else with
+              that role keeps the normal default.
+            </p>
+            {catalog.length === 0 ? (
+              <p className="py-6 text-center text-sm text-ink-400">Loading permissions…</p>
+            ) : (
+              <div className="max-h-96 space-y-4 overflow-y-auto pr-1">
+                {catalog.map((g) => (
+                  <div key={g.group}>
+                    <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-400">{g.group}</p>
+                    <div className="space-y-1 rounded-xl border border-ink-100 p-2">
+                      {g.items.map((item) => (
+                        <label key={item.value} className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-ink-50">
+                          <input
+                            type="checkbox"
+                            checked={selectedPerms.has(item.value)}
+                            onChange={() => togglePermission(item.value)}
+                            className="h-4 w-4 rounded border-ink-300 text-brand-600"
+                          />
+                          <span className="text-sm text-ink-700">{item.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </Modal>
       )}

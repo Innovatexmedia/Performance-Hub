@@ -4,24 +4,38 @@ import {
   ChevronLeft, ChevronRight, Trash2, Unplug,
 } from 'lucide-react';
 import { useStore } from '@/store/store';
+import { useAuthStore } from '@/store/authStore';
+import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
+import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
+import type { ReplyGoal, RewriteStyle } from '@/lib/aiReplyAssistantApi';
+import { useTenantProfile } from '@/hooks/useTenantProfile';
+import type { UseTenantProfileResult } from '@/hooks/useTenantProfile';
+import { BUSINESS_TYPE_OPTIONS } from '@/lib/tenantProfileApi';
+import type { BusinessType } from '@/lib/tenantProfileApi';
+import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
 import { useDb, useSettings, userName } from '@/store/hooks';
 import {
   PageHeader, Card, CardHeader, Tabs, Table, Th, Td, Tr, Badge, StatusBadge, Button,
-  Avatar, EmptyState, Toggle, Field, Input, Select, Modal,
+  Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
 } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
 import { Inbox } from './Inbox';
 import { TemplateBuilder } from './TemplateBuilder';
 import { conversationsTrend } from '@/utils/calculations';
-import { generateWhatsAppReply, rewriteWhatsAppMessage } from '@/services/aiService';
 import { syncFromProvider } from '@/services/whatsappService';
 import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
+import type { LeadListItem } from '@/types/lead';
+import { useGroups } from '@/hooks/useGroups';
+import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
+import { USABLE_APPROVAL_STATUS } from '@/types/whatsappTemplate';
+import { useWhatsAppCampaigns } from '@/hooks/useWhatsAppCampaigns';
+import type { CreateCampaignInput, WhatsAppCampaign as WhatsAppCampaignReal } from '@/types/whatsappCampaign';
 import { PROVIDER_LABELS, NATIVE_PROVIDER, THIRD_PARTY_PROVIDER_VALUES, IMPLEMENTED_THIRD_PARTY_PROVIDERS } from '@/types/whatsappSettings';
 import type { WhatsAppProvider as WhatsAppProviderReal, PanelMode, WhatsAppSettingsSync } from '@/types/whatsappSettings';
 import { ApiError } from '@/lib/apiClient';
@@ -39,6 +53,7 @@ import { CONSENT_STATUS_VALUES, CONSENT_SOURCE_VALUES } from '@/types/whatsappCo
 const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'contacts', label: 'Contacts / Leads' },
+  { id: 'groups', label: 'Groups' },
   { id: 'templates', label: 'Templates' },
   { id: 'approval', label: 'Template Approval' },
   { id: 'campaigns', label: 'Campaigns' },
@@ -56,6 +71,55 @@ const PROVIDERS: WhatsAppProvider[] = ['Native Meta Cloud API', 'WATI', 'Interak
 
 export function WhatsAppPanel() {
   const [tab, setTab] = useState('inbox');
+  const currentUser = useAuthStore((s) => s.user);
+  const canApproveTemplates = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
+
+  // Lightweight instance just for the badge/toast logic below -- each tab
+  // component already fetches its own copy when open, this is a small
+  // extra read so notifications work even while looking at a different tab.
+  const { templates, refetch: refetchTemplatesForBadge } = useWhatsAppTemplates();
+
+  // Red = something needs THIS user's action right now:
+  //  - an approver sees how many submissions are waiting on them
+  //  - a regular creator sees how many of their OWN templates got sent
+  //    back (rejected, or changes requested) and need fixing/resubmitting
+  const approvalBadgeCount = canApproveTemplates
+    ? templates.filter((t) => t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW').length
+    : templates.filter((t) => t.createdBy === currentUser?.id && (
+        t.approvalStatus === 'REJECTED'
+        || (t.approvalStatus === 'DRAFT' && t.transitionHistory?.some((h) => h.action === 'REQUEST_CHANGES'))
+      ) && !isTemplateStatusSeen(currentUser?.id, t.id, t.approvalStatus)).length;
+
+  // Real-time toast, independent of the badge -- fires the instant the
+  // socket event lands, regardless of which tab is open. Uses the LAST
+  // transitionHistory entry's `action` (not just the current status) to
+  // know exactly what just happened, since e.g. REJECTED and "sent back
+  // to DRAFT via request changes" need different messages but can share
+  // similar resulting statuses.
+  useWhatsAppRealtime({
+    onTemplate: (payload) => {
+      refetchTemplatesForBadge();
+      const t = payload.template;
+      const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
+      const isMine = t.createdBy === currentUser?.id;
+
+      if (isMine && lastAction === 'REQUEST_CHANGES') {
+        toast.error(`Changes requested on "${t.name}"`, 'Open Template Approval to see what\'s needed and resubmit.');
+      } else if (isMine && lastAction === 'REJECT') {
+        toast.error(`"${t.name}" was rejected`, 'Open Template Approval to see why.');
+      } else if (isMine && (lastAction === 'APPROVE' || lastAction === 'PROVIDER_APPROVED' || t.approvalStatus === 'PROVIDER_APPROVED')) {
+        toast.success(`"${t.name}" was approved!`, t.approvalStatus === 'PROVIDER_APPROVED' ? 'Approved by Meta — ready to activate.' : 'Approved internally.');
+      } else if (canApproveTemplates && !isMine && lastAction === 'SUBMIT_FOR_REVIEW') {
+        toast.info(`New template awaiting your approval`, `"${t.name}" was just submitted for internal review.`);
+      }
+    },
+  });
+
+  const tabsWithBadges = TABS.map((t) =>
+    t.id === 'approval' && approvalBadgeCount > 0
+      ? { ...t, count: approvalBadgeCount, tone: 'red' as const }
+      : t,
+  );
 
   return (
     <div>
@@ -64,10 +128,11 @@ export function WhatsAppPanel() {
         description="Native InnovateX panel + multi-provider simulation — inbox, templates, campaigns & analytics."
         breadcrumb={['Revenue', 'WhatsApp Panel']}
       />
-      <div className="mb-4"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
+      <div className="mb-4"><Tabs tabs={tabsWithBadges} active={tab} onChange={setTab} /></div>
 
       {tab === 'inbox' && <Inbox />}
       {tab === 'contacts' && <ContactsTab />}
+      {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}
       {tab === 'approval' && <ApprovalTab />}
       {tab === 'campaigns' && <CampaignsTab broadcast={false} />}
@@ -83,58 +148,503 @@ export function WhatsAppPanel() {
   );
 }
 
-// ---- Contacts --------------------------------------------------------------
-function ContactsTab() {
-  const [page, setPage] = useState(1);
-  const { leads, pagination, loading, error } = useLeads({ page, limit: 20 });
+// ---- ConfirmDialog: replaces window.confirm/prompt with real app UI -------
+// requireTypedText: if set, the confirm button stays disabled until the
+// user types this exact string -- used for destructive group deletion.
+function ConfirmDialog({
+  open, title, message, confirmLabel = 'Confirm', destructive = false,
+  requireTypedText, onConfirm, onClose,
+}: {
+  open: boolean;
+  title: string;
+  message: React.ReactNode;
+  confirmLabel?: string;
+  destructive?: boolean;
+  requireTypedText?: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState('');
+  useEffect(() => { if (open) setTyped(''); }, [open]);
+  if (!open) return null;
+  const locked = !!requireTypedText && typed !== requireTypedText;
 
   return (
-    <Card>
-      <CardHeader title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
-      {error ? (
-        <EmptyState title="Couldn't load contacts" description={error} />
-      ) : loading && leads.length === 0 ? (
-        <p className="p-8 text-center text-sm text-ink-400">Loading contacts…</p>
-      ) : leads.length === 0 ? (
-        <EmptyState title="No contacts yet" description="Leads with a WhatsApp number will appear here." />
-      ) : (
-        <>
-          <Table>
-            <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
-            <tbody>
-              {leads.map((l) => (
-                <Tr key={l.id}>
-                  <Td><div className="flex items-center gap-2"><Avatar name={l.name} color="#22c55e" size={30} /><span className="font-medium">{l.name}</span></div></Td>
-                  <Td className="font-mono text-xs">{l.whatsapp_number || l.phone}</Td>
-                  <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
-                  <Td>{l.opt_out_status ? <Badge tone="red">Opted out</Badge> : <Badge tone="gray">No</Badge>}</Td>
-                  <Td className="text-ink-500">{timeAgo(l.last_contacted_at)}</Td>
-                  <Td className="font-semibold">{l.qualification_score}/10</Td>
-                </Tr>
-              ))}
-            </tbody>
-          </Table>
-          {pagination && pagination.totalPages > 1 && (
-            <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3">
-              <p className="text-xs text-ink-500">Page {pagination.page} of {pagination.totalPages} · {pagination.total} total</p>
-              <div className="flex gap-1.5">
-                <Button variant="secondary" disabled={!pagination.hasPrev} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={15} /> Prev</Button>
-                <Button variant="secondary" disabled={!pagination.hasNext} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight size={15} /></Button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
-    </Card>
+    <Modal open onClose={onClose} title={title} size="sm" footer={
+      <>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button
+          className={destructive ? 'bg-red-600 hover:bg-red-700' : ''}
+          disabled={locked}
+          onClick={() => { onConfirm(); onClose(); }}
+        >
+          {confirmLabel}
+        </Button>
+      </>
+    }>
+      <div className="space-y-3 text-sm text-ink-600">
+        {message}
+        {requireTypedText && (
+          <div>
+            <p className="mb-1 text-xs font-medium text-ink-500">Type <span className="font-mono font-semibold text-ink-800">{requireTypedText}</span> to confirm</p>
+            <Input value={typed} onChange={(e) => setTyped(e.target.value)} autoFocus />
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
-// ---- Templates -------------------------------------------------------------
+// ---- PromptDialog: replaces window.prompt with real app UI -----------------
+// For a required free-text reason/comment (e.g. "why are changes needed").
+// requireNonEmpty defaults to true since every current use of this needs a
+// real comment before the action can go through.
+function PromptDialog({
+  open, title, label, placeholder, confirmLabel = 'Submit', destructive = false,
+  requireNonEmpty = true, onConfirm, onClose,
+}: {
+  open: boolean;
+  title: string;
+  label: string;
+  placeholder?: string;
+  confirmLabel?: string;
+  destructive?: boolean;
+  requireNonEmpty?: boolean;
+  onConfirm: (value: string) => void;
+  onClose: () => void;
+}) {
+  const [value, setValue] = useState('');
+  useEffect(() => { if (open) setValue(''); }, [open]);
+  if (!open) return null;
+  const locked = requireNonEmpty && !value.trim();
+
+  return (
+    <Modal open onClose={onClose} title={title} size="sm" footer={
+      <>
+        <Button variant="secondary" onClick={onClose}>Cancel</Button>
+        <Button
+          className={destructive ? 'bg-red-600 hover:bg-red-700' : ''}
+          disabled={locked}
+          onClick={() => { onConfirm(value.trim()); onClose(); }}
+        >
+          {confirmLabel}
+        </Button>
+      </>
+    }>
+      <Field label={label}>
+        <Input
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={placeholder}
+          autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter' && !locked) { onConfirm(value.trim()); onClose(); } }}
+        />
+      </Field>
+    </Modal>
+  );
+}
+
+
+function ContactsTab() {
+  const [page, setPage] = useState(1);
+  const { leads, pagination, loading, error, updateLead } = useLeads({ page, limit: 20 });
+  const { groups } = useGroups();
+  const [assigningId, setAssigningId] = useState<string | null>(null);
+
+  const assignGroup = async (leadId: string, groupId: string) => {
+    setAssigningId(leadId);
+    try {
+      await updateLead(leadId, { group_id: groupId || null });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update group');
+    } finally {
+      setAssigningId(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
+        {error ? (
+          <EmptyState title="Couldn't load contacts" description={error} />
+        ) : loading && leads.length === 0 ? (
+          <p className="p-8 text-center text-sm text-ink-400">Loading contacts…</p>
+        ) : leads.length === 0 ? (
+          <EmptyState title="No contacts yet" description="Leads with a WhatsApp number will appear here." />
+        ) : (
+          <>
+            <Table>
+              <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Group</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
+              <tbody>
+                {leads.map((l) => (
+                  <Tr key={l.id}>
+                    <Td><div className="flex items-center gap-2"><Avatar name={l.name} color="#22c55e" size={30} /><span className="font-medium">{l.name}</span></div></Td>
+                    <Td className="font-mono text-xs">{l.whatsapp_number || l.phone}</Td>
+                    <Td>
+                      <Select
+                        value={l.group_id || ''}
+                        disabled={assigningId === l.id}
+                        onChange={(e) => assignGroup(l.id, e.target.value)}
+                        className="py-1 text-xs"
+                      >
+                        <option value="">No group</option>
+                        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                      </Select>
+                    </Td>
+                    <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
+                    <Td>{l.opt_out_status ? <Badge tone="red">Opted out</Badge> : <Badge tone="gray">No</Badge>}</Td>
+                    <Td className="text-ink-500">{timeAgo(l.last_contacted_at)}</Td>
+                    <Td className="font-semibold">{l.qualification_score}/10</Td>
+                  </Tr>
+                ))}
+              </tbody>
+            </Table>
+            {pagination && pagination.totalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-ink-100 px-4 py-3">
+                <p className="text-xs text-ink-500">Page {pagination.page} of {pagination.totalPages} · {pagination.total} total</p>
+                <div className="flex gap-1.5">
+                  <Button variant="secondary" disabled={!pagination.hasPrev} onClick={() => setPage((p) => p - 1)}><ChevronLeft size={15} /> Prev</Button>
+                  <Button variant="secondary" disabled={!pagination.hasNext} onClick={() => setPage((p) => p + 1)}>Next <ChevronRight size={15} /></Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ---- Groups: own tab, professional CRUD + bulk member management ----------
+function GroupsTab() {
+  const { groups, loading, error, createGroup, updateGroup, deleteGroup } = useGroups();
+  // Large limit -- member-management checklist needs the full contact list,
+  // not a paginated slice. Fine at current scale; would need a real search-
+  // as-you-type server query if the contact base grows much larger.
+  // Member management deliberately does NOT load the full contact list
+  // into the browser -- at 10k+ contacts that would be slow, wasteful,
+  // and (worse) silently incomplete if capped at some arbitrary limit.
+  // Instead: current members are fetched server-side scoped to just this
+  // group (naturally small regardless of total contact count), and the
+  // "add members" list is a real debounced server-side search bounded to
+  // a handful of results at a time -- the same pattern as any real
+  // contact-picker at scale.
+  const [managingGroup, setManagingGroup] = useState<Group | null>(null);
+  const [memberSearch, setMemberSearch] = useState('');
+  const [debouncedMemberSearch, setDebouncedMemberSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedMemberSearch(memberSearch), 300);
+    return () => clearTimeout(t);
+  }, [memberSearch]);
+
+  const { leads: currentMembers, loading: membersLoading, updateLead } = useLeads(
+    managingGroup ? { group_id: managingGroup.id, limit: 200 } : { group_id: '__none__', limit: 1 },
+  );
+  const { leads: searchResults, loading: searchLoading, refetch: refetchSearch } = useLeads(
+    managingGroup ? { search: debouncedMemberSearch.trim() || undefined, limit: 20 } : { group_id: '__none__', limit: 1 },
+  );
+  const leadsLoading = membersLoading || searchLoading;
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [createForm, setCreateForm] = useState({ name: '', description: '' });
+  const [creating, setCreating] = useState(false);
+
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null);
+  const [editForm, setEditForm] = useState({ name: '', description: '' });
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  const [deletingGroup, setDeletingGroup] = useState<Group | null>(null);
+
+  const [busyLeadId, setBusyLeadId] = useState<string | null>(null);
+  const [removingMember, setRemovingMember] = useState<{ id: string; name: string } | null>(null);
+
+  const openCreate = () => { setCreateForm({ name: '', description: '' }); setShowCreate(true); };
+
+  const submitCreate = async () => {
+    if (!createForm.name.trim()) return toast.error('Group name required');
+    setCreating(true);
+    try {
+      await createGroup({ name: createForm.name.trim(), description: createForm.description.trim() });
+      toast.success('Group created');
+      setShowCreate(false);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to create group');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const openEdit = (g: Group) => { setEditingGroup(g); setEditForm({ name: g.name, description: g.description }); };
+
+  const submitEdit = async () => {
+    if (!editingGroup) return;
+    if (!editForm.name.trim()) return toast.error('Group name required');
+    setSavingEdit(true);
+    try {
+      await updateGroup(editingGroup.id, { name: editForm.name.trim(), description: editForm.description.trim() });
+      toast.success('Group updated');
+      setEditingGroup(null);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update group');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deletingGroup) return;
+    try {
+      await deleteGroup(deletingGroup.id);
+      toast.success('Group deleted');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete group');
+    }
+  };
+
+  const openManageMembers = (g: Group) => {
+    setManagingGroup(g);
+    setMemberSearch('');
+  };
+
+  // Additive action -- no confirmation needed, matches standard UX
+  // convention (only the destructive removal below asks "are you sure").
+  // If the lead was already in a different group, this silently moves
+  // them (a Lead only ever belongs to one group), which the UI surfaces
+  // clearly via the "Currently in X" note before the click, not as a
+  // surprise afterward.
+  const addMember = async (lead: LeadListItem) => {
+    if (!managingGroup) return;
+    setBusyLeadId(lead.id);
+    try {
+      await updateLead(lead.id, { group_id: managingGroup.id });
+      toast.success(`${lead.name} added to ${managingGroup.name}`);
+      // updateLead only auto-refetches the "current members" hook it came
+      // from -- the separate search-results hook has no way to know
+      // anything changed, so without this it keeps showing this exact
+      // person as still addable even though they're now already a member.
+      refetchSearch();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not add member');
+    } finally {
+      setBusyLeadId(null);
+    }
+  };
+
+  const confirmRemoveMember = async () => {
+    if (!removingMember || !managingGroup) return;
+    setBusyLeadId(removingMember.id);
+    try {
+      await updateLead(removingMember.id, { group_id: null });
+      toast.success(`${removingMember.name} removed from ${managingGroup.name}`);
+      refetchSearch();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not remove member');
+    } finally {
+      setBusyLeadId(null);
+      setRemovingMember(null);
+    }
+  };
+
+  // currentMembers is already server-scoped to this exact group (see the
+  // useLeads call above) -- no client-side filtering needed. filteredLeads
+  // only needs a cheap exclude-current-members pass, since searchResults
+  // is already bounded to a small server-side page, never the full
+  // contact base.
+  const filteredLeads = managingGroup
+    ? searchResults.filter((l) => l.group_id !== managingGroup.id)
+    : [];
+
+  if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading groups…</div>;
+  if (error) return <div className="py-12 text-center text-sm text-red-600">{error}</div>;
+
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-sm text-ink-500">Groups are used to target campaigns and broadcasts at a whole audience, never at individually-picked contacts.</p>
+        <Button onClick={openCreate}><Plus size={16} /> New Group</Button>
+      </div>
+
+      {groups.length === 0 ? (
+        <EmptyState title="No groups yet" description="Create a group, then add members to it." action={<Button onClick={openCreate}><Plus size={16} /> Create group</Button>} />
+      ) : (
+        <div className="grid gap-3 lg:grid-cols-2">
+          {groups.map((g) => (
+            <Card key={g.id} className="p-4">
+              <div className="flex items-start justify-between">
+                <div>
+                  <p className="font-semibold text-ink-900">{g.name}</p>
+                  {g.description && <p className="mt-0.5 text-xs text-ink-500">{g.description}</p>}
+                </div>
+                <Badge tone="gray">{g.memberCount} member{g.memberCount === 1 ? '' : 's'}</Badge>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => openManageMembers(g)}>Manage members</Button>
+                <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => openEdit(g)}>Edit</Button>
+                <button
+                  className="ml-auto rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                  title="Delete"
+                  onClick={() => setDeletingGroup(g)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create */}
+      {showCreate && (
+        <Modal open onClose={() => setShowCreate(false)} title="New Group"
+          footer={<><Button variant="secondary" onClick={() => setShowCreate(false)}>Cancel</Button><Button onClick={submitCreate} disabled={creating}>Create</Button></>}>
+          <div className="space-y-4">
+            <Field label="Name"><Input value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} placeholder="e.g. Hot leads" autoFocus /></Field>
+            <Field label="Description (optional)"><Input value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Edit */}
+      {editingGroup && (
+        <Modal open onClose={() => setEditingGroup(null)} title="Edit Group"
+          footer={<><Button variant="secondary" onClick={() => setEditingGroup(null)}>Cancel</Button><Button onClick={submitEdit} disabled={savingEdit}>Save changes</Button></>}>
+          <div className="space-y-4">
+            <Field label="Name"><Input value={editForm.name} onChange={(e) => setEditForm({ ...editForm, name: e.target.value })} autoFocus /></Field>
+            <Field label="Description (optional)"><Input value={editForm.description} onChange={(e) => setEditForm({ ...editForm, description: e.target.value })} /></Field>
+          </div>
+        </Modal>
+      )}
+
+      {/* Delete -- double-verified: destructive + must type the group's exact name */}
+      <ConfirmDialog
+        open={!!deletingGroup}
+        onClose={() => setDeletingGroup(null)}
+        title="Delete group"
+        destructive
+        confirmLabel="Delete group"
+        requireTypedText={deletingGroup?.name}
+        onConfirm={confirmDelete}
+        message={
+          <p>
+            This permanently deletes <strong>{deletingGroup?.name}</strong>.
+            {deletingGroup && deletingGroup.memberCount > 0 && (
+              <> Its {deletingGroup.memberCount} member{deletingGroup.memberCount === 1 ? '' : 's'} will be unassigned (set to "No group") — they are not deleted.</>
+            )}
+          </p>
+        }
+      />
+
+      {/* Manage members -- real single add/remove, each action applies
+          immediately (no batch "save" step), with a confirm step before
+          any removal since that's the one destructive action here. */}
+      {managingGroup && (
+        <Modal open onClose={() => setManagingGroup(null)} title={`Manage members — ${managingGroup.name}`} size="lg"
+          footer={<Button onClick={() => setManagingGroup(null)}>Done</Button>}>
+          <div className="space-y-5">
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Current members ({currentMembers.length})</p>
+              {leadsLoading ? (
+                <p className="py-4 text-center text-sm text-ink-400">Loading…</p>
+              ) : currentMembers.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-ink-200 py-4 text-center text-sm text-ink-400">No members yet — add some below.</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto rounded-xl border border-ink-100">
+                  {currentMembers.map((l) => (
+                    <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0">
+                      <Avatar name={l.name} color="#22c55e" size={26} />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                        <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                      </div>
+                      <Button
+                        variant="secondary"
+                        className="whitespace-nowrap border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
+                        disabled={busyLeadId === l.id}
+                        onClick={() => setRemovingMember({ id: l.id, name: l.name })}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Add members</p>
+              <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="mb-2" />
+              {leadsLoading ? (
+                <p className="py-4 text-center text-sm text-ink-400">Loading contacts…</p>
+              ) : filteredLeads.length === 0 ? (
+                <p className="py-4 text-center text-sm text-ink-400">{memberSearch.trim() ? 'No contacts match.' : 'Search by name or number to find someone to add.'}</p>
+              ) : (
+                <div className="max-h-56 overflow-y-auto rounded-xl border border-ink-100">
+                  {filteredLeads.map((l) => {
+                    const otherGroupName = l.group_id ? groups.find((g) => g.id === l.group_id)?.name : null;
+                    return (
+                      <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0 hover:bg-ink-50">
+                        <Avatar name={l.name} color="#94a3b8" size={26} />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                          <p className="truncate text-xs text-ink-500">
+                            {l.whatsapp_number || l.phone}
+                            {otherGroupName && <span className="ml-1.5 text-amber-600">· currently in {otherGroupName}</span>}
+                          </p>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          className="whitespace-nowrap px-2.5 py-1 text-xs"
+                          disabled={busyLeadId === l.id}
+                          onClick={() => void addMember(l)}
+                        >
+                          {otherGroupName ? 'Move here' : 'Add'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      <ConfirmDialog
+        open={!!removingMember}
+        title="Remove member"
+        message={<>Remove <strong>{removingMember?.name}</strong> from <strong>{managingGroup?.name}</strong>? They can be added back at any time.</>}
+        confirmLabel="Remove"
+        destructive
+        onConfirm={() => void confirmRemoveMember()}
+        onClose={() => setRemovingMember(null)}
+      />
+    </div>
+  );
+}
 function TemplatesTab() {
   const { templates, loading, error, refetch, deleteTemplate, duplicateTemplate, activateTemplate, pauseTemplate, archiveTemplate } = useWhatsAppTemplates();
+  const { submitForReview, submitToProvider } = useTemplateApproval(refetch);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editTpl, setEditTpl] = useState<WhatsAppTemplateReal | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const currentUser = useAuthStore((s) => s.user);
+
+  // Mirrors templates.service.js's activateTemplate guard exactly: the
+  // owner can only bypass real approval for templates they PERSONALLY
+  // created -- for anyone else's template (even as owner), Activate only
+  // shows once it's actually been submitted/approved, so a Sales User's
+  // untouched draft can't be activated straight from this tab, skipping
+  // their own "submit for review" step.
+  const canActivateDirectly = (t: WhatsAppTemplateReal) => {
+    const APPROVED_ENOUGH = ['INTERNALLY_APPROVED', 'SUBMITTED_TO_PROVIDER', 'PROVIDER_APPROVED', 'PAUSED'];
+    if (APPROVED_ENOUGH.includes(t.approvalStatus)) return true;
+    return atLeast(currentUser?.role, 'tenant_owner') && t.createdBy === currentUser?.id;
+  };
+
+  // Mirrors requireRoleOrPermission(ROLE_MIN.SUBMIT_TO_PROVIDER, PERMISSIONS.APPROVE_TEMPLATES)
+  // on the real templateApproval route.
+  const canSubmitToProvider = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
   const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
     setBusyId(id);
@@ -156,11 +666,16 @@ function TemplatesTab() {
   if (loading && templates.length === 0) return <p className="p-8 text-center text-sm text-ink-400">Loading templates…</p>;
   if (error) return <Card className="p-4 text-sm text-red-600">{error}</Card>;
 
+  // Same rule as the Template Approval tab: an untouched DRAFT (never
+  // submitted) is only relevant to its own creator -- everyone else,
+  // owner included, sees it once it's actually been submitted.
+  const visibleTemplates = templates.filter((t) => t.approvalStatus !== 'DRAFT' || t.createdBy === currentUser?.id);
+
   return (
     <div>
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {templates.map((t) => (
-          <Card key={t.id} className="flex flex-col p-4">
+        {visibleTemplates.map((t) => (
+          <Card key={t.id} className={cn('flex flex-col p-4', t.approvalStatus === 'REJECTED' && 'opacity-70')}>
             <div className="flex items-start justify-between">
               <div>
                 <p className="font-semibold text-ink-900">{t.name}</p>
@@ -169,17 +684,39 @@ function TemplatesTab() {
               <StatusBadge status={t.status} />
             </div>
             <p className="mt-3 line-clamp-3 flex-1 rounded-lg bg-ink-50 p-2.5 text-sm text-ink-600">{t.body}</p>
+            {t.approvalStatus === 'REJECTED' && (
+              <p className="mt-2 text-xs font-medium text-red-600">Rejected — read-only. Duplicate to start a fresh, editable copy.</p>
+            )}
             {t.variables.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{t.variables.map((v) => <span key={v} className="font-mono text-[11px] text-brand-600">{`{{${v}}}`}</span>)}</div>}
             <div className="mt-3 flex flex-wrap gap-1.5">
-              <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
+              {t.approvalStatus === 'DRAFT' && (
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
+              )}
               <Button
                 variant="ghost" className="px-2.5 py-1 text-xs" disabled={busyId === t.id}
                 onClick={() => void runAction(t.id, () => duplicateTemplate(t.id), 'Template duplicated', 'Could not duplicate template')}
               ><Copy size={12} /> Duplicate</Button>
-              {(t.status === 'DRAFT' || t.status === 'PAUSED') && (
+              {t.approvalStatus === 'DRAFT' && t.createdBy === currentUser?.id && !canActivateDirectly(t) && (
+                <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitForReview(t.id), 'Submitted for internal review', 'Could not submit for review')}>
+                  <Send size={12} /> Submit for Internal Review
+                </Button>
+              )}
+              {(t.status === 'DRAFT' || t.status === 'PAUSED') && canActivateDirectly(t) && (
                 <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => activateTemplate(t.id), 'Template activated', 'Could not activate template')}>
                   {t.status === 'PAUSED' ? 'Resume' : 'Activate'}
                 </Button>
+              )}
+              {t.approvalStatus === 'DRAFT' && t.createdBy !== currentUser?.id && !canActivateDirectly(t) && (
+                <span className="px-2.5 py-1 text-xs text-ink-400">Awaiting submission by its creator</span>
+              )}
+              {t.approvalStatus === 'INTERNALLY_APPROVED' && (
+                canSubmitToProvider ? (
+                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider')}>
+                    <Send size={12} /> Submit to provider
+                  </Button>
+                ) : (
+                  <span className="px-2.5 py-1 text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights</span>
+                )
               )}
               {t.status === 'ACTIVE' && (
                 <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => pauseTemplate(t.id), 'Template paused', 'Could not pause template')}>
@@ -239,6 +776,27 @@ function ApprovalTab() {
   useWhatsAppRealtime({ onTemplate: refetch });
   const [busyId, setBusyId] = useState<string | null>(null);
 
+  const currentUser = useAuthStore((s) => s.user);
+  // Mirrors requireRoleOrPermission(ROLE_MIN.APPROVE, PERMISSIONS.APPROVE_TEMPLATES)
+  // on the real route -- if this is false, the button shouldn't render at
+  // all, not just fail with a 403 after being clicked.
+  const canApprove = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
+  // Request changes / Reject stayed pure role-gated on the backend (no
+  // permission override was added for those two specifically), so this
+  // check intentionally does NOT accept the permission -- matches
+  // templateApproval.routes.js exactly.
+  const canRequestChangesOrReject = atLeast(currentUser?.role, 'tenant_admin');
+
+  // Mirrors validateApprover() in templateApproval.service.js exactly:
+  // approving your OWN submission is blocked below Tenant Admin rank --
+  // Admin and Owner are both exempt (matches how "Admin" works in most
+  // real SaaS products: a fully trusted operator, not blocked by
+  // internal-only red tape). Sales User/Read-only (or anyone with a
+  // custom permission that doesn't reach Admin rank) still need someone
+  // else to approve their own submissions.
+  const isSelfSubmission = (t: WhatsAppTemplateReal) =>
+    !!t.submittedBy && t.submittedBy === currentUser?.id && !atLeast(currentUser?.role, 'tenant_admin');
+
   const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
     setBusyId(id);
     try {
@@ -257,22 +815,53 @@ function ApprovalTab() {
   const handleApprove = (t: WhatsAppTemplateReal) =>
     runAction(t.id, () => approve(t.id), 'Template internally approved', 'Could not approve template');
 
-  const handleRequestChanges = (t: WhatsAppTemplateReal) => {
-    const comment = window.prompt('What changes are needed? (required)');
-    if (comment === null) return;
-    if (!comment.trim()) return toast.error('A comment is required to request changes');
-    return runAction(t.id, () => requestChanges(t.id, comment), 'Changes requested', 'Could not request changes');
-  };
+  // Both "Request changes" and "Reject" need a required text comment --
+  // promptTarget drives a single shared PromptDialog instead of a native
+  // window.prompt(), so the required-field validation and styling match
+  // the rest of the app instead of looking like a raw browser popup.
+  const [promptTarget, setPromptTarget] = useState<{ template: WhatsAppTemplateReal; kind: 'requestChanges' | 'reject' } | null>(null);
 
-  const handleReject = (t: WhatsAppTemplateReal) => {
-    const comment = window.prompt('Reason for rejection (required)');
-    if (comment === null) return;
-    if (!comment.trim()) return toast.error('A comment is required to reject');
-    return runAction(t.id, () => reject(t.id, comment), 'Template rejected', 'Could not reject template');
+  const submitPrompt = (comment: string) => {
+    if (!promptTarget) return;
+    const { template: t, kind } = promptTarget;
+    if (kind === 'requestChanges') {
+      void runAction(t.id, () => requestChanges(t.id, comment), 'Changes requested', 'Could not request changes');
+    } else {
+      void runAction(t.id, () => reject(t.id, comment), 'Template rejected', 'Could not reject template');
+    }
   };
 
   const handleSubmitToProvider = (t: WhatsAppTemplateReal) =>
     runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider');
+
+  // A DRAFT template hasn't entered the approval pipeline yet -- there's
+  // nothing here for anyone but its own creator to act on (they need to
+  // submit it). Showing it to everyone else (including the owner) just
+  // clutters the approval queue with things that were never actually
+  // submitted, which is exactly what looked like "why is this here?".
+  //
+  // NOTE: this (and the useEffect right below it) must stay BEFORE the
+  // loading/error early returns -- React requires every hook to run in
+  // the same order on every render. Having the useEffect after a
+  // conditional `return` meant it simply didn't run at all while
+  // `loading` was true, then started running once data arrived -- a real
+  // "rendered more hooks than the previous render" crash, not a fluke.
+  const visibleTemplates = templates.filter((t) => t.approvalStatus !== 'DRAFT' || t.createdBy === currentUser?.id);
+
+  // The user is now actually looking at these -- mark their own
+  // rejected/sent-back-for-changes templates as seen, so the tab badge
+  // (computed in the parent WhatsAppPanel) clears. Only fires for items
+  // that genuinely belong to this user and are in one of those two
+  // "needs your attention" states -- everything else is left alone.
+  useEffect(() => {
+    for (const t of visibleTemplates) {
+      if (t.createdBy !== currentUser?.id) continue;
+      const needsAttention = t.approvalStatus === 'REJECTED'
+        || (t.approvalStatus === 'DRAFT' && t.transitionHistory?.some((h) => h.action === 'REQUEST_CHANGES'));
+      if (needsAttention) markTemplateStatusSeen(currentUser?.id, t.id, t.approvalStatus);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTemplates, currentUser?.id]);
 
   if (loading && templates.length === 0) return <p className="p-8 text-center text-sm text-ink-400">Loading templates…</p>;
   if (error) return <Card className="p-4 text-sm text-red-600">{error}</Card>;
@@ -281,7 +870,10 @@ function ApprovalTab() {
     <Card>
       <CardHeader title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
       <div className="divide-y divide-ink-100">
-        {templates.map((t) => (
+        {visibleTemplates.length === 0 && (
+          <p className="p-8 text-center text-sm text-ink-400">Nothing here right now — templates appear once someone submits them for review.</p>
+        )}
+        {visibleTemplates.map((t) => (
           <div key={t.id} className="px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -298,9 +890,25 @@ function ApprovalTab() {
                 Meta rejection{t.providerRejectionReason ? ` (${t.providerRejectionReason})` : ''}: {t.providerRejectionMessage || 'No message provided'}
               </p>
             )}
-            {t.approvalComments && (
-              <p className="mt-2 rounded-lg bg-ink-50 px-3 py-1.5 text-xs text-ink-600">💬 {t.approvalComments}</p>
-            )}
+            {t.approvalComments && (() => {
+              const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
+              const isRejection = lastAction === 'REJECT';
+              const isChangesRequested = lastAction === 'REQUEST_CHANGES' || t.approvalStatus === 'DRAFT';
+              const label = isRejection ? 'Rejection reason' : isChangesRequested ? 'Changes requested' : 'Comment';
+              return (
+                <div className={cn(
+                  'mt-3 rounded-xl border-l-4 px-3.5 py-2.5',
+                  isRejection ? 'border-red-500 bg-red-50' : isChangesRequested ? 'border-amber-500 bg-amber-50' : 'border-ink-300 bg-ink-50',
+                )}>
+                  <p className={cn(
+                    'text-xs font-semibold uppercase tracking-wide',
+                    isRejection ? 'text-red-700' : isChangesRequested ? 'text-amber-700' : 'text-ink-500',
+                  )}>{label}</p>
+                  <p className={cn('mt-0.5 text-sm', isRejection ? 'text-red-800' : isChangesRequested ? 'text-amber-900' : 'text-ink-700')}>{t.approvalComments}</p>
+                </div>
+              );
+            })()}
+
 
             {t.transitionHistory.length > 0 ? (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-400">
@@ -324,21 +932,37 @@ function ApprovalTab() {
               )}
               {t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW' && (
                 <>
-                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
-                    <CheckCircle2 size={13} /> Approve internally
-                  </Button>
-                  <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleRequestChanges(t)}>
-                    Request changes
-                  </Button>
-                  <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => void handleReject(t)}>
-                    <XCircle size={13} /> Reject
-                  </Button>
+                  {canApprove && !isSelfSubmission(t) && (
+                    <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
+                      <CheckCircle2 size={13} /> Approve internally
+                    </Button>
+                  )}
+                  {canRequestChangesOrReject && (
+                    <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'requestChanges' })}>
+                      Request changes
+                    </Button>
+                  )}
+                  {canRequestChangesOrReject && (
+                    <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'reject' })}>
+                      <XCircle size={13} /> Reject
+                    </Button>
+                  )}
+                  {canApprove && isSelfSubmission(t) && (
+                    <p className="text-xs text-amber-600">You submitted this yourself — someone else needs to approve it (you can still request changes or reject).</p>
+                  )}
+                  {!canApprove && !canRequestChangesOrReject && (
+                    <p className="text-xs text-ink-400">Awaiting approval from someone with template-approval rights.</p>
+                  )}
                 </>
               )}
               {t.approvalStatus === 'INTERNALLY_APPROVED' && (
-                <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
-                  <Send size={13} /> Submit to provider
-                </Button>
+                canApprove ? (
+                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
+                    <Send size={13} /> Submit to provider
+                  </Button>
+                ) : (
+                  <p className="text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights.</p>
+                )
               )}
               {t.approvalStatus === 'SUBMITTED_TO_PROVIDER' && (
                 <p className="text-xs text-ink-400">Awaiting Meta's review — this updates automatically via webhook.</p>
@@ -352,63 +976,228 @@ function ApprovalTab() {
             </div>
           </div>
         ))}
-        {templates.length === 0 && (
-          <div className="px-5 py-10 text-center text-sm text-ink-400">No templates yet — create one in the Templates tab first.</div>
-        )}
       </div>
+      <PromptDialog
+        open={!!promptTarget}
+        onClose={() => setPromptTarget(null)}
+        title={promptTarget?.kind === 'reject' ? 'Reject template' : 'Request changes'}
+        label={promptTarget?.kind === 'reject' ? 'Reason for rejection' : 'What changes are needed?'}
+        placeholder={promptTarget?.kind === 'reject' ? 'e.g. Wording doesn\'t match brand voice' : 'e.g. Please shorten the body text'}
+        confirmLabel={promptTarget?.kind === 'reject' ? 'Reject' : 'Request changes'}
+        destructive={promptTarget?.kind === 'reject'}
+        onConfirm={submitPrompt}
+      />
     </Card>
   );
 }
 
-// ---- Campaigns / Broadcasts ------------------------------------------------
+// ---- Campaigns / Broadcasts (REAL: backed by /whatsapp/campaigns and
+// /whatsapp/broadcasts -- two separate real backend resources with an
+// identical lifecycle. See types/whatsappCampaign.ts for source notes.) -----
+const CAMPAIGN_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'BOOKING', 'FOLLOW_UP', 'PAYMENT', 'REMINDER', 'NURTURE', 'BROADCAST', 'CUSTOM'];
+const BROADCAST_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'ANNOUNCEMENT', 'OFFER', 'REMINDER', 'FESTIVAL', 'PRODUCT_UPDATE', 'CUSTOM'];
+
 function CampaignsTab({ broadcast }: { broadcast: boolean }) {
-  const { db, tenantId } = useDb();
-  const { createCampaign, transitionCampaign, sendCampaign } = useStore();
+  const resource: 'campaigns' | 'broadcasts' = broadcast ? 'broadcasts' : 'campaigns';
+  const {
+    campaigns, loading, error, refetch,
+    createCampaign, updateCampaign, deleteCampaign,
+    approveCampaign, scheduleCampaign, startCampaign,
+    completeCampaign, cancelCampaign, failCampaign, previewAudience,
+    applyRealtimeUpdate,
+  } = useWhatsAppCampaigns(resource);
+  const { templates } = useWhatsAppTemplates();
+  const usableTemplates = templates.filter((t) => t.approvalStatus === USABLE_APPROVAL_STATUS);
+  const { groups } = useGroups();
+
+  const currentUser = useAuthStore((s) => s.user);
+  // Mirrors requireRoleOrPermission(ROLE_MIN.APPROVE/START, PERMISSIONS.APPROVE_CAMPAIGNS)
+  // on the real campaigns/broadcasts routes -- if false, Approve/Start
+  // shouldn't render at all, not just 403 after being clicked.
+  const canApproveOrSend = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_campaigns');
+  // Cancel stayed pure role-gated on the backend (no permission override
+  // was added for it), so this intentionally does NOT accept the permission.
+  const canCancel = atLeast(currentUser?.role, 'tenant_admin');
+
+  // Live updates while a campaign/broadcast is actually sending -- fires on
+  // every per-recipient send AND the final auto COMPLETED/FAILED
+  // transition (see campaignSender.service.js). Merges the pushed
+  // campaign/broadcast into local state directly rather than refetching
+  // the whole list, so numbers tick up silently with no loading flash.
+  useWhatsAppRealtime(
+    broadcast
+      ? { onBroadcast: (payload) => applyRealtimeUpdate(payload.broadcast) }
+      : { onCampaign: (payload) => applyRealtimeUpdate(payload.campaign) },
+  );
+
   const [show, setShow] = useState(false);
-  const items = db.campaigns.filter((c) => c.tenant_id === tenantId && (broadcast ? c.is_broadcast : !c.is_broadcast));
-  const templates = db.templates.filter((t) => t.tenant_id === tenantId && ['Active', 'Provider Approved'].includes(t.status));
-  const [form, setForm] = useState({ name: '', template_id: '', audience: 'Hot leads', count: 250 });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
+  const [form, setForm] = useState({
+    name: '', type: typeOptions[0], templateId: '', groupId: '',
+  });
+  const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
-  const audiences = ['Hot leads', 'Webinar attendees', 'Ghosted 14d+', 'Booked but not paid', 'Proposal sent', 'Payment pending', 'No-show leads', 'All qualified'];
+  // Mirrors LOCKED_STATUSES / READ_ONLY_STATUSES in campaigns.constants.js /
+  // broadcasts.constants.js exactly -- the backend rejects update/delete
+  // outside these, so the UI only offers the buttons when they'd succeed.
+  const EDIT_LOCKED = ['SCHEDULED', 'RUNNING', 'COMPLETED', 'CANCELLED'];
+  const DELETE_LOCKED = ['COMPLETED', 'CANCELLED'];
 
-  const create = () => {
-    if (!form.name.trim()) return toast.error('Name required');
-    createCampaign({ name: form.name, template_id: form.template_id || templates[0]?.id, audience_filter: form.audience, audience_count: Number(form.count), is_broadcast: broadcast });
-    setShow(false);
-    setForm({ name: '', template_id: '', audience: 'Hot leads', count: 250 });
+  // Audience is always a Group -- not raw per-contact filters -- per product
+  // decision: campaigns target a named group, never individuals directly.
+  const buildAudience = () => ({
+    filters: { groupId: form.groupId },
+  });
+
+  const runPreview = async () => {
+    setPreviewing(true);
+    try {
+      const count = await previewAudience(buildAudience());
+      setPreviewCount(count);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to preview audience');
+    } finally {
+      setPreviewing(false);
+    }
   };
+
+  const resetForm = () => {
+    setForm({ name: '', type: typeOptions[0], templateId: '', groupId: '' });
+    setPreviewCount(null);
+    setEditingId(null);
+  };
+
+  const startEdit = (c: WhatsAppCampaignReal) => {
+    setEditingId(c.id);
+    setForm({
+      name: c.name,
+      type: c.type,
+      templateId: c.templateId || '',
+      groupId: c.audience?.filters?.groupId || '',
+    });
+    setPreviewCount(null);
+    setShow(true);
+  };
+
+  const create = async () => {
+    if (submitting) return; // guards against a double-click firing two creates
+    if (!form.name.trim()) return toast.error('Name required');
+    if (!form.templateId) return toast.error('An approved template is required');
+    if (!form.groupId) return toast.error('A target group is required — campaigns send to a group, not individual contacts');
+    setSubmitting(true);
+    try {
+      if (editingId) {
+        await updateCampaign(editingId, {
+          name: form.name,
+          type: form.type as CreateCampaignInput['type'],
+          templateId: form.templateId,
+          audience: buildAudience(),
+        });
+        toast.success(`${broadcast ? 'Broadcast' : 'Campaign'} updated`);
+      } else {
+        await createCampaign({
+          name: form.name,
+          type: form.type as CreateCampaignInput['type'],
+          templateId: form.templateId,
+          audience: buildAudience(),
+        });
+        toast.success(`${broadcast ? 'Broadcast' : 'Campaign'} created`);
+      }
+      setShow(false);
+      resetForm();
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : `Failed to ${editingId ? 'update' : 'create'}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const remove = async (c: WhatsAppCampaignReal) => {
+    if (!window.confirm(`Delete "${c.name}"? This cannot be undone.`)) return;
+    setBusyId(c.id);
+    try {
+      await deleteCampaign(c.id);
+      toast.success('Deleted');
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to delete');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const runAction = async (id: string, action: () => Promise<unknown>, label: string) => {
+    setBusyId(id);
+    try {
+      await action();
+      toast.success(label);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : `Failed to ${label.toLowerCase()}`);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading {resource}…</div>;
+  if (error) return <div className="py-12 text-center text-sm text-red-600">{error} <button className="underline" onClick={refetch}>Retry</button></div>;
 
   return (
     <div>
-      <div className="mb-4 flex justify-end"><Button onClick={() => setShow(true)}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button></div>
-      {items.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => setShow(true)}><Plus size={16} /> Create</Button>} /> : (
+      <div className="mb-4 flex justify-end"><Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button></div>
+      {campaigns.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> Create</Button>} /> : (
         <div className="grid gap-3 lg:grid-cols-2">
-          {items.map((c) => {
-            const t = db.templates.find((x) => x.id === c.template_id);
+          {campaigns.map((c) => {
             const m = c.metrics;
+            const isBusy = busyId === c.id;
             return (
               <Card key={c.id} className="p-4">
                 <div className="flex items-start justify-between">
-                  <div><p className="font-semibold text-ink-900">{c.name}</p><p className="text-xs text-ink-500">{c.audience_filter} · {c.audience_count} recipients · {t?.template_name ?? 'no template'}</p></div>
+                  <div><p className="font-semibold text-ink-900">{c.name}</p><p className="text-xs text-ink-500">{c.type} · {c.recipientCount} recipients · {c.templateName || 'no template'}</p></div>
                   <StatusBadge status={c.status} />
                 </div>
                 <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                  {[['Sent', m.sent], ['Delivered', m.delivered], ['Read', m.read], ['Replied', m.replied]].map(([k, v]) => (
+                  {[['Sent', m.sentCount], ['Delivered', m.deliveredCount], ['Read', m.readCount], ['Replied', m.repliedCount]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
                   ))}
                 </div>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  {[['Bookings', m.bookings], ['Payments', m.payments]].map(([k, v]) => (
+                  {[['Bookings', m.bookingCount], ['Payments', m.paymentCount]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
                   ))}
-                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatCurrency(m.revenue)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
+                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatCurrency(m.revenueGenerated)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
                 </div>
+                {c.status === 'RUNNING' && (
+                  <p className="mt-2 text-[11px] text-ink-400">Sending now — counts update live as Meta reports delivery, read, and reply status.</p>
+                )}
                 <div className="mt-3 flex flex-wrap gap-1.5">
-                  {c.status === 'Draft' && <Button className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Pending Approval')}>Submit for approval</Button>}
-                  {c.status === 'Pending Approval' && <Button className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Approved')}>Approve</Button>}
-                  {(c.status === 'Approved' || c.status === 'Scheduled') && <Button className="px-3 py-1 text-xs" onClick={() => sendCampaign(c.id)}><Send size={12} /> Send now</Button>}
-                  {c.status === 'Approved' && <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Scheduled')}>Schedule</Button>}
-                  {(c.status === 'Sending' || c.status === 'Scheduled') && <Button variant="secondary" className="px-3 py-1 text-xs" onClick={() => transitionCampaign(c.id, 'Paused')}>Pause</Button>}
+                  {c.status === 'DRAFT' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
+                  {c.status === 'DRAFT' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'DRAFT' && !canApproveOrSend && <p className="text-xs text-ink-400">Awaiting approval from someone with campaign-sending rights.</p>}
+                  {c.status === 'APPROVED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'APPROVED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => {
+                    const dt = window.prompt('Schedule for (ISO date/time, e.g. 2026-08-05T10:00:00)');
+                    if (dt) runAction(c.id, () => scheduleCampaign(c.id, new Date(dt).toISOString()), 'Scheduled');
+                  }}>Schedule</Button>}
+                  {c.status === 'SCHEDULED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'SCHEDULED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => completeCampaign(c.id), 'Completed')}>Mark completed</Button>}
+                  {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => failCampaign(c.id, 'Manually marked as failed'), 'Marked failed')}>Mark failed</Button>}
+                  {c.status === 'RUNNING' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {c.status === 'FAILED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {!EDIT_LOCKED.includes(c.status) && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEdit(c)}>Edit</Button>}
+                  {!DELETE_LOCKED.includes(c.status) && (
+                    <button
+                      disabled={isBusy}
+                      className="ml-auto rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                      title="Delete"
+                      onClick={() => remove(c)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               </Card>
             );
@@ -416,13 +1205,27 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
         </div>
       )}
       {show && (
-        <Modal open onClose={() => setShow(false)} title={`New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
-          footer={<><Button variant="secondary" onClick={() => setShow(false)}>Cancel</Button><Button onClick={create}>Create</Button></>}>
+        <Modal open onClose={() => { setShow(false); resetForm(); }} title={editingId ? `Edit ${broadcast ? 'Broadcast' : 'Campaign'}` : `New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
+          footer={<><Button variant="secondary" onClick={() => { setShow(false); resetForm(); }} disabled={submitting}>Cancel</Button><Button onClick={create} disabled={submitting}>{submitting ? (editingId ? 'Saving…' : 'Creating…') : (editingId ? 'Save changes' : 'Create')}</Button></>}>
           <div className="space-y-4">
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-            <Field label="Approved template"><Select value={form.template_id} onChange={(e) => setForm({ ...form, template_id: e.target.value })}>{templates.map((t) => <option key={t.id} value={t.id}>{t.template_name}</option>)}</Select></Field>
-            <Field label="Audience segment"><Select value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })}>{audiences.map((a) => <option key={a}>{a}</option>)}</Select></Field>
-            <Field label="Estimated recipients" hint="Opted-out contacts are automatically excluded"><Input type="number" value={form.count} onChange={(e) => setForm({ ...form, count: Number(e.target.value) })} /></Field>
+            <Field label="Type"><Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>{typeOptions.map((t) => <option key={t} value={t}>{t}</option>)}</Select></Field>
+            <Field label="Approved template" hint={usableTemplates.length === 0 ? 'No provider-approved templates yet — approve one first.' : undefined}>
+              <Select value={form.templateId} onChange={(e) => setForm({ ...form, templateId: e.target.value })}>
+                <option value="">Select a template…</option>
+                {usableTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Target group" hint={groups.length === 0 ? 'No groups yet — create one in Contacts / Leads first.' : 'Campaigns send to a whole group, not individually-picked contacts.'}>
+              <Select value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
+                <option value="">Select a group…</option>
+                {groups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberCount})</option>)}
+              </Select>
+            </Field>
+            <div className="flex items-center gap-3">
+              <Button variant="secondary" className="px-3 py-1 text-xs" onClick={runPreview} disabled={previewing || !form.groupId}>{previewing ? 'Checking…' : 'Preview audience'}</Button>
+              {previewCount !== null && <p className="text-xs text-ink-600">{previewCount} matching contact{previewCount === 1 ? '' : 's'} (opted-out contacts already excluded)</p>}
+            </div>
           </div>
         </Modal>
       )}
@@ -451,42 +1254,203 @@ function NurtureMessagesTab() {
 }
 
 // ---- AI assistant ----------------------------------------------------------
+// ---- Business Profile: real "memory" the AI reads before every generation --
+function BusinessProfileCard({ profile, loading, updateProfile }: Pick<UseTenantProfileResult, 'profile' | 'loading' | 'updateProfile'>) {
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ description: '', businessType: 'other' as BusinessType, industry: '' });
+  const [saving, setSaving] = useState(false);
+
+  const openEdit = () => {
+    if (profile) setForm({ description: profile.description, businessType: profile.businessType, industry: profile.industry });
+    setEditing(true);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await updateProfile(form);
+      toast.success('Business profile saved', 'AI replies will now use this context.');
+      setEditing(false);
+    } catch (err) {
+      toast.error('Could not save', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return null;
+  const hasContext = !!profile?.description;
+
+  return (
+    <>
+      <div className={cn(
+        'mb-4 flex items-center justify-between gap-3 rounded-xl border px-4 py-2.5',
+        hasContext ? 'border-ink-200 bg-white' : 'border-amber-200 bg-amber-50',
+      )}>
+        <div className="flex min-w-0 items-center gap-2">
+          <Sparkles size={14} className={hasContext ? 'shrink-0 text-brand-600' : 'shrink-0 text-amber-600'} />
+          {hasContext ? (
+            <p className="truncate text-xs text-ink-600"><span className="font-medium text-ink-900">AI memory set</span> — {profile?.description}</p>
+          ) : (
+            <p className="truncate text-xs text-amber-800">
+              <span className="font-medium">No business context yet</span> — without it, the AI may guess or invent details about {profile?.name || 'your business'}.
+            </p>
+          )}
+        </div>
+        <Button variant="secondary" className="shrink-0 px-3 py-1 text-xs" onClick={openEdit}>{hasContext ? 'Edit' : 'Add business info'}</Button>
+      </div>
+
+      {editing && (
+        <Modal
+          open onClose={() => setEditing(false)} title="Business context (AI memory)" size="sm"
+          footer={<><Button variant="secondary" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button><Button onClick={() => void save()} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button></>}
+        >
+          <div className="space-y-3">
+            <p className="text-xs text-ink-500">
+              Tell the AI about {profile?.name || 'your business'} once — every generated reply uses this instead of generic or guessed wording.
+            </p>
+            <Field label="What does your business do?" hint="e.g. 'We sell fresh, farm-direct produce to households and restaurants.' Up to 500 characters.">
+              <textarea
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                rows={3}
+                maxLength={500}
+                className="input"
+                placeholder="Describe your business in a sentence or two…"
+                autoFocus
+              />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Business type">
+                <Select value={form.businessType} onChange={(e) => setForm({ ...form, businessType: e.target.value as BusinessType })}>
+                  {BUSINESS_TYPE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </Select>
+              </Field>
+              <Field label="Industry (optional)"><Input value={form.industry} onChange={(e) => setForm({ ...form, industry: e.target.value })} placeholder="e.g. Agriculture" /></Field>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function AIAssistantTab() {
   const [input, setInput] = useState('Hi, I saw your webinar and I\'m interested but pricing is a concern.');
   const [output, setOutput] = useState('');
+  const [isLive, setIsLive] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [lastAction, setLastAction] = useState<{ type: 'generate'; goal: ReplyGoal } | { type: 'rewrite'; style: RewriteStyle } | null>(null);
+  const tenantProfile = useTenantProfile();
+  const { profile } = tenantProfile;
   const actions = [
-    { label: 'Generate reply', mode: 'default' as const },
-    { label: 'Booking message', mode: 'booking' as const },
-    { label: 'Payment reminder', mode: 'payment' as const },
-    { label: 'Objection handling', mode: 'objection' as const },
-    { label: 'Follow-up after call', mode: 'followup' as const },
+    { label: 'Generate reply', goal: '' as const },
+    { label: 'Booking message', goal: 'booking' as const },
+    { label: 'Payment reminder', goal: 'payment' as const },
+    { label: 'Objection handling', goal: 'objection' as const },
+    { label: 'Follow-up after call', goal: 'follow_up' as const },
   ];
+
+  const generate = async (goal: ReplyGoal, label: string) => {
+    setBusy(label);
+    try {
+      const result = await aiReplyAssistantApi.generate({
+        goal,
+        conversation: input.trim() ? [{ direction: 'INBOUND', content: input.trim() }] : [],
+      });
+      setOutput(result.generatedReply);
+      setIsLive(result.isLive);
+      setLastAction({ type: 'generate', goal });
+    } catch (err) {
+      toast.error('Could not generate reply', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rewrite = async (style: RewriteStyle, label: string) => {
+    if (!output) return;
+    setBusy(label);
+    try {
+      const result = await aiReplyAssistantApi.rewrite(output, style);
+      setOutput(result.rewritten);
+      setIsLive(result.isLive);
+      setLastAction({ type: 'rewrite', style });
+    } catch (err) {
+      toast.error('Could not rewrite reply', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const regenerate = () => {
+    if (!lastAction) return;
+    if (lastAction.type === 'generate') void generate(lastAction.goal, 'regenerate');
+    else void rewrite(lastAction.style, 'regenerate');
+  };
+
+  const wordCount = output.trim() ? output.trim().split(/\s+/).length : 0;
+  const isGenerating = busy === 'Generate reply' || busy === 'regenerate' || actions.some((a) => a.label === busy);
+
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
+    <div>
+      <BusinessProfileCard profile={tenantProfile.profile} loading={tenantProfile.loading} updateProfile={tenantProfile.updateProfile} />
+      <div className="grid gap-4 lg:grid-cols-2">
       <Card className="p-5">
         <h3 className="flex items-center gap-2 text-sm font-semibold text-ink-900"><Sparkles size={16} className="text-brand-600" /> AI Reply Assistant</h3>
         <p className="mt-1 text-xs text-ink-500">Paste an inbound message and generate context-aware replies.</p>
         <textarea value={input} onChange={(e) => setInput(e.target.value)} rows={4} className="input mt-3" />
         <div className="mt-3 flex flex-wrap gap-2">
-          {actions.map((a) => <Button key={a.label} variant="secondary" className="px-3 py-1.5 text-xs" onClick={() => setOutput(generateWhatsAppReply(input, a.mode))}>{a.label}</Button>)}
+          {actions.map((a) => (
+            <Button key={a.label} variant="secondary" className="px-3 py-1.5 text-xs" disabled={!!busy} onClick={() => void generate(a.goal, a.label)}>
+              {busy === a.label ? 'Thinking…' : a.label}
+            </Button>
+          ))}
         </div>
         {output && (
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'shorter'))}>Make shorter</Button>
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'professional'))}>Professional</Button>
-            <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setOutput(rewriteWhatsAppMessage(output, 'persuasive'))}>Persuasive</Button>
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-ink-100 pt-3">
+            <span className="text-xs font-medium text-ink-400">Rewrite:</span>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('SHORTER', 'shorter')}>Make shorter</Button>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('PROFESSIONAL', 'professional')}>Professional</Button>
+            <Button variant="ghost" className="px-2.5 py-1 text-xs" disabled={!!busy} onClick={() => void rewrite('PERSUASIVE', 'persuasive')}>Persuasive</Button>
           </div>
         )}
       </Card>
       <Card className="p-5">
-        <h3 className="text-sm font-semibold text-ink-900">Generated reply</h3>
-        {output ? (
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-ink-900">Generated reply</h3>
+          <div className="flex items-center gap-1.5">
+            {output && profile?.description && (
+              <span title={`Used your saved business context: "${profile.description}"`}>
+                <Sparkles size={13} className="text-brand-500" />
+              </span>
+            )}
+            {output && isLive !== null && (
+              <Badge tone={isLive ? 'green' : 'amber'}>{isLive ? 'Live AI' : 'Fallback (no AI key / call failed)'}</Badge>
+            )}
+          </div>
+        </div>
+        {busy && !output.trim() ? (
+          <div className="mt-3 flex h-40 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-ink-200 text-ink-400">
+            <Sparkles size={20} className="animate-pulse text-brand-500" />
+            <p className="text-xs">Writing a reply…</p>
+          </div>
+        ) : output ? (
           <>
-            <div className="mt-3 rounded-xl rounded-tl-sm bg-brand-50 p-4 text-sm text-ink-800 whitespace-pre-line">{output}</div>
-            <Button className="mt-3 text-xs" onClick={() => { navigator.clipboard?.writeText(output); toast.success('Copied to clipboard'); }}><Copy size={13} /> Copy reply</Button>
+            <div className={cn('mt-3 rounded-xl rounded-tl-sm bg-brand-50 p-4 text-sm leading-relaxed text-ink-800 whitespace-pre-line transition-opacity', isGenerating || busy ? 'opacity-50' : 'opacity-100')}>{output}</div>
+            <div className="mt-3 flex items-center justify-between">
+              <span className="text-[11px] text-ink-400">{wordCount} word{wordCount === 1 ? '' : 's'}</span>
+              <div className="flex gap-2">
+                <Button variant="secondary" className="text-xs" disabled={!!busy} onClick={regenerate}>
+                  <RefreshCw size={13} className={busy === 'regenerate' ? 'animate-spin' : ''} /> Regenerate
+                </Button>
+                <Button className="text-xs" onClick={() => { navigator.clipboard?.writeText(output); toast.success('Copied to clipboard'); }}><Copy size={13} /> Copy reply</Button>
+              </div>
+            </div>
           </>
         ) : <EmptyState title="No reply generated yet" description="Choose an action on the left to generate an AI reply." icon={<Sparkles size={20} />} />}
       </Card>
+    </div>
     </div>
   );
 }
@@ -957,7 +1921,7 @@ function AnalyticsTab() {
 
 // ---- Settings --------------------------------------------------------------
 function SettingsTab() {
-  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect } = useWhatsAppSettings();
+  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect, syncTemplates } = useWhatsAppSettings();
 
   const [provider, setProvider] = useState<WhatsAppProviderReal>(NATIVE_PROVIDER);
   const [panelMode, setPanelMode] = useState<PanelMode>('NATIVE');
@@ -968,6 +1932,7 @@ function SettingsTab() {
   const [verifyToken, setVerifyToken] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [syncingTemplates, setSyncingTemplates] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [attemptedSave, setAttemptedSave] = useState(false);
 
@@ -1075,6 +2040,30 @@ function SettingsTab() {
       await updateSync({ [key]: value });
     } catch (err) {
       toast.error('Could not update sync setting', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleSyncTemplates = async () => {
+    setSyncingTemplates(true);
+    try {
+      const { result } = await syncTemplates();
+      if (!result) {
+        toast.error('Sync failed', 'No result returned from server.');
+      } else if (result.errors.length > 0) {
+        toast.warning(
+          `Synced with ${result.errors.length} error(s)`,
+          `${result.created} created, ${result.updated} updated. First error: ${result.errors[0].message}`,
+        );
+      } else {
+        toast.success(
+          'Templates synced from Meta',
+          `${result.created} created, ${result.updated} updated, ${result.total} total.`,
+        );
+      }
+    } catch (err) {
+      toast.error('Sync failed', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSyncingTemplates(false);
     }
   };
 
@@ -1202,9 +2191,17 @@ function SettingsTab() {
         ] as const).map(([k, label]) => (
           <div key={k} className="flex items-center justify-between">
             <span className="text-sm text-ink-700">{label}</span>
-            <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
+            <div className="flex items-center gap-2">
+              {k === 'autoSyncTemplates' && (
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => void handleSyncTemplates()} disabled={syncingTemplates}>
+                  <RefreshCw size={12} /> {syncingTemplates ? 'Syncing…' : 'Sync now'}
+                </Button>
+              )}
+              <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
+            </div>
           </div>
         ))}
+        <p className="text-[11px] text-ink-400">The toggle only controls whether templates auto-sync in the background later — click "Sync now" to pull your real current templates from Meta immediately, including any that were deleted here but still exist on Meta's side.</p>
       </div>
 
       <div className="mt-4 flex items-center gap-2">
