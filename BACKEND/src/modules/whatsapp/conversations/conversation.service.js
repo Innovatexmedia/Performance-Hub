@@ -12,6 +12,7 @@ import { ACTIVITY_TYPE } from '../../leads/activities/activity.model.js';
 import { dealRepository } from '../../pipeline/deals/deal.repository.js';
 import { Payment } from '../../payments/payment.model.js';
 import { emitToTenant } from '../../../realtime/socket.js';
+import { hasRole, ROLES } from '../../auth/constants/roles.js';
 
 import { conversationRepository } from './conversation.repository.js';
 import { messageRepository } from '../messages/message.repository.js';
@@ -159,6 +160,25 @@ export const conversationService = {
 
   async getConversations(ctx, query) {
     const filter = buildConversationFilter(query);
+
+    // REAL access control, not just an optional filter: below Admin rank,
+    // a user can only ever see conversations assigned to THEM (or not yet
+    // assigned to anyone) -- overriding whatever assigned_user_id they
+    // requested, or didn't. Without this, any Sales User could see every
+    // other Sales User's assigned conversations just by omitting the
+    // filter (or worse, by explicitly requesting someone else's), even
+    // though the Inbox UI's assignee dropdown implies assignment is
+    // actually private. Owner/Admin keep full visibility -- they're the
+    // ones doing the assigning and need oversight across the team.
+    //
+    // Unassigned conversations (assigned_user_id: null) are intentionally
+    // still visible to everyone -- that's a new/unclaimed lead, not
+    // something assigned away from this user, so hiding it too would
+    // block Sales Users from ever picking up new inbound conversations.
+    if (!hasRole(ctx.role, ROLES.TENANT_ADMIN)) {
+      filter.assigned_user_id = { $in: [ctx.userId, null] };
+    }
+
     const { page, limit, skip } = normalizePaging(query);
 
     const [items, total] = await Promise.all([
@@ -179,6 +199,20 @@ export const conversationService = {
   async getConversationOrThrow(ctx, id) {
     const conversation = await conversationRepository.findById(ctx.tenantId, id);
     if (!conversation) throw AppError.notFound('Conversation not found');
+
+    // Same real enforcement as getConversations(), but for DIRECT access
+    // by ID -- without this, hiding another Sales User's conversations
+    // from the Inbox LIST would be purely cosmetic; anyone who guessed or
+    // was sent the URL/ID directly could still open it, reply in it, or
+    // reassign it. Returns the same "not found" (not a distinguishing
+    // 403) so a conversation's existence isn't revealed to someone who
+    // isn't authorized to see it either way.
+    if (!hasRole(ctx.role, ROLES.TENANT_ADMIN)
+      && conversation.assigned_user_id
+      && String(conversation.assigned_user_id) !== String(ctx.userId)) {
+      throw AppError.notFound('Conversation not found');
+    }
+
     return conversation;
   },
 

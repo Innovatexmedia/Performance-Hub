@@ -369,6 +369,7 @@ const PERMISSION_CATALOG = Object.freeze([
     group: 'Conversations & Bookings',
     items: [
       { value: PERMISSIONS.MANAGE_CONVERSATIONS, label: 'Manage WhatsApp conversations' },
+      { value: PERMISSIONS.ASSIGN_CONVERSATIONS, label: 'Reassign conversations to other team members' },
       { value: PERMISSIONS.MANAGE_BOOKINGS, label: 'Manage bookings' },
       { value: PERMISSIONS.MANAGE_CALLS, label: 'Manage call records' },
       { value: PERMISSIONS.MANAGE_PAYMENTS, label: 'Manage payments' },

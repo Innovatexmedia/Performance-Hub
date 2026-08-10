@@ -2,6 +2,8 @@ import { Router } from 'express';
 import { conversationController } from './conversation.controller.js';
 import { validateAssign, validateStatus } from './conversation.validator.js';
 import { withContext } from '../../../shared/helpers/lead.helpers.js';
+import { requireRoleOrPermission } from '../../../shared/middlewares/role.middleware.js';
+import { PERMISSIONS } from '../../auth/constants/permissions.js';
 
 import { messageController } from '../messages/message.controller.js';
 import noteRoutes from '../notes/note.routes.js';
@@ -30,7 +32,12 @@ router.get('/:id/messages', messageController.listForConversation);
 // Real infinite-scroll-up backing -- GET /:id/older-messages?before=<ISO timestamp>
 router.get('/:id/older-messages', conversationController.loadOlderMessages);
 
-router.post('/:id/assign', validateAssign, conversationController.assign);
+router.post(
+  '/:id/assign',
+  requireRoleOrPermission('tenant_admin', PERMISSIONS.ASSIGN_CONVERSATIONS),
+  validateAssign,
+  conversationController.assign,
+);
 router.patch('/:id/status', validateStatus, conversationController.changeStatus);
 
 router.use('/:id/notes', noteRoutes);

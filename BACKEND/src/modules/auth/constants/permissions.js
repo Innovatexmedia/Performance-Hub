@@ -1,5 +1,3 @@
-
-
 export const PERMISSIONS = Object.freeze({
 
   // ── Platform (super_admin only) ────────────────────────────────────────────
@@ -22,6 +20,13 @@ export const PERMISSIONS = Object.freeze({
   // ── WhatsApp ───────────────────────────────────────────────────────────────
   MANAGE_WHATSAPP:       "manage_whatsapp",
   MANAGE_CONVERSATIONS:  "manage_conversations",
+  // Deliberately separate from MANAGE_CONVERSATIONS (which every sales_user
+  // has by default for their own day-to-day conversation work -- reply,
+  // status, notes). Reassigning a conversation to a DIFFERENT person is a
+  // more sensitive, ownership-changing action and was never meant to be
+  // gated by that same broad default permission -- see rolePermissions.js,
+  // ASSIGN_CONVERSATIONS is intentionally NOT in sales_user's default set.
+  ASSIGN_CONVERSATIONS:  "assign_conversations",
   SUBMIT_TEMPLATES:      "submit_templates",
   APPROVE_TEMPLATES:     "approve_templates",
 

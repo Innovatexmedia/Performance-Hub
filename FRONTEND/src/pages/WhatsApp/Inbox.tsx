@@ -9,6 +9,8 @@ import { useConversations } from '@/hooks/useConversations';
 import { useConversationDetails } from '@/hooks/useConversationDetails';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
 import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
+import { useAuthStore } from '@/store/authStore';
+import { hasRoleOrPermission } from '@/lib/permissions';
 import { ApiError } from '@/lib/apiClient';
 import { CONVERSATION_STATUS_VALUES } from '@/types/whatsapp';
 import type { ConversationStatus } from '@/types/whatsapp';
@@ -32,6 +34,11 @@ export function Inbox() {
   }), [q, statusFilter]);
 
   const { conversations, loading: listLoading, error: listError, refetch: refetchList } = useConversations(listQuery);
+  // Mirrors requireRoleOrPermission('tenant_admin', PERMISSIONS.MANAGE_CONVERSATIONS)
+  // on the real /:id/assign route -- if this is false, the picker
+  // shouldn't even render, not just fail with a 403 after being clicked.
+  const currentUser = useAuthStore((s) => s.user);
+  const canAssign = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'assign_conversations');
   const {
     details, notes, loading: detailLoading, refetch: refetchDetails,
     sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag,
@@ -235,10 +242,16 @@ export function Inbox() {
                 <Select value={active.status} onChange={(e) => void changeStatus(e.target.value)} className="w-auto py-1 text-xs">
                   {CONVERSATION_STATUS_VALUES.map((s) => <option key={s}>{s}</option>)}
                 </Select>
-                <Select value={active.assigned_user_id ?? ''} onChange={(e) => void assign(e.target.value)} className="w-auto py-1 text-xs" title="Assign">
-                  <option value="">Unassigned</option>
-                  {members.map((u) => <option key={u.id} value={u.id}>{u.fullName}</option>)}
-                </Select>
+                {canAssign ? (
+                  <Select value={active.assigned_user_id ?? ''} onChange={(e) => void assign(e.target.value)} className="w-auto py-1 text-xs" title="Assign">
+                    <option value="">Unassigned</option>
+                    {members.map((u) => <option key={u.id} value={u.id}>{u.fullName}</option>)}
+                  </Select>
+                ) : (
+                  <span className="rounded-lg border border-ink-200 px-2.5 py-1 text-xs text-ink-500" title="Only an Owner/Admin (or someone granted this right) can reassign a conversation">
+                    {active.assigned_user_id ? nameById(active.assigned_user_id) : 'Unassigned'}
+                  </span>
+                )}
               </div>
             </div>
 
