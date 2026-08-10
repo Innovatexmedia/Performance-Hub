@@ -1,4 +1,5 @@
 import mongoose                           from 'mongoose';
+import config                             from '../../../config/config.js';
 import * as userRepo                      from '../repositories/user.repository.js';
 import * as tenantRepo                    from '../repositories/tenant.repository.js';
 import * as tokenRepo                     from '../repositories/token.repository.js';
@@ -25,8 +26,8 @@ import {
 // PRIVATE HELPERS
 // =============================================================================
 
-/** Extract IP and User-Agent from Express request for audit logs. */
-const getClientMeta = (req) => ({
+/** Extract IP and User-Agent from Express request for audit logs. Exported for reuse. */
+export const getClientMeta = (req) => ({
   ip:        req.ip || req.socket?.remoteAddress || null,
   userAgent: req.headers?.['user-agent'] || null,
 });
@@ -34,8 +35,10 @@ const getClientMeta = (req) => ({
 /**
  * createAuditLog — writes a login audit entry.
  * Non-blocking: errors are swallowed so audit failures never crash auth flows.
+ * Exported so other auth-adjacent services (e.g. invitation.service.js) can
+ * reuse the exact same helper instead of duplicating it.
  */
-const createAuditLog = (data) =>
+export const createAuditLog = (data) =>
   LoginAudit.create(data).catch(() => {});
 
 /**
@@ -96,7 +99,7 @@ export const register = async (data, req) => {
     password,
     role         = ROLES.TENANT_OWNER,
     workspaceName,
-    tenantId: suppliedTenantId,
+    superAdminSecret,
   } = data;
 
   const meta = getClientMeta(req);
@@ -113,7 +116,19 @@ export const register = async (data, req) => {
   // ── Step 2: Route by role ────────────────────────────────────────────────────
 
   // ── PATH A: super_admin ──────────────────────────────────────────────────────
+  // SECURITY: this used to have NO protection at all -- anyone could POST
+  // role: 'super_admin' to this public endpoint and get full platform
+  // access. Now requires a real, private secret (SUPER_ADMIN_SECRET env
+  // var) that only the platform owner knows. Fails closed: if the secret
+  // isn't configured on the server at all, this path is permanently
+  // disabled rather than silently open.
   if (role === ROLES.SUPER_ADMIN) {
+    if (!config.SUPER_ADMIN_SECRET) {
+      throw new AppError('Super admin registration is not enabled on this server', 403);
+    }
+    if (!superAdminSecret || superAdminSecret !== config.SUPER_ADMIN_SECRET) {
+      throw new AppError('Invalid or missing super admin secret', 403);
+    }
     return _registerSuperAdmin(
       { firstName, lastName, email, password },
       meta
@@ -134,17 +149,18 @@ export const register = async (data, req) => {
     );
   }
 
-  // ── PATH C: tenant_admin | sales_user | read_only_user (invitation flow) ─────
+  // ── tenant_admin | sales_user | read_only_user — NOT available here ──────────
+  // SECURITY: this path used to accept a bare tenantId with zero real
+  // invitation check -- anyone who discovered or guessed a tenant's ID
+  // could self-register as an admin on someone else's workspace. Removed
+  // entirely. The real, secure way to add a team member is
+  // team.service.js's addTeamMember() -- it requires the caller to
+  // already be authenticated as tenant_admin+ on that specific tenant,
+  // generates a real temp password, and sends a real invite.
   if (TENANT_SCOPED_ROLES.includes(role)) {
-    if (!suppliedTenantId) {
-      throw new AppError(
-        `tenantId is required when registering with role: ${role}`,
-        400
-      );
-    }
-    return _registerTenantMember(
-      { firstName, lastName, email, password, role, tenantId: suppliedTenantId },
-      meta
+    throw new AppError(
+      'This role cannot self-register. Ask a tenant admin or owner to add you from the Team page.',
+      403
     );
   }
 
@@ -283,83 +299,6 @@ async function _registerTenantOwner(
   };
 }
 
-/**
- * _registerTenantMember — creates a user inside an existing tenant.
- * Used for invitation-based onboarding (not public self-registration).
- */
-async function _registerTenantMember(
-  { firstName, lastName, email, password, role, tenantId },
-  meta
-) {
-  // Verify tenant exists and is accessible
-  const tenant = await tenantRepo.findById(tenantId);
-  if (!tenant) {
-    throw new AppError('Workspace not found', 404);
-  }
-
-  const access = tenant.isAccessible();
-  if (!access.allowed) {
-    throw new AppError(
-      `Cannot add user to this workspace: ${access.reason}`,
-      403
-    );
-  }
-
-  // Check user capacity
-  if (!tenant.canCreateUser()) {
-    throw new AppError(
-      `This workspace has reached its maximum user limit (${tenant.maxUsers}). ` +
-      `Please upgrade your plan to add more team members.`,
-      403
-    );
-  }
-
-  const user = await userRepo.create({
-    firstName,
-    lastName,
-    email,
-    password,
-    role,
-    tenantId,
-    status: USER_STATUS.ACTIVE,
-  });
-
-  // Increment user count atomically
-  await tenantRepo.incrementUsageCounter(tenantId, 'currentUserCount', 1);
-
-  await Membership.create({
-    userId: user._id,
-    tenantId,
-    role,
-    status: MEMBERSHIP_STATUS.ACTIVE,
-    joinedAt: new Date(),
-  });
-
-  await issueVerificationEmail(user);
-
-  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(user, meta);
-
-  await createAuditLog({
-    userId:   user._id,
-    tenantId: user.tenantId,
-    email:    user.email,
-    event:    AUDIT_EVENTS.LOGIN_SUCCESS,
-    success:  true,
-    ...meta,
-  });
-
-  return {
-    user:         user.getPublicProfile(),
-    accessToken,
-    refreshToken,
-    tenant: {
-      id:   tenant._id,
-      name: tenant.name,
-      slug: tenant.slug,
-    },
-  };
-}
-
 // =============================================================================
 // LOGIN
 // =============================================================================
@@ -401,6 +340,17 @@ export const login = async ({ email, password }, req) => {
       'Your account is inactive. Please contact your workspace owner.',
       403
     );
+  }
+  if (user.status === USER_STATUS.PENDING) {
+    throw new AppError(
+      'Your account is pending activation. Please check your email for an invitation link, or ask whoever invited you to resend it.',
+      403
+    );
+  }
+  if (user.status === USER_STATUS.DELETED) {
+    // Deliberately the same generic message as "user not found" -- a
+    // deleted account existing at all shouldn't be revealed via login.
+    throw new AppError('Invalid email or password', 401);
   }
 
   // Check lockout
@@ -489,21 +439,6 @@ export const login = async ({ email, password }, req) => {
 // =============================================================================
 
 /**
- * switchWorkspace — the counterpart to login()'s multi-membership branch.
- * Verifies the short-lived selectionToken (proves the password step
- * already happened), confirms the requested tenant is genuinely one of
- * this user's ACTIVE memberships (never trusts the client blindly), then
- * issues a real, full access+refresh token pair scoped to that tenant --
- * reusing tokenSvc.issueTokenPair exactly as every other login path does,
- * just with tenantId/role temporarily overridden to match the CHOSEN
- * membership rather than the user's stored primary one. The real User
- * document's own tenantId/role is never modified by this -- switching
- * workspaces doesn't change which one is "primary".
- *
- * @param {{ selectionToken: string, tenantId: string }} params
- * @param {Object} req
- */
-/**
  * switchWorkspace — the counterpart to login()'s multi-membership branch,
  * AND the mid-session "switch workspace" action from an already-logged-in
  * user (e.g. the Topbar dropdown). Two different callers, two different
@@ -556,6 +491,15 @@ export const switchWorkspace = async ({ selectionToken, tenantId }, req) => {
   if (user.status === USER_STATUS.SUSPENDED) {
     throw new AppError('Your account has been suspended. Please contact support.', 403);
   }
+  if (user.status === USER_STATUS.INACTIVE) {
+    throw new AppError('Your account is inactive. Please contact your workspace owner.', 403);
+  }
+  if (user.status === USER_STATUS.PENDING) {
+    throw new AppError('Your account is pending activation.', 403);
+  }
+  if (user.status === USER_STATUS.DELETED) {
+    throw new AppError('Account not found', 404);
+  }
 
   // issueTokenPair only reads ._id / .tenantId / .role off whatever object
   // it's given -- this overrides those two to the CHOSEN membership
@@ -567,7 +511,7 @@ export const switchWorkspace = async ({ selectionToken, tenantId }, req) => {
     userId: user._id,
     tenantId: membership.tenantId,
     email: user.email,
-    event: AUDIT_EVENTS.LOGIN_SUCCESS,
+    event: AUDIT_EVENTS.WORKSPACE_SWITCHED,
     success: true,
     ...meta,
   });
@@ -656,6 +600,66 @@ export const logout = async (plainRefreshToken, req) => {
   }
 };
 
+/**
+ * logoutAll — revokes every active session for the requesting user
+ * (logout everywhere). Reuses tokenSvc.revokeAllSessions, which already
+ * existed and already backs the replay-attack response in
+ * refreshTokens() -- this just exposes the same real logic as a
+ * deliberate user action instead of only an automatic security response.
+ */
+export const logoutAll = async (req) => {
+  await tokenSvc.revokeAllSessions(req.user.sub);
+
+  await createAuditLog({
+    userId:   req.user.sub,
+    tenantId: req.user.tenantId,
+    event:    AUDIT_EVENTS.LOGOUT_ALL,
+    success:  true,
+    ...getClientMeta(req),
+  });
+};
+
+/**
+ * listSessions — returns the requesting user's active sessions, with
+ * device/IP info and a flag marking which one is the current request's
+ * own session (compared by sessionId from the JWT, not guessed).
+ */
+export const listSessions = async (req) => {
+  const sessions = await tokenSvc.getActiveSessions(req.user.sub);
+  return sessions.map((s) => ({
+    id:          s._id,
+    sessionId:   s.sessionId,
+    isCurrent:   s.sessionId === req.user.sessionId,
+    deviceInfo:  s.deviceInfo,
+    createdAt:   s.createdAt,
+    expiresAt:   s.expiresAt,
+  }));
+};
+
+/**
+ * revokeUserSession — logs out ONE specific other session from the list
+ * (see token.service.js's revokeSessionById for why this is a different
+ * path than the plain-token-based revokeSession above).
+ */
+export const revokeUserSession = async (req, sessionId) => {
+  try {
+    await tokenSvc.revokeSessionById(req.user.sub, sessionId);
+  } catch (err) {
+    if (err.message === 'SESSION_NOT_FOUND') {
+      throw new AppError('Session not found or already logged out', 404);
+    }
+    throw err;
+  }
+
+  await createAuditLog({
+    userId:   req.user.sub,
+    tenantId: req.user.tenantId,
+    event:    AUDIT_EVENTS.SESSION_REVOKED,
+    success:  true,
+    ...getClientMeta(req),
+  });
+};
+
 // =============================================================================
 // REFRESH TOKENS
 // =============================================================================
@@ -731,6 +735,39 @@ export const refreshTokens = async (plainRefreshToken, req) => {
  */
 export const getCurrentUser = async (userId) => {
   const user = await userRepo.findById(userId);
+  if (!user) throw new AppError('User not found', 404);
+  return user.getPublicProfile();
+};
+
+/**
+ * updateProfile — updates the authenticated user's own editable profile
+ * fields. Only these 4 fields are genuinely editable on the User schema
+ * (firstName, lastName, phoneNumber, profileImage) -- nothing else is
+ * accepted here, and nothing invented beyond what the schema already has.
+ *
+ * profileImage is the schema's real String field (a URL), accepted as
+ * such here -- there is no real file-upload/persistent-storage
+ * infrastructure anywhere in this codebase (upload.middleware.js's
+ * multer instance uses memoryStorage and is only ever used for CSV
+ * parsing in Leads, never to persist a file anywhere retrievable), so
+ * genuine "upload a photo" support isn't implemented -- this lets a real
+ * URL be set/updated, matching exactly what the field already is.
+ *
+ * @param {string} userId
+ * @param {{ firstName?, lastName?, phoneNumber?, profileImage? }} data
+ */
+export const updateProfile = async (userId, data) => {
+  const allowedFields = ['firstName', 'lastName', 'phoneNumber', 'profileImage'];
+  const update = {};
+  for (const field of allowedFields) {
+    if (data[field] !== undefined) update[field] = data[field];
+  }
+
+  if (Object.keys(update).length === 0) {
+    throw new AppError('No valid fields to update', 400);
+  }
+
+  const user = await userRepo.updateById(userId, { $set: update });
   if (!user) throw new AppError('User not found', 404);
   return user.getPublicProfile();
 };

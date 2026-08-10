@@ -6,11 +6,15 @@
  * SOURCE: FRONTEND_SPEC §17 Team page — Admin section
  *
  * ROUTE MAP:
- *   GET   /api/team              — list + KPI cards (all roles can view)
+ *   GET   /api/team              — list + KPI cards (tenant_admin+)
  *   POST  /api/team              — add member (tenant_admin+)
- *   GET   /api/team/:id          — single member (all roles)
+ *   GET   /api/team/:id          — single member (tenant_admin+)
  *   PATCH /api/team/:id/role     — change role (tenant_admin+)
  *   PATCH /api/team/:id/status   — activate/deactivate (tenant_admin+)
+ *
+ * PERMISSIONS: Team is an admin-only surface end to end -- sales_user and
+ * read_only_user have no legitimate reason to view colleague role/status
+ * data, so GET is now gated the same as every write action, not left open.
  *
  * Register in app.js:
  *   import teamRoutes from './modules/team/team.routes.js';
@@ -40,13 +44,13 @@ router.use(resolveTenant);
 // Collection — GET all members + POST new member
 router
   .route('/')
-  .get(controller.getTeamMembers)
+  .get(requireRole('tenant_admin'), controller.getTeamMembers)
   .post(requireRole('tenant_admin'), validateAddMember, controller.addTeamMember);
 
 // ── Resource routes ───────────────────────────────────────────────────────────
 
 // Single member
-router.get('/:id', controller.getTeamMember);
+router.get('/:id', requireRole('tenant_admin'), controller.getTeamMember);
 
 // Inline role change — tenant_admin and above
 router.patch(

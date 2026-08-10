@@ -15,6 +15,7 @@
 import RefreshToken          from '../models/RefreshToken.js';
 import PasswordResetToken    from '../models/PasswordResetToken.js';
 import EmailVerificationToken from '../models/EmailVerificationToken.js';
+import InvitationToken, { INVITATION_STATUS } from '../models/InvitationToken.js';
 import { hashToken }         from '../../../utils/crypto.js';
 
 // ─── Refresh Token ────────────────────────────────────────────────────────────
@@ -59,6 +60,21 @@ export const countActiveSessionsByUser = (userId) =>
 
 export const deleteRefreshTokenByHash = (tokenHash) =>
   RefreshToken.deleteOne({ tokenHash });
+
+/**
+ * revokeRefreshTokenBySessionId — revokes ONE specific session by its
+ * sessionId, scoped to a specific userId. Deliberately scoped by BOTH
+ * fields, not sessionId alone -- a user must only ever be able to revoke
+ * their OWN sessions, never someone else's by guessing/enumerating a
+ * sessionId. Returns the updated doc, or null if no matching active
+ * session existed for that user (used by the service layer to return a
+ * real 404 instead of a false "success").
+ */
+export const revokeRefreshTokenBySessionId = (userId, sessionId) =>
+  RefreshToken.findOneAndUpdate(
+    { userId, sessionId, isRevoked: false },
+    { $set: { isRevoked: true, revokedAt: new Date() } }
+  );
 
 // ─── Password Reset Token ─────────────────────────────────────────────────────
 
@@ -105,3 +121,55 @@ export const invalidateExistingVerificationTokens = (userId) =>
     { userId, isUsed: false },
     { $set: { isUsed: true, usedAt: new Date() } }
   );
+
+// ─── Invitation Token ──────────────────────────────────────────────────────────
+
+export const createInvitationToken = (data) =>
+  InvitationToken.create(data);
+
+/**
+ * findInvitationToken — looks up a PENDING, non-expired invitation by its
+ * plain token. Returns null for an expired or already-accepted one, same
+ * shape of check as findPasswordResetToken/findEmailVerificationToken.
+ */
+export const findInvitationToken = (plainToken) =>
+  InvitationToken.findOne({
+    tokenHash: hashToken(plainToken),
+    status:    INVITATION_STATUS.PENDING,
+    expiresAt: { $gt: new Date() },
+  });
+
+/**
+ * findInvitationTokenIncludingExpired — same lookup but without the status/
+ * expiry filter, so the accept-invitation page can distinguish "genuinely
+ * doesn't exist" from "exists but expired/already accepted" and show the
+ * right message instead of a generic error either way.
+ */
+export const findInvitationTokenIncludingExpired = (plainToken) =>
+  InvitationToken.findOne({ tokenHash: hashToken(plainToken) });
+
+export const markInvitationAccepted = (id) =>
+  InvitationToken.findByIdAndUpdate(id, {
+    $set: { status: INVITATION_STATUS.ACCEPTED, acceptedAt: new Date() },
+  });
+
+/**
+ * invalidateExistingInvitations — marks any still-pending invitation for
+ * this user as expired. Used when re-inviting someone (see
+ * team.service.js resendInvitation) so an old link can't be used
+ * alongside a freshly issued one -- same "invalidate the old one first"
+ * approach as invalidateExistingResetTokens/invalidateExistingVerificationTokens.
+ */
+export const invalidateExistingInvitations = (userId) =>
+  InvitationToken.updateMany(
+    { userId, status: INVITATION_STATUS.PENDING },
+    { $set: { status: INVITATION_STATUS.EXPIRED } }
+  );
+
+export const findPendingInvitationByEmail = (tenantId, email) =>
+  InvitationToken.findOne({
+    tenantId,
+    email:     String(email).toLowerCase(),
+    status:    INVITATION_STATUS.PENDING,
+    expiresAt: { $gt: new Date() },
+  });

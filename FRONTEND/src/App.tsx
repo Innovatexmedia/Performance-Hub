@@ -3,6 +3,13 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Login } from '@/pages/Auth/Login';
+import { Register } from '@/pages/Auth/Register';
+import { ForgotPassword } from '@/pages/Auth/ForgotPassword';
+import { ResetPassword } from '@/pages/Auth/ResetPassword';
+import { VerifyEmail } from '@/pages/Auth/VerifyEmail';
+import { AcceptInvitation } from '@/pages/Auth/AcceptInvitation';
+import { Profile } from '@/pages/Profile/Profile';
+import { RequireRole } from '@/components/auth/RequireRole';
 import { CaptureForm } from '@/pages/Auth/CaptureForm';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
@@ -40,9 +47,15 @@ export default function App() {
     <>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
+        <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="/capture" element={<CaptureForm />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/profile" element={<Profile />} />
           <Route path="/leads" element={<Leads />} />
           <Route path="/whatsapp" element={<WhatsAppPanel />} />
           <Route path="/qualification" element={<AIQualification />} />
@@ -61,7 +74,7 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route
             path="/super-admin"
-            element={user?.role === 'super_admin' ? <SuperAdmin /> : <Navigate to="/dashboard" replace />}
+            element={<RequireRole exact="super_admin"><SuperAdmin /></RequireRole>}
           />
         </Route>
         <Route path="*" element={<Navigate to={status === 'authenticated' ? '/dashboard' : '/login'} replace />} />

@@ -17,6 +17,8 @@
  * POST   /auth/reset-password        — complete password reset
  * POST   /auth/verify-email          — verify email with token
  * POST   /auth/resend-verification   — resend verification email (protected)
+ * GET    /auth/invitations/:token    — preview an invitation (public)
+ * POST   /auth/invitations/:token/accept — accept invitation, set password, log in
  * =============================================================================
  */
 
@@ -34,6 +36,8 @@ import {
   validateResetPassword,
   validateChangePassword,
   validateVerifyEmail,
+  validateAcceptInvitation,
+  validateUpdateProfile,
 } from '../validators/auth.validator.js';
 
 const router = Router();
@@ -47,11 +51,17 @@ router.post('/forgot-password',     forgotPasswordRateLimit, validateForgotPassw
 router.post('/reset-password',      validateResetPassword,  authController.resetPassword);
 router.post('/verify-email',        validateVerifyEmail,    authController.verifyEmail);
 router.post('/switch-workspace',    optionalAuthenticate, authController.switchWorkspace);
+router.get('/invitations/:token',   authController.getInvitationPreview);
+router.post('/invitations/:token/accept', validateAcceptInvitation, authController.acceptInvitation);
 
 // ─── Protected Routes (require valid access token) ───────────────────────────
 
 router.post('/logout',              authenticate, authController.logout);
+router.post('/logout-all',          authenticate, authController.logoutAll);
+router.get('/sessions',             authenticate, authController.listSessions);
+router.delete('/sessions/:sessionId', authenticate, authController.revokeSession);
 router.get('/me',                   authenticate, authController.getMe);
+router.patch('/profile',            authenticate, validateUpdateProfile, authController.updateProfile);
 router.get('/my-workspaces',        authenticate, authController.listMyWorkspaces);
 router.patch('/change-password',    authenticate, validateChangePassword, authController.changePassword);
 router.post('/resend-verification', authenticate, authController.resendVerification);

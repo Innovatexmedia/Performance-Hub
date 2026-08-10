@@ -43,6 +43,59 @@ const metaSchema = new Schema(
   { _id: false },
 );
 
+const dialog360Schema = new Schema(
+  {
+    // SOURCE: real 360Dialog API docs (docs.360dialog.com) -- unlike Meta,
+    // a single D360-API-KEY authenticates everything; the key is already
+    // scoped to one specific WhatsApp channel/phone number on 360dialog's
+    // side, so no separate phoneNumberId/businessAccountId is needed here.
+    apiKey:          { type: String, default: '' },
+    connected:       { type: Boolean, default: false },
+    connectedAt:     { type: Date, default: null },
+    lastVerifiedAt:  { type: Date, default: null },
+    // Populated from 360dialog's real GET /whatsapp_business_profile
+    // response during Test Connection -- NOT user-typed.
+    displayName:     { type: String, default: '' },
+    about:           { type: String, default: '' },
+  },
+  { _id: false },
+);
+
+const twilioSchema = new Schema(
+  {
+    // SOURCE: real Twilio API docs (twilio.com/docs/whatsapp) -- Twilio
+    // uses HTTP Basic Auth (accountSid:authToken), not a bearer token or
+    // single API key. whatsappNumber is the Twilio number enabled for
+    // WhatsApp, required as the 'From' field on every send (with a
+    // 'whatsapp:' prefix added at send time, not stored here).
+    accountSid:      { type: String, default: '' },
+    authToken:       { type: String, default: '' },
+    whatsappNumber:  { type: String, default: '' },
+    connected:       { type: Boolean, default: false },
+    connectedAt:     { type: Date, default: null },
+    lastVerifiedAt:  { type: Date, default: null },
+    // Populated from Twilio's real GET /Accounts/{sid}.json response
+    // during Test Connection -- NOT user-typed.
+    friendlyName:    { type: String, default: '' },
+  },
+  { _id: false },
+);
+
+const interaktSchema = new Schema(
+  {
+    // SOURCE: real Interakt API docs (interakt.shop/resource-center) --
+    // single API Key from Developer Settings, sent as 'Authorization:
+    // Basic <API Key>' (the raw key itself, not a base64-encoded
+    // username:password pair like standard HTTP Basic Auth or Twilio's
+    // scheme -- confirmed directly from Interakt's own Postman examples).
+    apiKey:          { type: String, default: '' },
+    connected:       { type: Boolean, default: false },
+    connectedAt:     { type: Date, default: null },
+    lastVerifiedAt:  { type: Date, default: null },
+  },
+  { _id: false },
+);
+
 const businessProfileSchema = new Schema(
   {
     displayName:      { type: String, default: '' },
@@ -182,6 +235,9 @@ const whatsappSettingsSchema = new Schema(
     panelMode:    { type: String, enum: PANEL_MODE_VALUES, default: PANEL_MODE.NATIVE },
 
     meta:            { type: metaSchema, default: () => ({}) },
+    dialog360:       { type: dialog360Schema, default: () => ({}) },
+    twilio:          { type: twilioSchema, default: () => ({}) },
+    interakt:        { type: interaktSchema, default: () => ({}) },
     businessProfile: { type: businessProfileSchema, default: () => ({}) },
     messaging:       { type: messagingSchema, default: () => ({}) },
     media:           { type: mediaSchema, default: () => ({}) },

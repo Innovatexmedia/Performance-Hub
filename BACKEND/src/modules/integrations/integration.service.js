@@ -47,35 +47,64 @@ import { whatsappSettingsService } from '../whatsapp/submodules/whatsappSettings
 // untouched -- this bridge exists ONLY for meta_cloud.
 
 const META_CLOUD_KEY = 'meta_cloud';
+const DIALOG360_KEY = '360dialog';
+const TWILIO_WA_KEY = 'twilio_wa';
+const INTERAKT_KEY = 'interakt';
 
 /** Builds a ctx shape matching what whatsappSettingsService expects, from this module's (tenantId, userId) pair. */
 const toWaCtx = (tenantId, userId) => ({ tenantId, userId });
 
 /**
- * overlayMetaCloudStatus -- given a raw Integration doc for the meta_cloud
- * key, replaces its status/last_sync/config with REAL data derived from
- * WhatsAppSettings, so this card always reflects the tenant's actual,
- * already-working WhatsApp connection instead of its own separate
- * (otherwise-unused) simulated fields. Returns the doc unchanged if it's
- * not the meta_cloud entry.
+ * overlayRealWhatsAppStatus -- given a raw Integration doc for meta_cloud,
+ * 360dialog, twilio_wa, or interakt, replaces its status/last_sync/config
+ * with REAL data derived from WhatsAppSettings, so these four cards
+ * always reflect the tenant's actual, already-working WhatsApp connection
+ * instead of their own separate (otherwise-unused) simulated fields.
+ * Returns the doc unchanged for any of the other 18 cards.
  */
-const overlayMetaCloudStatus = async (tenantId, userId, doc) => {
-  if (!doc || doc.key !== META_CLOUD_KEY) return doc;
+const overlayRealWhatsAppStatus = async (tenantId, userId, doc) => {
+  if (!doc || (doc.key !== META_CLOUD_KEY && doc.key !== DIALOG360_KEY && doc.key !== TWILIO_WA_KEY && doc.key !== INTERAKT_KEY)) return doc;
 
   const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
-  const isLive = settings.provider === 'META_CLOUD' && settings.providerMode === 'LIVE';
-
   const overlaid = doc.toObject ? doc.toObject() : { ...doc };
-  overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
-  overlaid.last_sync = settings.meta?.lastVerifiedAt || null;
-  overlaid.config = {
-    phoneNumberId: settings.meta?.phoneNumberId || '',
-    businessAccountId: settings.meta?.businessAccountId || '',
-    hasAccessToken: settings.meta?.hasAccessToken || false,
-    hasAppSecret: settings.meta?.hasAppSecret || false,
-    displayPhoneNumber: settings.meta?.displayPhoneNumber || '',
-    verifiedName: settings.meta?.verifiedName || '',
-  };
+
+  if (doc.key === META_CLOUD_KEY) {
+    const isLive = settings.provider === 'META_CLOUD' && settings.providerMode === 'LIVE';
+    overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.meta?.lastVerifiedAt || null;
+    overlaid.config = {
+      phoneNumberId: settings.meta?.phoneNumberId || '',
+      businessAccountId: settings.meta?.businessAccountId || '',
+      hasAccessToken: settings.meta?.hasAccessToken || false,
+      hasAppSecret: settings.meta?.hasAppSecret || false,
+      displayPhoneNumber: settings.meta?.displayPhoneNumber || '',
+      verifiedName: settings.meta?.verifiedName || '',
+    };
+  } else if (doc.key === DIALOG360_KEY) {
+    const isLive = settings.provider === '360DIALOG' && settings.providerMode === 'LIVE';
+    overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.dialog360?.lastVerifiedAt || null;
+    overlaid.config = {
+      hasApiKey: settings.dialog360?.hasApiKey || false,
+      about: settings.dialog360?.about || '',
+    };
+  } else if (doc.key === TWILIO_WA_KEY) {
+    const isLive = settings.provider === 'TWILIO' && settings.providerMode === 'LIVE';
+    overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.twilio?.lastVerifiedAt || null;
+    overlaid.config = {
+      whatsappNumber: settings.twilio?.whatsappNumber || '',
+      hasAuthToken: settings.twilio?.hasAuthToken || false,
+      friendlyName: settings.twilio?.friendlyName || '',
+    };
+  } else {
+    const isLive = settings.provider === 'INTERAKT' && settings.providerMode === 'LIVE';
+    overlaid.status = isLive ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.interakt?.lastVerifiedAt || null;
+    overlaid.config = {
+      hasApiKey: settings.interakt?.hasApiKey || false,
+    };
+  }
   return overlaid;
 };
 
@@ -103,7 +132,7 @@ export const listIntegrations = async (tenantId, filter, options, userId) => {
   ]);
 
   const overlaid = await Promise.all(
-    integrations.map((doc) => overlayMetaCloudStatus(tenantId, userId, doc)),
+    integrations.map((doc) => overlayRealWhatsAppStatus(tenantId, userId, doc)),
   );
 
   return { integrations: overlaid, pagination: paginationMeta({ page, limit, total }) };
@@ -113,7 +142,7 @@ export const getIntegration = async (tenantId, id, userId) => {
   await integrationRepo.ensureCatalogSeeded(tenantId);
   const integration = await integrationRepo.findById(tenantId, id);
   if (!integration) throw AppError.notFound('Integration not found');
-  return overlayMetaCloudStatus(tenantId, userId, integration);
+  return overlayRealWhatsAppStatus(tenantId, userId, integration);
 };
 
 export const getCategoryCounts = async (tenantId, filter) => {
@@ -160,7 +189,58 @@ export const toggleIntegration = async (tenantId, userId, id) => {
         'Enter your real Meta Cloud API credentials in Settings first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
       );
     }
-    return overlayMetaCloudStatus(tenantId, userId, existing);
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === DIALOG360_KEY) {
+    const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
+    const isLive = settings.provider === '360DIALOG' && settings.providerMode === 'LIVE';
+
+    if (isLive) {
+      await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+        provider: 'SIMULATION',
+        providerMode: 'SIMULATION',
+      });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real 360Dialog API key in Settings first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === TWILIO_WA_KEY) {
+    const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
+    const isLive = settings.provider === 'TWILIO' && settings.providerMode === 'LIVE';
+
+    if (isLive) {
+      await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+        provider: 'SIMULATION',
+        providerMode: 'SIMULATION',
+      });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real Twilio credentials in Settings first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === INTERAKT_KEY) {
+    const settings = await whatsappSettingsService.getSettings(toWaCtx(tenantId, userId));
+    const isLive = settings.provider === 'INTERAKT' && settings.providerMode === 'LIVE';
+
+    if (isLive) {
+      await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+        provider: 'SIMULATION',
+        providerMode: 'SIMULATION',
+      });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real Interakt API key in Settings first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
   }
 
   let newStatus;
@@ -195,7 +275,25 @@ export const syncIntegration = async (tenantId, userId, id) => {
     // Throws a real AppError with Meta's real rejection message if the
     // credentials are genuinely invalid; never silently "succeeds".
     await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
-    return overlayMetaCloudStatus(tenantId, userId, existing);
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === DIALOG360_KEY) {
+    // Real verification -- an actual live call to 360Dialog's API.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === TWILIO_WA_KEY) {
+    // Real verification -- an actual live call to Twilio's Account API.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === INTERAKT_KEY) {
+    // Real verification -- an actual live call to Interakt's Users API.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
   }
 
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
@@ -234,7 +332,63 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     // the credentials are wrong; the card stays disconnected in that case.
     await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
 
-    return overlayMetaCloudStatus(tenantId, userId, existing);
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === DIALOG360_KEY) {
+    const { apiKey } = configPatch || {};
+    const dialog360 = {};
+    if (apiKey) dialog360.apiKey = apiKey; // only overwrite if a new value was actually typed
+
+    await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+      provider: '360DIALOG',
+      dialog360,
+    });
+
+    // Real verification, immediately -- this is what actually marks the
+    // card "connected", not the save above. Throws a real 360Dialog error
+    // if the key is wrong; the card stays disconnected in that case.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === TWILIO_WA_KEY) {
+    const { accountSid, authToken, whatsappNumber } = configPatch || {};
+    const twilio = {};
+    if (accountSid !== undefined) twilio.accountSid = accountSid;
+    if (authToken) twilio.authToken = authToken; // only overwrite if a new value was actually typed
+    if (whatsappNumber !== undefined) twilio.whatsappNumber = whatsappNumber;
+
+    await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+      provider: 'TWILIO',
+      twilio,
+    });
+
+    // Real verification, immediately -- this is what actually marks the
+    // card "connected", not the save above. Throws a real Twilio error if
+    // the credentials are wrong; the card stays disconnected in that case.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === INTERAKT_KEY) {
+    const { apiKey } = configPatch || {};
+    const interakt = {};
+    if (apiKey) interakt.apiKey = apiKey; // only overwrite if a new value was actually typed
+
+    await whatsappSettingsService.updateSection(toWaCtx(tenantId, userId), 'provider', {
+      provider: 'INTERAKT',
+      interakt,
+    });
+
+    // Real verification, immediately -- this is what actually marks the
+    // card "connected", not the save above. Throws a real Interakt error
+    // if the key is wrong; the card stays disconnected in that case.
+    await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
+
+    return overlayRealWhatsAppStatus(tenantId, userId, existing);
   }
 
   const mergedConfig = Object.assign({}, existing.config, configPatch || {});

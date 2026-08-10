@@ -124,6 +124,27 @@ export const revokeAllSessions = async (userId) => {
 };
 
 /**
+ * revokeSessionById — logs out ONE specific session by sessionId, scoped
+ * to the requesting user (see token.repository.js's
+ * revokeRefreshTokenBySessionId for why this is scoped by both fields).
+ * This is the real function behind "log out this device" when picking a
+ * session from a list -- revokeSession() above only works when you
+ * already have that session's plain refresh token, which is only ever
+ * true for your OWN current device, not one you're viewing in a list.
+ *
+ * @param {string} userId
+ * @param {string} sessionId
+ * @throws {Error} if no matching active session exists for this user
+ */
+export const revokeSessionById = async (userId, sessionId) => {
+  const revoked = await tokenRepo.revokeRefreshTokenBySessionId(userId, sessionId);
+  if (!revoked) {
+    throw new Error('SESSION_NOT_FOUND');
+  }
+  return revoked;
+};
+
+/**
  * getActiveSessions — returns active device sessions for a user.
  */
 export const getActiveSessions = (userId) =>

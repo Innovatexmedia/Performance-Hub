@@ -26,11 +26,14 @@
 
 import User             from '../auth/models/User.js';
 import * as userRepo    from '../auth/repositories/user.repository.js';
+import * as tenantRepo  from '../auth/repositories/tenant.repository.js';
+import Membership, { MEMBERSHIP_STATUS } from '../auth/models/Membership.js';
 import { Lead }         from '../leads/lead/lead.model.js';
 import { AppError }     from '../../shared/helpers/lead.helpers.js';
 import { ROLES, ROLE_HIERARCHY, isTenantScopedRole } from '../auth/constants/roles.js';
-import { USER_STATUS }  from '../auth/constants/auth.constants.js';
-import { hashPassword } from '../../utils/password.js';
+import { USER_STATUS, TOKEN_EXPIRY } from '../auth/constants/auth.constants.js';
+import { generateSecureToken, hashToken } from '../../utils/crypto.js';
+import * as tokenRepo    from '../auth/repositories/token.repository.js';
 import { sendTeamInvite } from '../auth/services/email.service.js';
 
 // =============================================================================
@@ -168,28 +171,88 @@ export const addTeamMember = async (data, reqUser) => {
     throw AppError.conflict(`Email ${data.email} is already registered`);
   }
 
-  // 4. Generate a temporary password if none provided
-  const tempPassword = data.password || generateTempPassword();
+  // 3b. Tenant must be genuinely accessible (not suspended/expired) and
+  // under its plan's user limit -- these checks existed on the old public
+  // self-registration path but were never present here, meaning a tenant
+  // admin could add unlimited members regardless of plan, even onto a
+  // suspended workspace.
+  const tenant = await tenantRepo.findById(ctx.tenantId);
+  if (!tenant) throw AppError.notFound('Workspace not found');
 
-  // 5. Create user — password hashed by User.js pre-save hook automatically
+  const access = tenant.isAccessible();
+  if (!access.allowed) {
+    throw AppError.forbidden(`Cannot add a team member to this workspace: ${access.reason}`);
+  }
+  if (!tenant.canCreateUser()) {
+    throw AppError.forbidden(
+      `This workspace has reached its maximum user limit (${tenant.maxUsers}). Upgrade your plan to add more team members.`
+    );
+  }
+
+  // 4. Create user in PENDING state -- no usable password yet. The
+  // invitee sets their own real password when they accept (see
+  // acceptInvitation in auth.service.js). A cryptographically random
+  // placeholder is hashed into the password field purely so the schema's
+  // required-password constraint is satisfied; it is never sent anywhere
+  // and login is blocked for PENDING accounts regardless (see
+  // auth.service.js login()), so this placeholder can never actually be
+  // used to authenticate even if someone guessed it.
+  const placeholderPassword = generateSecureToken(24);
+
   const newUser = await userRepo.create({
     firstName:  data.firstName,
     lastName:   data.lastName,
     email:      data.email,
-    password:   tempPassword,
+    password:   placeholderPassword,
     role:       data.role,
     tenantId:   ctx.tenantId,
-    status:     USER_STATUS.ACTIVE,
+    status:     USER_STATUS.PENDING,
     createdBy:  ctx.userId,
   });
 
-  // 6. Send invite email (non-blocking — team member creation succeeds even if email fails)
+  // 4b. Real Membership record, also PENDING -- becomes ACTIVE only when
+  // the invitation is actually accepted (see acceptInvitation).
+  await Membership.create({
+    userId:    newUser._id,
+    tenantId:  ctx.tenantId,
+    role:      data.role,
+    status:    MEMBERSHIP_STATUS.PENDING,
+    invitedBy: ctx.userId,
+    joinedAt:  null,
+  });
+
+  // 4c. Real invitation token -- plain token goes in the email link, only
+  // its SHA-256 hash is ever stored (same pattern as password reset /
+  // email verification tokens).
+  const plainToken = generateSecureToken(32);
+  const expiresAt  = new Date(Date.now() + TOKEN_EXPIRY.INVITATION_SECONDS * 1000);
+
+  await tokenRepo.createInvitationToken({
+    userId:     newUser._id,
+    tenantId:   ctx.tenantId,
+    email:      data.email,
+    role:       data.role,
+    invitedBy:  ctx.userId,
+    tokenHash:  hashToken(plainToken),
+    expiresAt,
+  });
+
+  // NOTE: currentUserCount is intentionally NOT incremented here anymore.
+  // A pending, unaccepted invitation shouldn't consume real plan
+  // capacity -- canCreateUser()'s check above already prevents new
+  // invites once at the limit; the counter itself only increments at
+  // real acceptance (see acceptInvitation), so it reflects genuinely
+  // active members, not pending invites that may never be accepted.
+
+  // 5. Send the real invitation email (non-blocking — invite creation
+  // succeeds even if the email fails to send; same resilience as before).
   try {
     await sendTeamInvite({
-      to:           data.email,
-      firstName:    data.firstName,
-      tempPassword: data.password ? null : tempPassword, // don't send if they set their own
-      loginUrl:     `${process.env.CLIENT_URL || 'http://localhost:3000'}/login`,
+      to:         data.email,
+      firstName:  data.firstName,
+      tenantName: tenant.name,
+      role:       data.role,
+      token:      plainToken,
     });
   } catch (err) {
     console.warn(`[team] invite email failed for ${data.email}: ${err.message}`);
@@ -318,19 +381,6 @@ export const getTeamMember = async (memberId, tenantId) => {
 // =============================================================================
 // PRIVATE UTILITIES
 // =============================================================================
-
-/**
- * generateTempPassword — creates a random 12-char temp password.
- * Sent to invited users via email.
- */
-const generateTempPassword = () => {
-  const chars  = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#$';
-  let password = '';
-  for (let i = 0; i < 12; i++) {
-    password += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return password;
-};
 
 const isValidRole = (role) =>
   Object.values(ROLES).includes(role);

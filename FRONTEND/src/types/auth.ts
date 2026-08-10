@@ -32,12 +32,18 @@ export interface AuthUser {
   id: string;
   firstName: string;
   lastName: string;
+  fullName: string;
   email: string;
+  phoneNumber: string | null;
   role: AuthRole;
   tenantId: string | null;
-  status: 'active' | 'inactive' | 'suspended';
+  profileImage: string | null;
+  status: 'active' | 'inactive' | 'suspended' | 'pending' | 'deleted';
+  isActive: boolean;
+  isEmailVerified: boolean;
+  permissions: string[];
+  lastLogin: string | null;
   createdAt: string;
-  updatedAt: string;
 }
 
 /** Shared envelope for every backend response -- see src/utils/apiResponse.js */
@@ -54,14 +60,22 @@ export interface LoginPayload {
   password: string;
 }
 
+/**
+ * RegisterPayload -- matches auth.validator.js's validateRegister exactly.
+ * SECURITY: role is now restricted to tenant_owner (self-registration) or
+ * super_admin (requires superAdminSecret) -- tenant_admin/sales_user/
+ * read_only_user were removed from this public endpoint entirely (real
+ * security fix: it used to accept a bare tenantId with no real invitation
+ * check). Those roles are added via the Team page instead.
+ */
 export interface RegisterPayload {
   firstName: string;
   lastName: string;
   email: string;
   password: string;
-  role: AuthRole;
+  role?: 'tenant_owner' | 'super_admin';
   workspaceName?: string;
-  tenantId?: string;
+  superAdminSecret?: string;
 }
 
 export interface AuthResult {
@@ -109,3 +123,13 @@ export const ROLE_LABELS: Record<AuthRole, string> = {
   sales_user: 'Sales User',
   read_only_user: 'Read-Only User',
 };
+
+/** SOURCE: auth.service.js listSessions() -- one real active RefreshToken document per device/session. */
+export interface Session {
+  id: string;
+  sessionId: string;
+  isCurrent: boolean;
+  deviceInfo: { userAgent: string | null; ip: string | null };
+  createdAt: string;
+  expiresAt: string;
+}

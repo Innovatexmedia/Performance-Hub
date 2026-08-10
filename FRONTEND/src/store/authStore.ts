@@ -33,6 +33,9 @@ interface AuthState {
 
   register: (payload: RegisterPayload) => Promise<AuthUser>;
 
+  /** Completes the session from tokens already obtained elsewhere (e.g. AcceptInvitation.tsx's real API call) -- same final step as register()'s success branch, without re-calling any auth API. */
+  setSessionFromTokens: (user: AuthUser, accessToken: string) => void;
+
   /** Completes login after the multi-workspace branch -- uses pendingWorkspaceSelection's selectionToken. */
   selectWorkspace: (tenantId: string) => Promise<AuthUser>;
 
@@ -43,6 +46,12 @@ interface AuthState {
   loadWorkspaces: () => Promise<void>;
 
   logout: () => Promise<void>;
+
+  /** Revokes every active session (including this one) and clears local state -- same as logout(), but for every device, not just this one. */
+  logoutAll: () => Promise<void>;
+
+  /** Merges a partial user update into the cached session -- for Profile.tsx after a successful updateProfile() call, so the Topbar/Sidebar reflect the change immediately instead of showing stale data until a reload. */
+  updateUser: (partial: Partial<AuthUser>) => void;
 
   clearError: () => void;
 }
@@ -107,6 +116,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  /**
+   * setSessionFromTokens -- completes the session from an already-obtained
+   * {user, accessToken} pair, same final step as register()'s success
+   * branch. Used by AcceptInvitation.tsx, which gets real tokens back
+   * directly from POST /auth/invitations/:token/accept (that endpoint
+   * issues tokens the same way register() does) -- this just needs to
+   * apply them to the store without re-calling any auth API.
+   */
+  setSessionFromTokens: (user, accessToken) => {
+    set({ user, accessToken, status: 'authenticated', error: null });
+    connectSocket(() => useAuthStore.getState().accessToken);
+  },
+
   selectWorkspace: async (tenantId) => {
     const pending = get().pendingWorkspaceSelection;
     if (!pending) throw new Error('No pending workspace selection -- log in again');
@@ -162,6 +184,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
     disconnectSocket();
     set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
+  },
+
+  logoutAll: async () => {
+    try {
+      await authApi.logoutAll();
+    } catch {
+      // Best-effort -- clear local session regardless of network/server errors.
+    }
+    disconnectSocket();
+    set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
+  },
+
+  updateUser: (partial) => {
+    const current = get().user;
+    if (!current) return;
+    set({ user: { ...current, ...partial } });
   },
 
   clearError: () => set({ error: null }),

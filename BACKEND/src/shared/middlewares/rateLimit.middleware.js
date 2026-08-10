@@ -57,8 +57,21 @@ export const forgotPasswordRateLimit = rateLimit({
 });
 
 /**
- * generalApiRateLimit — 100 requests per 15 minutes per IP.
- * Applied globally in app.js for all /api routes.
+ * generalApiRateLimit — applied globally in app.js for all /api routes.
+ * 300 requests per 1 minute per IP (see RATE_LIMITS in auth.constants.js
+ * for the real reasoning: a short window with a generous cap recovers
+ * fast if ever approached, instead of locking a real user out for 15
+ * minutes the way the original 100/15min config did).
+ *
+ * NOTE: previously had a `skip: (req) => req.user?.role === 'super_admin'`
+ * condition -- removed because it never actually worked. This middleware
+ * is mounted in app.js BEFORE any route-specific `authenticate` runs, so
+ * req.user is always undefined at this point regardless of who's calling
+ * -- the check silently evaluated to false for every single request. Real
+ * per-user exemption would require moving auth resolution earlier in the
+ * global chain (a bigger change); removed rather than leave broken dead
+ * code, and the much more generous limit above makes this far less
+ * necessary anyway.
  */
 export const generalApiRateLimit = rateLimit({
   windowMs:        RATE_LIMITS.GENERAL_API_WINDOW_MINUTES * 60 * 1000,
@@ -66,5 +79,4 @@ export const generalApiRateLimit = rateLimit({
   standardHeaders: true,
   legacyHeaders:   false,
   handler:         rateLimitHandler,
-  skip:            (req) => req.user?.role === 'super_admin', // Don't rate-limit super_admin
 });

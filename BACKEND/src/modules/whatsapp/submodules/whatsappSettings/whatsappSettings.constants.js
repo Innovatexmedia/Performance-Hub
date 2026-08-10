@@ -105,6 +105,9 @@ export const SENSITIVE_FIELDS = Object.freeze([
   'meta.accessToken',
   'meta.appSecret',
   'meta.verifyToken',
+  'dialog360.apiKey',
+  'twilio.authToken',
+  'interakt.apiKey',
 ]);
 
 // ── Default settings document (deep-merged on create) ──────────────────────────

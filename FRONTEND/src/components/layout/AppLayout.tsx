@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Outlet, Navigate } from 'react-router-dom';
+import { Outlet, Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { useAuthStore } from '@/store/authStore';
@@ -14,6 +14,8 @@ export function AppLayout() {
     typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
   );
   const status = useAuthStore((s) => s.status);
+  const user = useAuthStore((s) => s.user);
+  const location = useLocation();
 
   // 'idle'/'loading' = initialize() (see App.tsx) is still trying a silent
   // refresh via the httpOnly cookie -- wait rather than bounce to /login,
@@ -21,6 +23,17 @@ export function AppLayout() {
   // an already-signed-in user.
   if (status === 'idle' || status === 'loading') return null;
   if (status === 'unauthenticated') return <Navigate to="/login" replace />;
+
+  // super_admin has no tenant context (confirmed: resolveTenant sets
+  // req.tenant = null for this role on the backend) -- every tenant
+  // module would silently render as permanently empty rather than
+  // erroring, which is worse than a clear redirect. Hiding the sidebar
+  // link (see nav.ts) stops normal navigation; this stops direct URL
+  // access to the same broken destination. /super-admin and /profile are
+  // the two real exceptions -- see comment above this block.
+  if (user?.role === 'super_admin' && location.pathname !== '/super-admin' && location.pathname !== '/profile') {
+    return <Navigate to="/super-admin" replace />;
+  }
 
   return (
     <div className="min-h-screen bg-ink-50">

@@ -51,8 +51,13 @@ const router = Router();
 router.use(authenticate);
 router.use(resolveTenant);
 
+// ── Narrow, ungated cross-module read for AI Qualification ───────────────────
+// Deliberately NOT gated -- see settings.service.js's comment on why this
+// exists separately from the full, now admin-gated settings bundle below.
+router.get('/qualification-questions', controller.getQualificationQuestions);
+
 // ── Full settings page — GET all tabs at once ─────────────────────────────────
-router.get('/', controller.getAllSettings);
+router.get('/', requireRole('tenant_admin'), controller.getAllSettings);
 
 // ── Tab 1: Company ────────────────────────────────────────────────────────────
 router.patch('/company',       requireRole('tenant_admin'), validateCompany,       controller.updateCompany);
@@ -61,10 +66,10 @@ router.patch('/company',       requireRole('tenant_admin'), validateCompany,    
 router.patch('/branding',      requireRole('tenant_admin'), validateBranding,      controller.updateBranding);
 
 // ── Tab 3: Lead Fields (read-only) ────────────────────────────────────────────
-router.get('/lead-fields',     controller.getLeadFields);
+router.get('/lead-fields',     requireRole('tenant_admin'), controller.getLeadFields);
 
 // ── Tab 4: Pipeline Stages (read-only — system-defined) ──────────────────────
-router.get('/pipeline-stages', controller.getPipelineStages);
+router.get('/pipeline-stages', requireRole('tenant_admin'), controller.getPipelineStages);
 
 // ── Tab 5: Qualification Questions ───────────────────────────────────────────
 router.patch('/qualification',  requireRole('tenant_admin'), validateQualification, controller.updateQualification);
@@ -79,7 +84,7 @@ router.patch('/notifications',  requireRole('tenant_admin'), validateNotificatio
 router.patch('/consent',        requireRole('tenant_admin'), validateConsent,       controller.updateConsent);
 
 // ── Tab 9: Billing (read-only — updated by payment webhooks) ─────────────────
-router.get('/billing',          controller.getBilling);
+router.get('/billing',          requireRole('tenant_admin'), controller.getBilling);
 
 // ── Tab 10: Security ──────────────────────────────────────────────────────────
 router.patch('/security',       requireRole('tenant_admin'), validateSecurity,      controller.updateSecurity);

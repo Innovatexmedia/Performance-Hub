@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/apiClient';
-import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, WorkspaceOption } from '@/types/auth';
+import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, WorkspaceOption, Session } from '@/types/auth';
 
 /**
  * Thin, typed functions -- one per backend route. No business logic here;
@@ -32,6 +32,9 @@ export const authApi = {
   changePassword: (currentPassword: string, newPassword: string) =>
     apiClient.patch<null>('/auth/change-password', { currentPassword, newPassword }),
 
+  updateProfile: (data: { firstName?: string; lastName?: string; phoneNumber?: string; profileImage?: string }) =>
+    apiClient.patch<{ user: AuthUser }>('/auth/profile', data).then((r) => r.user),
+
   forgotPassword: (email: string) => apiClient.post<null>('/auth/forgot-password', { email }),
 
   resetPassword: (token: string, password: string) =>
@@ -40,4 +43,16 @@ export const authApi = {
   verifyEmail: (token: string) => apiClient.post<{ user: AuthUser }>('/auth/verify-email', { token }),
 
   resendVerification: () => apiClient.post<null>('/auth/resend-verification'),
+
+  getInvitationPreview: (token: string) =>
+    apiClient.get<{ email: string; role: string; tenantName: string; expiresAt: string }>(`/auth/invitations/${token}`),
+
+  acceptInvitation: (token: string, password: string) =>
+    apiClient.post<AuthResult>(`/auth/invitations/${token}/accept`, { password }),
+
+  listSessions: () => apiClient.get<{ sessions: Session[] }>('/auth/sessions').then((r) => r.sessions),
+
+  revokeSession: (sessionId: string) => apiClient.delete<null>(`/auth/sessions/${sessionId}`),
+
+  logoutAll: () => apiClient.post<null>('/auth/logout-all'),
 };

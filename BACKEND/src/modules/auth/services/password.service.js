@@ -31,7 +31,15 @@ export const requestPasswordReset = async ({ email, ip }) => {
   const user = await userRepo.findByEmail(email);
 
   // Anti-enumeration: don't throw if user not found — just return silently
-  if (!user) return;
+  // to the CALLER (the HTTP response stays identical either way, by
+  // design). This console log is server-side only, never sent to the
+  // requester -- it exists purely so local testing doesn't look
+  // indistinguishable from "the reset flow is broken" when the real
+  // explanation is just "that email isn't registered."
+  if (!user) {
+    console.log(`\n[forgot-password] No account found for "${email}" -- no email sent (this is correct anti-enumeration behavior, not a bug). If you're testing locally, use a real registered email.\n`);
+    return;
+  }
 
   // Invalidate any existing unused tokens for this user
   await tokenRepo.invalidateExistingResetTokens(user._id);

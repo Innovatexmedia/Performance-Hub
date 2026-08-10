@@ -202,6 +202,9 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
                 <p className="text-xs text-ink-500">{user.email}</p>
                 <p className="mt-1 text-xs font-medium text-brand-600">{ROLE_LABELS[user.role]}</p>
               </div>
+              <button onClick={() => { setProfileOpen(false); navigate('/profile'); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 hover:bg-ink-50">
+                <Icons.User size={16} /> My Profile
+              </button>
               <button onClick={() => { setProfileOpen(false); navigate('/settings'); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 hover:bg-ink-50">
                 <Icons.Settings size={16} /> Settings
               </button>

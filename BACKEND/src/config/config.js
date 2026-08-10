@@ -32,7 +32,20 @@ const config = {
   // target -- Meta can't reach localhost. Set this explicitly (e.g. your
   // ngrok URL, or your real domain) for the webhook to actually function.
   API_BASE_URL: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 4000}`,
+  // Required to create a super_admin account via /auth/register -- without
+  // this set, super_admin registration is permanently blocked (fails
+  // closed, not open). Set this to a real, private secret and share it
+  // only with whoever needs to create the first platform-staff account.
+  SUPER_ADMIN_SECRET: process.env.SUPER_ADMIN_SECRET || null,
 };
+
+if (!process.env.SUPER_ADMIN_SECRET) {
+  console.warn(
+    '\n⚠️  SUPER_ADMIN_SECRET is not set.' +
+    '\n   Creating a super_admin account via /auth/register is disabled until this is set.' +
+    '\n   Set it to a real, private secret you control.\n'
+  );
+}
 
 if (!process.env.API_BASE_URL) {
   console.warn(

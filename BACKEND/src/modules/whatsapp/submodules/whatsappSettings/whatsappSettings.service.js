@@ -107,6 +107,9 @@ function sanitize(doc) {
   const hasAccessToken = !!(o.meta && o.meta.accessToken);
   const hasAppSecret   = !!(o.meta && o.meta.appSecret);
   const hasVerifyToken = !!(o.meta && o.meta.verifyToken);
+  const hasDialog360ApiKey = !!(o.dialog360 && o.dialog360.apiKey);
+  const hasTwilioAuthToken = !!(o.twilio && o.twilio.authToken);
+  const hasInteraktApiKey = !!(o.interakt && o.interakt.apiKey);
 
   for (const path of SENSITIVE_FIELDS) unsetPath(safe, path);
 
@@ -115,6 +118,15 @@ function sanitize(doc) {
     safe.meta.hasAccessToken = hasAccessToken;
     safe.meta.hasAppSecret   = hasAppSecret;
     safe.meta.hasVerifyToken = hasVerifyToken;
+  }
+  if (safe.dialog360) {
+    safe.dialog360.hasApiKey = hasDialog360ApiKey;
+  }
+  if (safe.twilio) {
+    safe.twilio.hasAuthToken = hasTwilioAuthToken;
+  }
+  if (safe.interakt) {
+    safe.interakt.hasApiKey = hasInteraktApiKey;
   }
   return safe;
 }
@@ -301,7 +313,7 @@ export const whatsappSettingsService = {
     // it is never accepted from a client, only derived (see
     // resolveProviderFields) or set inside testConnection().
     if (section === 'provider') {
-      const { meta } = sectionPatch;
+      const { meta, dialog360, twilio, interakt } = sectionPatch;
 
       const providerFields = resolveProviderFields(existing, sectionPatch);
       const finalProvider = providerFields.provider ?? existing.provider;
@@ -323,6 +335,9 @@ export const whatsappSettingsService = {
 
       const setOps = { ...providerFields };
       if (meta) Object.assign(setOps, flatten({ meta }));
+      if (dialog360) Object.assign(setOps, flatten({ dialog360 }));
+      if (twilio) Object.assign(setOps, flatten({ twilio }));
+      if (interakt) Object.assign(setOps, flatten({ interakt }));
       setOps.updatedBy = ctx.userId;
       const updated = await whatsappSettingsRepository.update(ctx.tenantId, setOps);
       return sanitize(updated);
@@ -348,14 +363,29 @@ export const whatsappSettingsService = {
     const settings = await whatsappSettingsRepository.findByTenant(ctx.tenantId);
     if (!settings) throw new AppError(404, 'Settings not found');
 
-    const { provider, meta } = settings;
+    const { provider } = settings;
 
-    if (provider !== PROVIDER.META_CLOUD) {
-      throw new AppError(
-        501,
-        `${provider} isn't connected yet — support for this provider is coming soon. Native Meta Cloud API is the only fully working integration right now.`,
-      );
+    if (provider === PROVIDER.META_CLOUD) {
+      return this._testMetaConnection(ctx, settings);
     }
+    if (provider === PROVIDER.DIALOG360) {
+      return this._test360DialogConnection(ctx, settings);
+    }
+    if (provider === PROVIDER.TWILIO) {
+      return this._testTwilioConnection(ctx, settings);
+    }
+    if (provider === PROVIDER.INTERAKT) {
+      return this._testInteraktConnection(ctx, settings);
+    }
+
+    throw new AppError(
+      501,
+      `${provider} isn't connected yet — support for this provider is coming soon. Native Meta Cloud API, 360Dialog, Twilio, and Interakt are the only fully working integrations right now.`,
+    );
+  },
+
+  async _testMetaConnection(ctx, settings) {
+    const { provider, meta } = settings;
 
     const missing = [];
     if (!meta?.phoneNumberId)     missing.push('phoneNumberId');
@@ -391,7 +421,7 @@ export const whatsappSettingsService = {
       'meta.lastVerifiedAt': now,
       'meta.displayPhoneNumber': graphJson.display_phone_number || '',
       'meta.verifiedName': graphJson.verified_name || '',
-      // The ONLY line in the entire codebase that sets providerMode to LIVE.
+      // The ONLY two lines in the entire codebase that set providerMode to LIVE (the other is 360Dialog's own verification, right below).
       providerMode: PROVIDER_MODE.LIVE,
       updatedBy: ctx.userId,
     });
@@ -403,6 +433,182 @@ export const whatsappSettingsService = {
       displayPhoneNumber: graphJson.display_phone_number || '',
       verifiedName: graphJson.verified_name || '',
       message: 'Connected — credentials verified against Meta\'s Graph API. This integration is now live.',
+    };
+  },
+
+  /**
+   * Real 360Dialog verification. SOURCE: docs.360dialog.com (Messaging
+   * API) -- base URL waba-v2.360dialog.io, single D360-API-KEY header
+   * auth (no separate phoneNumberId/businessAccountId needed, since the
+   * key is already scoped to one channel on 360dialog's side). Uses the
+   * real GET /whatsapp_business_profile endpoint as a lightweight,
+   * read-only credential check -- same role Meta's phone-number lookup
+   * plays above, not a message send.
+   */
+  async _test360DialogConnection(ctx, settings) {
+    const { provider, dialog360 } = settings;
+
+    if (!dialog360?.apiKey) {
+      throw new AppError(400, 'Cannot test connection — missing: apiKey');
+    }
+
+    const url = 'https://waba-v2.360dialog.io/whatsapp_business_profile?fields=about,address,description,email,profile_picture_url,websites,vertical';
+
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: { 'D360-API-KEY': dialog360.apiKey },
+      });
+    } catch (networkError) {
+      throw new AppError(502, `Could not reach 360Dialog's API — ${networkError.message}`);
+    }
+
+    const json = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message = json?.error?.message || json?.errors?.[0]?.details || `HTTP ${response.status}`;
+      throw new AppError(400, `360Dialog rejected this API key — ${message}`);
+    }
+
+    const profile = json?.data?.[0] || json;
+    const now = new Date();
+    await whatsappSettingsRepository.update(ctx.tenantId, {
+      'dialog360.connected': true,
+      'dialog360.connectedAt': now,
+      'dialog360.lastVerifiedAt': now,
+      'dialog360.about': profile?.about || '',
+      providerMode: PROVIDER_MODE.LIVE,
+      updatedBy: ctx.userId,
+    });
+
+    return {
+      connected: true,
+      provider,
+      mode: PROVIDER_MODE.LIVE,
+      about: profile?.about || '',
+      message: 'Connected — API key verified against 360Dialog\'s real Messaging API. This integration is now live.',
+    };
+  },
+
+  /**
+   * Real Twilio verification. SOURCE: real Twilio API docs
+   * (twilio.com/docs/whatsapp) -- Twilio uses HTTP Basic Auth
+   * (accountSid:authToken), not a bearer token or single API key. Uses
+   * the real GET /Accounts/{sid}.json endpoint as a lightweight,
+   * read-only credential check -- fails with a real 401 if the
+   * Account SID/Auth Token pair is wrong, same role the Meta and
+   * 360Dialog checks play above.
+   */
+  async _testTwilioConnection(ctx, settings) {
+    const { provider, twilio } = settings;
+
+    const missing = [];
+    if (!twilio?.accountSid)     missing.push('accountSid');
+    if (!twilio?.authToken)      missing.push('authToken');
+    if (!twilio?.whatsappNumber) missing.push('whatsappNumber');
+    if (missing.length) {
+      throw new AppError(400, `Cannot test connection — missing: ${missing.join(', ')}`);
+    }
+
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${twilio.accountSid}.json`;
+    const basicAuth = Buffer.from(`${twilio.accountSid}:${twilio.authToken}`).toString('base64');
+
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: { Authorization: `Basic ${basicAuth}` },
+      });
+    } catch (networkError) {
+      throw new AppError(502, `Could not reach Twilio's API — ${networkError.message}`);
+    }
+
+    const json = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message = json?.message || `HTTP ${response.status}`;
+      throw new AppError(400, `Twilio rejected these credentials — ${message}`);
+    }
+
+    const now = new Date();
+    await whatsappSettingsRepository.update(ctx.tenantId, {
+      'twilio.connected': true,
+      'twilio.connectedAt': now,
+      'twilio.lastVerifiedAt': now,
+      'twilio.friendlyName': json.friendly_name || '',
+      providerMode: PROVIDER_MODE.LIVE,
+      updatedBy: ctx.userId,
+    });
+
+    return {
+      connected: true,
+      provider,
+      mode: PROVIDER_MODE.LIVE,
+      friendlyName: json.friendly_name || '',
+      message: 'Connected — credentials verified against Twilio\'s real Account API. This integration is now live.',
+    };
+  },
+
+  /**
+   * Real Interakt verification. SOURCE: real Interakt API docs
+   * (interakt.shop/resource-center) -- Authorization header is literally
+   * 'Basic <API Key>' with the raw key, NOT a base64-encoded
+   * username:password pair (confirmed directly from Interakt's own
+   * Postman examples -- this is genuinely different from Twilio's Basic
+   * Auth, which does require that encoding). Uses their real, documented
+   * Get Users endpoint (limit=1) as a lightweight, read-only credential
+   * check -- fails with a real 401/403 if the key is wrong.
+   *
+   * IMPORTANT LIMITATION, surfaced honestly rather than silently: unlike
+   * Meta/360Dialog/Twilio, Interakt's real public Send Message API
+   * (POST /v1/public/message/) is template-only -- every documented
+   * example requires a pre-approved template name, with no free-text
+   * "session message" option. This means credentials CAN be genuinely
+   * verified here, but InteraktProvider.sendMessage() (see
+   * interakt.provider.js) will throw a clear error for the app's normal
+   * free-text send flow until real template support exists elsewhere.
+   */
+  async _testInteraktConnection(ctx, settings) {
+    const { provider, interakt } = settings;
+
+    if (!interakt?.apiKey) {
+      throw new AppError(400, 'Cannot test connection — missing: apiKey');
+    }
+
+    const url = 'https://api.interakt.ai/v1/public/apis/users/?offset=0&limit=1';
+
+    let response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Authorization: `Basic ${interakt.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+      });
+    } catch (networkError) {
+      throw new AppError(502, `Could not reach Interakt's API — ${networkError.message}`);
+    }
+
+    const json = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const message = json?.message || json?.error || `HTTP ${response.status}`;
+      throw new AppError(400, `Interakt rejected this API key — ${message}`);
+    }
+
+    const now = new Date();
+    await whatsappSettingsRepository.update(ctx.tenantId, {
+      'interakt.connected': true,
+      'interakt.connectedAt': now,
+      'interakt.lastVerifiedAt': now,
+      providerMode: PROVIDER_MODE.LIVE,
+      updatedBy: ctx.userId,
+    });
+
+    return {
+      connected: true,
+      provider,
+      mode: PROVIDER_MODE.LIVE,
+      message: 'Connected — API key verified against Interakt\'s real API. Note: Interakt only supports pre-approved template messages, not free text — sending will be limited until template support is added.',
     };
   },
 
@@ -468,6 +674,9 @@ export const whatsappSettingsService = {
       providerMode: o.providerMode,
       panelMode:    o.panelMode,
       meta:         o.meta,        // full credentials — internal callers only
+      dialog360:    o.dialog360,   // full credentials — internal callers only
+      twilio:       o.twilio,      // full credentials — internal callers only
+      interakt:     o.interakt,    // full credentials — internal callers only
       messaging:    o.messaging,
       limits:       o.limits,
       advanced:     o.advanced,

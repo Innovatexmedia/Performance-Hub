@@ -20,6 +20,17 @@ export const getAllSettings = asyncHandler(async (req, res) => {
 });
 
 /**
+ * getQualificationQuestions — GET /api/settings/qualification-questions
+ * Narrow, ungated (below tenant_admin) endpoint for AI Qualification's
+ * real cross-module read -- see settings.service.js's comment on why
+ * this exists separately from the now admin-gated getAllSettings.
+ */
+export const getQualificationQuestions = asyncHandler(async (req, res) => {
+  const data = await settingsService.getQualificationQuestions(req.user.tenantId);
+  return sendSuccess(res, data, 'Qualification questions fetched successfully');
+});
+
+/**
  * updateCompany — PATCH /api/settings/company
  * SOURCE: FRONTEND_SPEC §19 Company tab — Company Name + Website + Save button
  */

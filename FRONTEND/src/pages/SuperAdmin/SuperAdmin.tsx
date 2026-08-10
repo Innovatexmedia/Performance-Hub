@@ -1,11 +1,15 @@
-import { useState } from 'react';
-import { Plus, ShieldCheck, Building2, Users, Activity, Server } from 'lucide-react';
-import { useStore } from '@/store/store';
-import { PageHeader, Card, CardHeader, Button, Badge, StatusBadge, Tabs, Table, Th, Td, Tr, Modal, Field, Input, Select } from '@/components/ui';
+import { useState, useEffect } from 'react';
+import { Plus, ShieldCheck, Building2, Users, Server } from 'lucide-react';
+import { superAdminApi } from '@/lib/superAdminApi';
+import { PageHeader, Card, CardHeader, Button, Badge, Tabs, Table, Th, Td, Tr, Modal, Field, Input, Select } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
-import { formatCurrency, timeAgo, formatDate } from '@/utils/formatters';
+import { formatCurrency, timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
-import type { Tenant } from '@/types';
+import { ApiError } from '@/lib/apiClient';
+import type {
+  PlatformDashboard, PlatformTenant, PlatformUser, IntegrationHealthRow,
+  ActivityLogEntry, GlobalTemplate, CreateTenantInput,
+} from '@/types/superAdmin';
 
 const TABS = [
   { id: 'tenants', label: 'Tenants' }, { id: 'users', label: 'All Users' },
@@ -13,143 +17,303 @@ const TABS = [
   { id: 'templates', label: 'Global Templates' },
 ];
 
+/**
+ * SuperAdmin -- confirmed spec-aligned (MASTER_SPEC B19, FRONTEND_SPEC §20):
+ * platform KPI row + 5 tabs. Real backend built from scratch this session
+ * (src/modules/superAdmin/*) -- previously this page read entirely from
+ * the old mock store. Every number, every row, every action below is
+ * real.
+ */
 export function SuperAdmin() {
-  const db = useStore((s) => s.db);
-  const { createTenant, updateTenant } = useStore();
   const [tab, setTab] = useState('tenants');
-  const [show, setShow] = useState(false);
-  const [edit, setEdit] = useState<Tenant | null>(null);
-  const [form, setForm] = useState({ name: '', domain: '', plan: 'Starter' as Tenant['plan'], industry: 'SaaS', region: 'North America' });
+  const [dashboard, setDashboard] = useState<PlatformDashboard | null>(null);
 
-  const create = () => {
-    if (!form.name.trim()) return toast.error('Name required');
-    createTenant(form);
-    setShow(false); setForm({ name: '', domain: '', plan: 'Starter', industry: 'SaaS', region: 'North America' });
-  };
-
-  const totalMrr = db.tenants.reduce((s, t) => s + t.mrr, 0);
+  useEffect(() => {
+    superAdminApi.getDashboard().then(setDashboard).catch(() => toast.error('Could not load platform dashboard'));
+  }, []);
 
   return (
     <div>
-      <PageHeader title="Super Admin Panel" description="Platform-level control across all tenants." breadcrumb={['Admin', 'Super Admin']}
-        actions={<Button onClick={() => setShow(true)}><Plus size={16} /> New Tenant</Button>} />
+      <PageHeader title="Super Admin Panel" description="Platform-level control across all tenants." breadcrumb={['Admin', 'Super Admin']} />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Tenants" value={db.tenants.length} icon={<Building2 size={18} />} accent="#6366f1" />
-        <KpiCard label="Total users" value={db.users.length} icon={<Users size={18} />} accent="#8b5cf6" />
-        <KpiCard label="Platform MRR" value={formatCurrency(totalMrr)} icon={<Server size={18} />} accent="#10b981" />
-        <KpiCard label="Active tenants" value={db.tenants.filter((t) => t.status === 'active').length} icon={<ShieldCheck size={18} />} accent="#f59e0b" />
+        <KpiCard label="Tenants" value={dashboard?.totalTenants ?? '—'} icon={<Building2 size={18} />} accent="#6366f1" />
+        <KpiCard label="Total users" value={dashboard?.totalUsers ?? '—'} icon={<Users size={18} />} accent="#8b5cf6" />
+        <KpiCard label="Platform MRR" value={dashboard ? formatCurrency(dashboard.mrr) : '—'} icon={<Server size={18} />} accent="#10b981" />
+        <KpiCard label="Active tenants" value={dashboard?.activeTenants ?? '—'} icon={<ShieldCheck size={18} />} accent="#f59e0b" />
       </div>
 
       <div className="mb-4"><Tabs tabs={TABS} active={tab} onChange={setTab} /></div>
 
-      {tab === 'tenants' && (
-        <Card>
-          <CardHeader title="All Tenants" />
+      {tab === 'tenants' && <TenantsTab />}
+      {tab === 'users' && <UsersTab />}
+      {tab === 'health' && <HealthTab />}
+      {tab === 'activity' && <ActivityTab />}
+      {tab === 'templates' && <TemplatesTab />}
+    </div>
+  );
+}
+
+function TenantsTab() {
+  const [tenants, setTenants] = useState<PlatformTenant[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [show, setShow] = useState(false);
+  const [edit, setEdit] = useState<PlatformTenant | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<CreateTenantInput>({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', plan: 'free' });
+
+  const load = () => {
+    setLoading(true);
+    superAdminApi.listTenants({ limit: 100 })
+      .then((r) => setTenants(r.tenants))
+      .catch(() => toast.error('Could not load tenants'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      await superAdminApi.createTenant(form);
+      toast.success('Tenant created');
+      setShow(false);
+      setForm({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', plan: 'free' });
+      load();
+    } catch (err) {
+      toast.error('Could not create tenant', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!edit) return;
+    setSaving(true);
+    try {
+      await superAdminApi.updateTenant(edit.id, { name: edit.name, plan: edit.plan, mrr: edit.mrr, maxUsers: edit.maxUsers });
+      toast.success('Tenant updated');
+      setEdit(null);
+      load();
+    } catch (err) {
+      toast.error('Could not update tenant', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleToggleSuspend = async (t: PlatformTenant) => {
+    setBusyId(t.id);
+    try {
+      if (t.subscriptionStatus === 'suspended') {
+        await superAdminApi.reactivateTenant(t.id);
+        toast.success('Tenant reactivated');
+      } else {
+        await superAdminApi.suspendTenant(t.id);
+        toast.success('Tenant suspended');
+      }
+      load();
+    } catch (err) {
+      toast.error('Could not update tenant', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader title="All Tenants" action={<Button onClick={() => setShow(true)}><Plus size={16} /> New Tenant</Button>} />
+        {loading ? (
+          <p className="p-8 text-center text-sm text-ink-400">Loading tenants…</p>
+        ) : (
           <Table>
-            <thead><tr><Th>Tenant</Th><Th>Plan</Th><Th>Status</Th><Th>Industry</Th><Th>Region</Th><Th>Seats</Th><Th>MRR</Th><Th>Actions</Th></tr></thead>
+            <thead><tr><Th>Tenant</Th><Th>Plan</Th><Th>Status</Th><Th>Users</Th><Th>MRR</Th><Th>Actions</Th></tr></thead>
             <tbody>
-              {db.tenants.map((t) => (
+              {tenants.map((t) => (
                 <Tr key={t.id}>
-                  <Td><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-md text-xs font-bold text-white" style={{ background: t.logo_color }}>{t.name[0]}</span><span className="font-medium">{t.name}</span></div></Td>
+                  <Td><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">{t.name[0]}</span><div><p className="font-medium">{t.name}</p><p className="text-xs text-ink-400">{t.ownerEmail}</p></div></div></Td>
                   <Td><Badge tone="violet">{t.plan}</Badge></Td>
-                  <Td><StatusBadge status={t.status} /></Td>
-                  <Td>{t.industry}</Td><Td>{t.region}</Td><Td>{t.seats}</Td>
+                  <Td><Badge tone={t.subscriptionStatus === 'active' ? 'green' : t.subscriptionStatus === 'suspended' ? 'red' : 'gray'}>{t.subscriptionStatus}</Badge></Td>
+                  <Td>{t.currentUserCount} / {t.maxUsers}</Td>
                   <Td className="font-medium">{formatCurrency(t.mrr)}</Td>
                   <Td>
                     <div className="flex gap-1.5">
                       <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEdit(t)}>Edit</Button>
-                      <Button variant="ghost" className="px-2.5 py-1 text-xs text-amber-600" onClick={() => updateTenant(t.id, { status: t.status === 'suspended' ? 'active' : 'suspended' })}>{t.status === 'suspended' ? 'Reactivate' : 'Suspend'}</Button>
+                      <Button variant="ghost" className="px-2.5 py-1 text-xs text-amber-600" disabled={busyId === t.id} onClick={() => void handleToggleSuspend(t)}>
+                        {busyId === t.id ? '…' : t.subscriptionStatus === 'suspended' ? 'Reactivate' : 'Suspend'}
+                      </Button>
                     </div>
                   </Td>
                 </Tr>
               ))}
             </tbody>
           </Table>
-        </Card>
-      )}
+        )}
+      </Card>
 
-      {tab === 'users' && (
-        <Card>
-          <CardHeader title="All Platform Users" />
-          <Table>
-            <thead><tr><Th>User</Th><Th>Email</Th><Th>Role</Th><Th>Tenant</Th><Th>Status</Th></tr></thead>
-            <tbody>
-              {db.users.map((u) => (
-                <Tr key={u.id}><Td className="font-medium">{u.name}</Td><Td>{u.email}</Td><Td><Badge tone="blue">{u.role}</Badge></Td><Td>{db.tenants.find((t) => t.id === u.tenant_id)?.name ?? '—'}</Td><Td><Badge tone={u.status === 'active' ? 'green' : 'gray'}>{u.status}</Badge></Td></Tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
-      )}
-
-      {tab === 'health' && (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {db.integrations.filter((i) => i.tenant_id === db.tenants[0].id).map((i) => (
-            <Card key={i.id} className="p-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold text-white" style={{ background: i.logo_color }}>{i.name[0]}</span><span className="text-sm font-semibold">{i.name}</span></div>
-                <Badge tone={i.status === 'connected' ? 'green' : i.status === 'simulation' ? 'amber' : 'gray'}>{i.status}</Badge>
-              </div>
-              <p className="mt-2 text-xs text-ink-400">Uptime: {i.status === 'disconnected' ? '—' : '99.9%'} · Last sync {timeAgo(i.last_sync)}</p>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {tab === 'activity' && (
-        <Card>
-          <CardHeader title="Global Activity Log" />
-          <Table>
-            <thead><tr><Th>Actor</Th><Th>Action</Th><Th>Entity</Th><Th>Time</Th></tr></thead>
-            <tbody>
-              {db.auditLogs.map((a) => (
-                <Tr key={a.id}><Td className="font-medium">{db.users.find((u) => u.id === a.actor_id)?.name ?? '—'}</Td><Td>{a.action}</Td><Td><Badge tone="gray">{a.entity_type}</Badge></Td><Td className="text-ink-500">{timeAgo(a.created_at)}</Td></Tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
-      )}
-
-      {tab === 'templates' && (
-        <Card>
-          <CardHeader title="Global Templates" subtitle="Available across all tenants" />
-          <Table>
-            <thead><tr><Th>Name</Th><Th>Type</Th><Th>Scope</Th><Th>Version</Th></tr></thead>
-            <tbody>
-              {db.genericTemplates.filter((t) => t.scope === 'global').map((t) => (
-                <Tr key={t.id}><Td className="font-medium">{t.name}</Td><Td>{t.type}</Td><Td><Badge tone="violet">global</Badge></Td><Td>v{t.version}</Td></Tr>
-              ))}
-            </tbody>
-          </Table>
-        </Card>
-      )}
-
-      {(show || edit) && (
-        <Modal open onClose={() => { setShow(false); setEdit(null); }} title={edit ? `Edit ${edit.name}` : 'Create Tenant'}
-          footer={<><Button variant="secondary" onClick={() => { setShow(false); setEdit(null); }}>Cancel</Button><Button onClick={() => { if (edit) { updateTenant(edit.id, edit); setEdit(null); } else create(); }}>{edit ? 'Save' : 'Create tenant'}</Button></>}>
-          {edit ? (
-            <div className="space-y-4">
-              <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Plan"><Select value={edit.plan} onChange={(e) => setEdit({ ...edit, plan: e.target.value as Tenant['plan'] })}>{['Starter', 'Growth', 'Scale', 'Enterprise'].map((p) => <option key={p}>{p}</option>)}</Select></Field>
-                <Field label="Seats"><Input type="number" value={edit.seats} onChange={(e) => setEdit({ ...edit, seats: Number(e.target.value) })} /></Field>
-              </div>
-              <Field label="MRR (USD)"><Input type="number" value={edit.mrr} onChange={(e) => setEdit({ ...edit, mrr: Number(e.target.value) })} /></Field>
+      {show && (
+        <Modal open onClose={() => setShow(false)} title="Create Tenant"
+          footer={<><Button variant="secondary" onClick={() => setShow(false)} disabled={saving}>Cancel</Button><Button onClick={() => void handleCreate()} disabled={saving}>{saving ? 'Creating…' : 'Create tenant'}</Button></>}>
+          <div className="space-y-4">
+            <Field label="Workspace name"><Input value={form.workspaceName} onChange={(e) => setForm({ ...form, workspaceName: e.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Owner first name"><Input value={form.ownerFirstName} onChange={(e) => setForm({ ...form, ownerFirstName: e.target.value })} /></Field>
+              <Field label="Owner last name"><Input value={form.ownerLastName} onChange={(e) => setForm({ ...form, ownerLastName: e.target.value })} /></Field>
             </div>
-          ) : (
-            <div className="space-y-4">
-              <Field label="Tenant name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
-              <Field label="Domain"><Input value={form.domain} onChange={(e) => setForm({ ...form, domain: e.target.value })} placeholder="acme.com" /></Field>
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="Plan"><Select value={form.plan} onChange={(e) => setForm({ ...form, plan: e.target.value as Tenant['plan'] })}>{['Starter', 'Growth', 'Scale', 'Enterprise'].map((p) => <option key={p}>{p}</option>)}</Select></Field>
-                <Field label="Region"><Select value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })}>{['North America', 'Europe', 'Asia Pacific', 'Latin America', 'Middle East'].map((r) => <option key={r}>{r}</option>)}</Select></Field>
-              </div>
-              <Field label="Industry"><Input value={form.industry} onChange={(e) => setForm({ ...form, industry: e.target.value })} /></Field>
-            </div>
-          )}
+            <Field label="Owner email"><Input type="email" value={form.ownerEmail} onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })} /></Field>
+            <Field label="Owner password" hint="At least 8 characters, with an uppercase letter, lowercase letter, and a number.">
+              <Input type="password" value={form.ownerPassword} onChange={(e) => setForm({ ...form, ownerPassword: e.target.value })} />
+            </Field>
+            <Field label="Plan"><Select value={form.plan} onChange={(e) => setForm({ ...form, plan: e.target.value as CreateTenantInput['plan'] })}>{['free', 'starter', 'growth', 'scale', 'enterprise'].map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+          </div>
         </Modal>
       )}
+
+      {edit && (
+        <Modal open onClose={() => setEdit(null)} title={`Edit ${edit.name}`}
+          footer={<><Button variant="secondary" onClick={() => setEdit(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveEdit()} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button></>}>
+          <div className="space-y-4">
+            <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Plan"><Select value={edit.plan} onChange={(e) => setEdit({ ...edit, plan: e.target.value as PlatformTenant['plan'] })}>{['free', 'starter', 'growth', 'scale', 'enterprise'].map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+              <Field label="Max users"><Input type="number" value={edit.maxUsers} onChange={(e) => setEdit({ ...edit, maxUsers: Number(e.target.value) })} /></Field>
+            </div>
+            <Field label="MRR (USD)"><Input type="number" value={edit.mrr} onChange={(e) => setEdit({ ...edit, mrr: Number(e.target.value) })} /></Field>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function UsersTab() {
+  const [users, setUsers] = useState<PlatformUser[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    superAdminApi.listUsers({ limit: 100 })
+      .then((r) => setUsers(r.users))
+      .catch(() => toast.error('Could not load users'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader title="All Platform Users" />
+      {loading ? (
+        <p className="p-8 text-center text-sm text-ink-400">Loading users…</p>
+      ) : (
+        <Table>
+          <thead><tr><Th>User</Th><Th>Email</Th><Th>Role</Th><Th>Tenant</Th><Th>Status</Th></tr></thead>
+          <tbody>
+            {users.map((u) => (
+              <Tr key={u.id}>
+                <Td className="font-medium">{u.firstName} {u.lastName}</Td>
+                <Td>{u.email}</Td>
+                <Td><Badge tone="blue">{u.role}</Badge></Td>
+                <Td>{u.tenantName ?? '—'}</Td>
+                <Td><Badge tone={u.status === 'active' ? 'green' : 'gray'}>{u.status}</Badge></Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
+function HealthTab() {
+  const [rows, setRows] = useState<IntegrationHealthRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    superAdminApi.getIntegrationHealth()
+      .then(setRows)
+      .catch(() => toast.error('Could not load integration health'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return <p className="p-8 text-center text-sm text-ink-400">Loading…</p>;
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {rows.map((r) => (
+        <Card key={r._id} className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand-600 text-xs font-bold text-white">{r.name[0]}</span><span className="text-sm font-semibold">{r.name}</span></div>
+            <Badge tone={r.connected > 0 ? 'green' : 'gray'}>{r.connected}/{r.total} connected</Badge>
+          </div>
+          <p className="mt-2 text-xs text-ink-400">{r.category} · {r.simulation} in simulation · {r.disconnected} disconnected</p>
+        </Card>
+      ))}
     </div>
+  );
+}
+
+function ActivityTab() {
+  const [logs, setLogs] = useState<ActivityLogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    superAdminApi.getActivityLog({ limit: 100 })
+      .then((r) => setLogs(r.logs))
+      .catch(() => toast.error('Could not load activity log'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader title="Global Activity Log" />
+      {loading ? (
+        <p className="p-8 text-center text-sm text-ink-400">Loading…</p>
+      ) : (
+        <Table>
+          <thead><tr><Th>Email</Th><Th>Event</Th><Th>Result</Th><Th>Time</Th></tr></thead>
+          <tbody>
+            {logs.map((a) => (
+              <Tr key={a.id}>
+                <Td className="font-medium">{a.email}</Td>
+                <Td><Badge tone="gray">{a.event.replace(/_/g, ' ')}</Badge></Td>
+                <Td><Badge tone={a.success ? 'green' : 'red'}>{a.success ? 'Success' : 'Failed'}</Badge></Td>
+                <Td className="text-ink-500">{timeAgo(a.createdAt)}</Td>
+              </Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
+function TemplatesTab() {
+  const [templates, setTemplates] = useState<GlobalTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    superAdminApi.listGlobalTemplates()
+      .then(setTemplates)
+      .catch(() => toast.error('Could not load global templates'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <Card>
+      <CardHeader title="Global Templates" subtitle="Available across all tenants" />
+      {loading ? (
+        <p className="p-8 text-center text-sm text-ink-400">Loading…</p>
+      ) : templates.length === 0 ? (
+        <p className="p-8 text-center text-sm text-ink-400">No global templates yet</p>
+      ) : (
+        <Table>
+          <thead><tr><Th>Name</Th><Th>Type</Th><Th>Scope</Th><Th>Version</Th></tr></thead>
+          <tbody>
+            {templates.map((t) => (
+              <Tr key={t.id}><Td className="font-medium">{t.name}</Td><Td>{t.type}</Td><Td><Badge tone="violet">global</Badge></Td><Td>v{t.version}</Td></Tr>
+            ))}
+          </tbody>
+        </Table>
+      )}
+    </Card>
   );
 }

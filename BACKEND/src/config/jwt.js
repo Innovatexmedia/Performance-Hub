@@ -123,22 +123,40 @@ export const verifyWorkspaceSelectionToken = (token) => {
 // ─── Verify Functions ─────────────────────────────────────────────────────────
 
 /**
- * verifyAccessToken — verifies and decodes an access token.
+ * verifyAccessToken — verifies signature, expiry, AND that this is
+ * genuinely an access token (not a workspace-selection token or any
+ * other type signed with the same ACCESS_SECRET). Previously only
+ * checked signature+expiry -- a workspace-selection token could be
+ * presented here and would have passed with no error, since both are
+ * signed with the same secret.
  * @param {string} token
  * @returns {Object} decoded payload
  * @throws {JsonWebTokenError} if invalid or expired
+ * @throws {Error} if the token is valid but not actually an access token
  */
-export const verifyAccessToken = (token) =>
-  jwt.verify(token, ACCESS_SECRET());
+export const verifyAccessToken = (token) => {
+  const decoded = jwt.verify(token, ACCESS_SECRET());
+  if (decoded.type !== TOKEN_TYPES.ACCESS) {
+    throw new Error('Invalid token type for access');
+  }
+  return decoded;
+};
 
 /**
- * verifyRefreshToken — verifies and decodes a refresh token.
+ * verifyRefreshToken — verifies signature, expiry, AND that this is
+ * genuinely a refresh token, same reasoning as verifyAccessToken above.
  * @param {string} token
  * @returns {Object} decoded payload
  * @throws {JsonWebTokenError} if invalid or expired
+ * @throws {Error} if the token is valid but not actually a refresh token
  */
-export const verifyRefreshToken = (token) =>
-  jwt.verify(token, REFRESH_SECRET());
+export const verifyRefreshToken = (token) => {
+  const decoded = jwt.verify(token, REFRESH_SECRET());
+  if (decoded.type !== TOKEN_TYPES.REFRESH) {
+    throw new Error('Invalid token type for refresh');
+  }
+  return decoded;
+};
 
 // ─── Decode (no verification) ─────────────────────────────────────────────────
 

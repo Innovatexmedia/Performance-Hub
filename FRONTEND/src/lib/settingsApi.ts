@@ -6,23 +6,21 @@ import type {
 
 /**
  * SOURCE: src/modules/settings/settings.controller.js
- * Standard envelope. getQualificationQuestions below is the ORIGINAL
- * lightweight version -- kept exactly as-is since AI Qualification
- * already depends on it. The full Settings page uses the richer
- * functions added alongside it.
+ * Standard envelope.
  */
-interface SettingsBundle {
-  qualification: {
-    questions: string[];
-  };
-}
-
 export const settingsApi = {
-  /** Original lightweight version -- unchanged, still used by AI Qualification's discovery form. */
+  /**
+   * getQualificationQuestions -- calls the narrow, deliberately ungated
+   * /settings/qualification-questions endpoint, NOT the full /settings
+   * bundle. Full /settings is now gated to tenant_admin+ (RBAC lockdown
+   * fix), but AI Qualification legitimately needs this for sales_user+ --
+   * this narrow endpoint exists specifically so that RBAC fix didn't
+   * silently break a real, legitimate cross-module read.
+   */
   getQualificationQuestions: () =>
-    apiClient.get<SettingsBundle>('/settings').then((r) => r.qualification.questions),
+    apiClient.get<{ questions: string[] }>('/settings/qualification-questions').then((r) => r.questions),
 
-  /** Full version for the Settings page -- all 10 tabs in one call. */
+  /** Full version for the Settings page -- all 10 tabs in one call. tenant_admin+ only. */
   getAll: () => apiClient.get<AllSettings>('/settings'),
 
   updateCompany: (data: Partial<CompanySettings>) =>

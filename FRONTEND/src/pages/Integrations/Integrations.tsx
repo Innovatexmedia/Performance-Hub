@@ -29,6 +29,9 @@ export function Integrations() {
   const [config, setConfig] = useState<Integration | null>(null);
   const [configForm, setConfigForm] = useState({ api_key: '', webhook_url: '' });
   const [waForm, setWaForm] = useState({ phoneNumberId: '', businessAccountId: '', accessToken: '', appSecret: '' });
+  const [dialog360Form, setDialog360Form] = useState({ apiKey: '' });
+  const [twilioForm, setTwilioForm] = useState({ accountSid: '', authToken: '', whatsappNumber: '' });
+  const [interaktForm, setInteraktForm] = useState({ apiKey: '' });
   const [logsFor, setLogsFor] = useState<Integration | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -39,7 +42,7 @@ export function Integrations() {
   ];
 
   const handleToggle = async (i: Integration) => {
-    if (i.key === 'meta_cloud' && i.status === 'disconnected') {
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -77,6 +80,22 @@ export function Integrations() {
       });
       return;
     }
+    if (i.key === '360dialog') {
+      setDialog360Form({ apiKey: '' });
+      return;
+    }
+    if (i.key === 'twilio_wa') {
+      setTwilioForm({
+        accountSid: '',
+        authToken: '',
+        whatsappNumber: typeof i.config.whatsappNumber === 'string' ? i.config.whatsappNumber : '',
+      });
+      return;
+    }
+    if (i.key === 'interakt') {
+      setInteraktForm({ apiKey: '' });
+      return;
+    }
     setConfigForm({
       api_key: typeof i.config.api_key === 'string' ? i.config.api_key : '',
       webhook_url: typeof i.config.webhook_url === 'string' ? i.config.webhook_url : '',
@@ -95,6 +114,23 @@ export function Integrations() {
           ...(waForm.appSecret ? { appSecret: waForm.appSecret } : {}),
         });
         toast.success('Connected', 'Credentials verified against Meta\u2019s real Graph API.');
+      } else if (config.key === '360dialog') {
+        await updateConfig(config.id, {
+          ...(dialog360Form.apiKey ? { apiKey: dialog360Form.apiKey } : {}),
+        });
+        toast.success('Connected', 'API key verified against 360Dialog\u2019s real Messaging API.');
+      } else if (config.key === 'twilio_wa') {
+        await updateConfig(config.id, {
+          accountSid: twilioForm.accountSid,
+          whatsappNumber: twilioForm.whatsappNumber,
+          ...(twilioForm.authToken ? { authToken: twilioForm.authToken } : {}),
+        });
+        toast.success('Connected', 'Credentials verified against Twilio\u2019s real Account API.');
+      } else if (config.key === 'interakt') {
+        await updateConfig(config.id, {
+          ...(interaktForm.apiKey ? { apiKey: interaktForm.apiKey } : {}),
+        });
+        toast.success('Connected', 'API key verified. Note: Interakt only supports pre-approved templates, not free text.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
         toast.success('Settings saved');
@@ -172,6 +208,26 @@ export function Integrations() {
               <Field label="Business Account ID"><Input value={waForm.businessAccountId} onChange={(e) => setWaForm({ ...waForm, businessAccountId: e.target.value })} /></Field>
               <Field label="Access Token"><Input type="password" value={waForm.accessToken} onChange={(e) => setWaForm({ ...waForm, accessToken: e.target.value })} placeholder={config.config.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Meta access token'} /></Field>
               <Field label="App Secret"><Input type="password" value={waForm.appSecret} onChange={(e) => setWaForm({ ...waForm, appSecret: e.target.value })} placeholder={config.config.hasAppSecret ? 'Already set — leave blank to keep' : 'Required for webhook verification'} /></Field>
+            </div>
+          ) : config.key === '360dialog' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This makes a real, live call to 360Dialog's Messaging API to verify your key. 360Dialog only needs one credential — the key is already scoped to your specific WhatsApp number on their side.</p>
+              <Field label="D360 API Key"><Input type="password" value={dialog360Form.apiKey} onChange={(e) => setDialog360Form({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'Paste your 360Dialog API key'} /></Field>
+            </div>
+          ) : config.key === 'twilio_wa' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This makes a real, live call to Twilio's Account API to verify these credentials. Twilio uses Basic Auth (Account SID + Auth Token), unlike Meta or 360Dialog.</p>
+              <Field label="Account SID"><Input value={twilioForm.accountSid} onChange={(e) => setTwilioForm({ ...twilioForm, accountSid: e.target.value })} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" /></Field>
+              <Field label="Auth Token"><Input type="password" value={twilioForm.authToken} onChange={(e) => setTwilioForm({ ...twilioForm, authToken: e.target.value })} placeholder={config.config.hasAuthToken ? 'Already set — leave blank to keep' : 'Paste your Twilio Auth Token'} /></Field>
+              <Field label="WhatsApp-enabled number" hint="Your Twilio number with WhatsApp enabled, e.g. +14155238886"><Input value={twilioForm.whatsappNumber} onChange={(e) => setTwilioForm({ ...twilioForm, whatsappNumber: e.target.value })} placeholder="+14155238886" /></Field>
+            </div>
+          ) : config.key === 'interakt' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This makes a real, live call to Interakt's API to verify your key.</p>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                <strong>Real limitation, not a bug:</strong> Interakt's public API only supports pre-approved WhatsApp templates — it does not support plain free-text messages. Connecting here verifies your credentials for real, but sending through the normal Inbox composer will fail until template sending is added.
+              </div>
+              <Field label="API Key"><Input type="password" value={interaktForm.apiKey} onChange={(e) => setInteraktForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'Paste your Interakt API key'} /></Field>
             </div>
           ) : (
             <div className="space-y-4">

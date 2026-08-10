@@ -1,6 +1,4 @@
-
-
-import { body, validationResult } from 'express-validator';
+import { body, param, validationResult } from 'express-validator';
 import { ROLES }                  from '../constants/roles.js';
 import { sendError }              from '../../../utils/apiResponse.js';
 
@@ -56,10 +54,21 @@ export const validateRegister = [
     .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
     .matches(/[0-9]/).withMessage('Password must contain at least one number'),
 
+  /**
+   * role — only tenant_owner (self-registration, default) or super_admin
+   * (requires superAdminSecret, see below) can be created through this
+   * public endpoint. tenant_admin/sales_user/read_only_user were removed
+   * from the allowed set here on purpose -- SECURITY: this endpoint used
+   * to accept any of the 5 roles including those, with only a bare
+   * tenantId as a "check" (no real invitation verification at all). The
+   * real, secure way to add those roles is team.service.js's
+   * addTeamMember(), which requires the caller to already be
+   * authenticated as tenant_admin+ on that specific tenant.
+   */
   body('role')
     .optional()
-    .isIn(Object.values(ROLES))
-    .withMessage(`Role must be one of: ${Object.values(ROLES).join(', ')}`),
+    .isIn([ROLES.TENANT_OWNER, ROLES.SUPER_ADMIN])
+    .withMessage(`This endpoint can only register a ${ROLES.TENANT_OWNER} or ${ROLES.SUPER_ADMIN}. Other roles must be added via the Team page by an existing tenant admin or owner.`),
 
   /**
    * workspaceName — required when role is tenant_owner.
@@ -74,12 +83,14 @@ export const validateRegister = [
     .withMessage('workspaceName must be between 2 and 100 characters'),
 
   /**
-   * tenantId — required for invited team members (non-owner roles).
-   * Optional for tenant_owner (they create a new tenant) and super_admin (no tenant).
+   * superAdminSecret — required when role is super_admin. SECURITY: this
+   * is the ONLY thing standing between the public internet and creating
+   * a full-platform-access account -- see auth.service.js's register()
+   * for the real check against config.SUPER_ADMIN_SECRET.
    */
-  body('tenantId')
-    .optional()
-    .isMongoId().withMessage('tenantId must be a valid MongoDB ObjectId'),
+  body('superAdminSecret')
+    .if(body('role').equals(ROLES.SUPER_ADMIN))
+    .notEmpty().withMessage('superAdminSecret is required when registering as a super admin'),
 
   handleValidation,
 ];
@@ -135,6 +146,25 @@ export const validateResetPassword = [
 ];
 
 // =============================================================================
+// ACCEPT INVITATION VALIDATOR
+// =============================================================================
+
+export const validateAcceptInvitation = [
+  param('token')
+    .trim()
+    .notEmpty().withMessage('Invitation token is required'),
+
+  body('password')
+    .notEmpty().withMessage('Password is required')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number'),
+
+  handleValidation,
+];
+
+// =============================================================================
 // CHANGE PASSWORD VALIDATOR
 // =============================================================================
 
@@ -154,6 +184,36 @@ export const validateChangePassword = [
       }
       return true;
     }),
+
+  handleValidation,
+];
+
+// =============================================================================
+// UPDATE PROFILE VALIDATOR
+// =============================================================================
+
+export const validateUpdateProfile = [
+  body('firstName')
+    .optional()
+    .trim()
+    .notEmpty().withMessage('First name cannot be empty')
+    .isLength({ max: 50 }).withMessage('First name cannot exceed 50 characters'),
+
+  body('lastName')
+    .optional()
+    .trim()
+    .notEmpty().withMessage('Last name cannot be empty')
+    .isLength({ max: 50 }).withMessage('Last name cannot exceed 50 characters'),
+
+  body('phoneNumber')
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 20 }).withMessage('Phone number is too long'),
+
+  body('profileImage')
+    .optional({ nullable: true, checkFalsy: true })
+    .trim()
+    .isURL().withMessage('profileImage must be a valid URL'),
 
   handleValidation,
 ];

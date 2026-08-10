@@ -39,12 +39,12 @@ const router = Router();
 router.use(authenticate);
 router.use(resolveTenant);
 
-router.get('/counts', controller.getCounts);
+router.get('/counts', requireRole('tenant_admin'), controller.getCounts);
 
-router.get('/', validateListQuery, controller.getIntegrations);
+router.get('/', requireRole('tenant_admin'), validateListQuery, controller.getIntegrations);
 
-router.get('/:id', validateIdParam, controller.getIntegration);
-router.get('/:id/error-logs', validateIdParam, controller.getErrorLogs);
+router.get('/:id', requireRole('tenant_admin'), validateIdParam, controller.getIntegration);
+router.get('/:id/error-logs', requireRole('tenant_admin'), validateIdParam, controller.getErrorLogs);
 
 router.post('/:id/toggle', requireRole('tenant_admin'), validateIdParam, controller.toggleIntegration);
 router.post('/:id/sync', requireRole('tenant_admin'), validateIdParam, controller.syncIntegration);

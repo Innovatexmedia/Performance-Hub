@@ -69,6 +69,26 @@ const getTenant = async (tenantId) => {
 // =============================================================================
 
 /**
+ * getQualificationQuestions — returns ONLY the discovery questions array,
+ * not the full settings bundle. Added when GET /settings was locked down
+ * to tenant_admin+ (Team/Settings/Integrations RBAC fix) -- AI
+ * Qualification legitimately needs these for sales_user+ (per the real
+ * RBAC matrix, running qualification requires only sales_user), so it
+ * needed its own narrow, ungated endpoint rather than either leaving the
+ * whole settings bundle open or breaking a legitimate cross-module read.
+ * Same real fallback logic as the Qualification tab inside
+ * getAllSettings below -- not duplicated logic, just not the full bundle.
+ */
+export const getQualificationQuestions = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  return {
+    questions: tenant.qualificationQuestions?.length
+      ? tenant.qualificationQuestions
+      : [...DEFAULT_QUALIFICATION_QUESTIONS],
+  };
+};
+
+/**
  * getAllSettings — returns all 10 tabs of settings data.
  * Called on Settings page load — one request, all tabs.
  */

@@ -139,13 +139,22 @@ export function Login() {
                 <Field label="Email">
                   <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" required autoComplete="email" />
                 </Field>
-                <Field label="Password">
-                  <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required autoComplete="current-password" />
-                </Field>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-ink-700">Password</label>
+                    <button type="button" onClick={() => navigate('/forgot-password')} className="text-xs font-medium text-brand-600 hover:text-brand-700">Forgot password?</button>
+                  </div>
+                  <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" required autoComplete="current-password" className="mt-1.5" />
+                </div>
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? 'Signing in…' : 'Sign in'} <ArrowRight size={16} />
                 </Button>
               </form>
+
+              <p className="mt-6 text-center text-sm text-ink-500">
+                Don't have a workspace?{' '}
+                <button type="button" onClick={() => navigate('/register')} className="font-medium text-brand-600 hover:text-brand-700">Sign up</button>
+              </p>
             </>
           )}
         </div>

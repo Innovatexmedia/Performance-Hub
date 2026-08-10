@@ -18,6 +18,7 @@
 
 import * as authService     from '../services/auth.service.js';
 import * as passwordService from '../services/password.service.js';
+import * as invitationService from '../services/invitation.service.js';
 import { sendSuccess, sendCreated, sendNoContent } from '../../../utils/apiResponse.js';
 import { setRefreshTokenCookie, clearRefreshTokenCookie, getRefreshTokenFromCookies } from '../../../utils/cookies.js';
 import asyncHandler from '../../../utils/asyncHandler.js';
@@ -100,6 +101,33 @@ export const logout = asyncHandler(async (req, res) => {
 });
 
 /**
+ * logoutAll — POST /auth/logout-all
+ * Revokes every active session for the requesting user.
+ */
+export const logoutAll = asyncHandler(async (req, res) => {
+  await authService.logoutAll(req);
+  clearRefreshTokenCookie(res);
+  return sendNoContent(res);
+});
+
+/**
+ * listSessions — GET /auth/sessions
+ */
+export const listSessions = asyncHandler(async (req, res) => {
+  const sessions = await authService.listSessions(req);
+  return sendSuccess(res, { sessions }, 'Active sessions retrieved');
+});
+
+/**
+ * revokeSession — DELETE /auth/sessions/:sessionId
+ * Logs out one specific OTHER session (device) from the list.
+ */
+export const revokeSession = asyncHandler(async (req, res) => {
+  await authService.revokeUserSession(req, req.params.sessionId);
+  return sendSuccess(res, null, 'Session logged out');
+});
+
+/**
  * refresh — POST /auth/refresh
  * Reads refresh token from HttpOnly cookie, issues new token pair.
  */
@@ -122,6 +150,15 @@ export const refresh = asyncHandler(async (req, res) => {
 export const getMe = asyncHandler(async (req, res) => {
   const user = await authService.getCurrentUser(req.user.sub);
   return sendSuccess(res, { user }, 'Profile fetched successfully');
+});
+
+/**
+ * updateProfile — PATCH /auth/profile
+ */
+export const updateProfile = asyncHandler(async (req, res) => {
+  const { firstName, lastName, phoneNumber, profileImage } = req.body;
+  const user = await authService.updateProfile(req.user.sub, { firstName, lastName, phoneNumber, profileImage });
+  return sendSuccess(res, { user }, 'Profile updated successfully');
 });
 
 /**
@@ -160,6 +197,35 @@ export const resetPassword = asyncHandler(async (req, res) => {
   const { token, password } = req.body;
   await passwordService.resetPassword({ token, newPassword: password });
   return sendSuccess(res, null, 'Password reset successfully. Please log in with your new password.');
+});
+
+/**
+ * getInvitationPreview — GET /auth/invitations/:token
+ * Public, read-only -- lets the Accept Invitation page show who invited
+ * them and to which workspace/role before they set a password.
+ */
+export const getInvitationPreview = asyncHandler(async (req, res) => {
+  const preview = await invitationService.getInvitationPreview(req.params.token);
+  return sendSuccess(res, preview, 'Invitation is valid');
+});
+
+/**
+ * acceptInvitation — POST /auth/invitations/:token/accept
+ * Public -- sets the real password, activates the account, and logs the
+ * person straight in (same as register()'s flow).
+ */
+export const acceptInvitation = asyncHandler(async (req, res) => {
+  const result = await invitationService.acceptInvitation(
+    { token: req.params.token, password: req.body.password },
+    req
+  );
+
+  setRefreshTokenCookie(res, result.refreshToken);
+
+  return sendSuccess(res, {
+    user:        result.user,
+    accessToken: result.accessToken,
+  }, 'Invitation accepted -- welcome!');
 });
 
 /**

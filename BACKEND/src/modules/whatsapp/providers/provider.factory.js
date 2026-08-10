@@ -1,5 +1,8 @@
 import { SimulationProvider } from './simulation.provider.js';
 import { MetaProvider } from './meta.provider.js';
+import { Dialog360Provider } from './dialog360.provider.js';
+import { TwilioProvider } from './twilio.provider.js';
+import { InteraktProvider } from './interakt.provider.js';
 import { whatsappSettingsService } from '../submodules/whatsappSettings/whatsappSettings.service.js';
 import { PROVIDER, PROVIDER_MODE } from '../submodules/whatsappSettings/whatsappSettings.constants.js';
 
@@ -25,10 +28,11 @@ export function getProvider(name = 'simulation') {
  * Falls back to Simulation whenever:
  *   - the tenant has no WhatsApp Settings configured yet (fresh tenant)
  *   - providerMode is SIMULATION (explicit choice, regardless of `provider`)
- *   - provider isn't META_CLOUD (other 7 provider values have no adapter
- *     implemented yet -- WATI/Interakt/AiSensy/Gallabox/Twilio/360Dialog/
- *     Custom Webhook are enum values with no corresponding provider class,
- *     same honest gap as before, just now for 7 providers instead of 8)
+ *   - provider isn't META_CLOUD or DIALOG360 (the other 6 provider values
+ *     have no adapter implemented yet -- WATI/Interakt/AiSensy/Gallabox/
+ *     Twilio/Custom Webhook are enum values with no corresponding
+ *     provider class, same honest gap as before, just now for 6
+ *     providers instead of 7)
  *
  * This is NOT silent guessing -- every fallback path is a real, checked
  * condition, not a try/catch swallowing a real configuration error.
@@ -56,6 +60,36 @@ export async function resolveProvider(ctx) {
     return new MetaProvider({ accessToken, phoneNumberId, graphApiVersion });
   }
 
-  // Any other configured provider (WATI, Twilio, etc.) has no adapter yet.
+  if (config.provider === PROVIDER.DIALOG360) {
+    const { apiKey } = config.dialog360 || {};
+    if (!apiKey) {
+      return PROVIDERS.simulation;
+    }
+    return new Dialog360Provider({ apiKey });
+  }
+
+  if (config.provider === PROVIDER.TWILIO) {
+    const { accountSid, authToken, whatsappNumber } = config.twilio || {};
+    if (!accountSid || !authToken || !whatsappNumber) {
+      return PROVIDERS.simulation;
+    }
+    return new TwilioProvider({ accountSid, authToken, whatsappNumber });
+  }
+
+  if (config.provider === PROVIDER.INTERAKT) {
+    const { apiKey } = config.interakt || {};
+    if (!apiKey) {
+      return PROVIDERS.simulation;
+    }
+    // Constructed normally when credentials are complete -- the honest
+    // "Interakt requires a template, not free text" error surfaces from
+    // sendMessage() itself at actual send time, not here. This gives the
+    // caller a clear, specific reason their message failed instead of a
+    // silent fallback to simulation, which would hide a real, chosen
+    // configuration issue behind fake success.
+    return new InteraktProvider({ apiKey });
+  }
+
+  // Any other configured provider (WATI, AiSensy, etc.) has no adapter yet.
   return PROVIDERS.simulation;
 }

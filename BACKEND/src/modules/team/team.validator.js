@@ -55,10 +55,6 @@ export const validateAddMember = [
     .isIn([ROLES.TENANT_OWNER, ROLES.TENANT_ADMIN, ROLES.SALES_USER, ROLES.READ_ONLY_USER])
     .withMessage(`role must be one of: tenant_owner, tenant_admin, sales_user, read_only_user`),
 
-  body('password')
-    .optional()
-    .isLength({ min: 8 }).withMessage('password must be at least 8 characters'),
-
   handleValidation,
 ];
 

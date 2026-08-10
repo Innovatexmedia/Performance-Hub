@@ -170,28 +170,31 @@ export const sendWelcomeEmail = async ({ email, firstName }) => {
   });
 };
 /**
- * sendTeamInvite — sends an invite email when a new team member is added.
- * Called by team.service.js addTeamMember().
+ * sendTeamInvite — sends a real invitation link when a new team member is
+ * added. Called by team.service.js addTeamMember().
+ *
+ * CHANGED: this used to email a temporary password directly. Replaced
+ * with a real accept-invitation link + token, matching the same pattern
+ * as sendPasswordReset/sendEmailVerification in this file -- the
+ * recipient sets their own password when they accept, nothing is ever
+ * emailed in plain text.
  *
  * SOURCE: FRONTEND_SPEC §17 "Add user modal"
  * SOURCE: MASTER_SPEC §B17 Team — "Add user"
  */
-export const sendTeamInvite = async ({ to, firstName, tempPassword, loginUrl }) => {
+export const sendTeamInvite = async ({ to, firstName, tenantName, role, token }) => {
+  const link = `${CLIENT_URL()}/accept-invitation?token=${token}`;
   await sendMail({
     to,
-    subject: "You've been added to InnovateX Revenue OS",
+    subject: `You've been invited to join ${tenantName} on InnovateX`,
     html: `
-      <h2>Welcome to the team, ${firstName}! 👋</h2>
-      <p>You have been added as a team member on InnovateX Revenue OS.</p>
-      ${tempPassword ? `
-        <p>Your temporary password is:</p>
-        <p style="font-size:18px;font-weight:bold;letter-spacing:2px;background:#f1f5f9;padding:12px 16px;border-radius:6px;display:inline-block;">${tempPassword}</p>
-        <p>Please change your password after your first login.</p>
-      ` : ''}
-      <a href="${loginUrl}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;margin-top:16px;">
-        Sign In Now
+      <h2>Welcome, ${firstName}! 👋</h2>
+      <p>You've been invited to join <strong>${tenantName}</strong> on InnovateX Revenue OS as a <strong>${role.replace('_', ' ')}</strong>.</p>
+      <a href="${link}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;margin-top:16px;">
+        Accept Invitation
       </a>
-      <p style="color:#94a3b8;font-size:12px;margin-top:24px;">If you did not expect this invitation, please ignore this email.</p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:16px;">This invitation expires in 7 days.</p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:8px;">If you did not expect this invitation, you can safely ignore this email.</p>
     `,
   });
 };
