@@ -46,6 +46,14 @@ export const settingsApi = {
   updatePipelineStages: (stages: PipelineStageDisplay[]) =>
     apiClient.patch<PipelineStageDisplay[]>('/settings/pipeline-stages', { stages }),
 
+  /**
+   * getBrandingPublic -- same narrow/ungated pattern, so every logged-in
+   * role (not just tenant_admin+) can retint the app to the tenant's
+   * saved accent color. See utils/theme.ts for what applies this.
+   */
+  getBrandingPublic: () =>
+    apiClient.get<{ accent_color: string }>('/settings/branding/public'),
+
   updateQualification: (questions: string[]) =>
     apiClient.patch<QualificationSettings>('/settings/qualification', { questions }),
 

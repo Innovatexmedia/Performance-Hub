@@ -137,6 +137,18 @@ export const getPipelineStageOverrides = async (tenantId) => {
 };
 
 /**
+ * getBrandingPublic — narrow, ungated cross-module read, same reasoning as
+ * getQualificationQuestions/getPipelineStageOverrides above: EVERY logged-in
+ * user needs the tenant's accent color to actually retint the UI (not just
+ * tenant_admin+, who are the only ones who can change it via the full,
+ * admin-gated settings bundle).
+ */
+export const getBrandingPublic = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  return { accent_color: tenant.branding?.accentColor || '#6366f1' };
+};
+
+/**
  * getAllSettings — returns all 10 tabs of settings data.
  * Called on Settings page load — one request, all tabs.
  */

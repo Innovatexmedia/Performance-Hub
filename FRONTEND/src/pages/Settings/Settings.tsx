@@ -3,6 +3,7 @@ import { Save, Plus, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useSettings } from '@/hooks/useSettings';
 import { settingsApi } from '@/lib/settingsApi';
+import { applyAccentColor } from '@/utils/theme';
 import { settingsPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -117,6 +118,7 @@ function BrandingTab({ data, canEdit, onSaved }: { data: BrandingSettings; canEd
     setSaving(true);
     try {
       await settingsApi.updateBranding({ accent_color: color });
+      applyAccentColor(color);
       toast.success('Branding saved');
       onSaved();
     } catch (err) {

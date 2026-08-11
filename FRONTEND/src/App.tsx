@@ -30,6 +30,8 @@ import { Integrations } from '@/pages/Integrations/Integrations';
 import { Settings } from '@/pages/Settings/Settings';
 import { SuperAdmin } from '@/pages/SuperAdmin/SuperAdmin';
 import { useAuthStore } from '@/store/authStore';
+import { settingsApi } from '@/lib/settingsApi';
+import { applyAccentColor } from '@/utils/theme';
 
 export default function App() {
   const status = useAuthStore((s) => s.status);
@@ -42,6 +44,20 @@ export default function App() {
   useEffect(() => {
     void initialize();
   }, [initialize]);
+
+  // Retints the app to the tenant's saved accent color (Settings >
+  // Branding) -- keyed on tenantId so it re-fetches on login AND on
+  // workspace switch (switchWorkspace/selectWorkspace change tenantId),
+  // not just once at boot. Uses the narrow, ungated endpoint so this
+  // works for every role, not just tenant_admin+.
+  useEffect(() => {
+    if (!user?.tenantId) return;
+    let cancelled = false;
+    settingsApi.getBrandingPublic()
+      .then(({ accent_color }) => { if (!cancelled) applyAccentColor(accent_color); })
+      .catch(() => { /* keep the default indigo -- this is a nicety, not critical path */ });
+    return () => { cancelled = true; };
+  }, [user?.tenantId]);
 
   return (
     <>

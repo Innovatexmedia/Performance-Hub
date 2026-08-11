@@ -31,6 +31,16 @@ export const getQualificationQuestions = asyncHandler(async (req, res) => {
 });
 
 /**
+ * getBrandingPublic — GET /api/settings/branding/public
+ * Narrow, ungated (below tenant_admin) read so every role can retint the
+ * UI to the tenant's chosen accent color -- see settings.service.js.
+ */
+export const getBrandingPublic = asyncHandler(async (req, res) => {
+  const data = await settingsService.getBrandingPublic(req.user.tenantId);
+  return sendSuccess(res, data, 'Branding fetched successfully');
+});
+
+/**
  * updateCompany — PATCH /api/settings/company
  * SOURCE: FRONTEND_SPEC §19 Company tab — Company Name + Website + Save button
  */

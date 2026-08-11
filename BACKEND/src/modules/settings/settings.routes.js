@@ -60,6 +60,7 @@ router.use(resolveTenant);
 // legitimately usable by sales_user+, which can't call GET /settings).
 router.get('/qualification-questions', controller.getQualificationQuestions);
 router.get('/pipeline-stages/board',   controller.getPipelineStagesPublic);
+router.get('/branding/public',         controller.getBrandingPublic);
 
 // ── Full settings page — GET all tabs at once ─────────────────────────────────
 router.get('/', requireRole('tenant_admin'), controller.getAllSettings);

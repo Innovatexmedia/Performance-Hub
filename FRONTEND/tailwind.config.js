@@ -4,10 +4,20 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Reads CSS custom properties (set at runtime from the tenant's
+        // saved accent color -- see utils/theme.ts) instead of fixed hex
+        // values, so Settings > Branding actually retints the app. The
+        // `<alpha-value>` placeholder is Tailwind's documented pattern for
+        // keeping opacity modifiers (e.g. bg-brand-600/50) working with
+        // CSS-variable-based colors; --brand-* holds space-separated RGB,
+        // e.g. "99 102 241", not a full rgb(...) string.
         brand: {
-          50: '#eef2ff', 100: '#e0e7ff', 200: '#c7d2fe', 300: '#a5b4fc',
-          400: '#818cf8', 500: '#6366f1', 600: '#4f46e5', 700: '#4338ca',
-          800: '#3730a3', 900: '#312e81', 950: '#1e1b4b',
+          50: 'rgb(var(--brand-50) / <alpha-value>)', 100: 'rgb(var(--brand-100) / <alpha-value>)',
+          200: 'rgb(var(--brand-200) / <alpha-value>)', 300: 'rgb(var(--brand-300) / <alpha-value>)',
+          400: 'rgb(var(--brand-400) / <alpha-value>)', 500: 'rgb(var(--brand-500) / <alpha-value>)',
+          600: 'rgb(var(--brand-600) / <alpha-value>)', 700: 'rgb(var(--brand-700) / <alpha-value>)',
+          800: 'rgb(var(--brand-800) / <alpha-value>)', 900: 'rgb(var(--brand-900) / <alpha-value>)',
+          950: 'rgb(var(--brand-950) / <alpha-value>)',
         },
         ink: {
           50: '#f8fafc', 100: '#f1f5f9', 200: '#e2e8f0', 300: '#cbd5e1',
