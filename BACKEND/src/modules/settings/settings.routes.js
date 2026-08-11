@@ -34,6 +34,8 @@ import * as controller from './settings.controller.js';
 import {
   validateCompany,
   validateBranding,
+  validateLeadFields,
+  validatePipelineStages,
   validateQualification,
   validateScoringRules,
   validateNotifications,
@@ -51,10 +53,13 @@ const router = Router();
 router.use(authenticate);
 router.use(resolveTenant);
 
-// ── Narrow, ungated cross-module read for AI Qualification ───────────────────
-// Deliberately NOT gated -- see settings.service.js's comment on why this
-// exists separately from the full, now admin-gated settings bundle below.
+// ── Narrow, ungated cross-module reads ────────────────────────────────────────
+// Deliberately NOT gated to tenant_admin -- see settings.service.js's
+// comments on why these exist separately from the full, admin-gated
+// settings bundle below (AI Qualification / the Pipeline board are both
+// legitimately usable by sales_user+, which can't call GET /settings).
 router.get('/qualification-questions', controller.getQualificationQuestions);
+router.get('/pipeline-stages/board',   controller.getPipelineStagesPublic);
 
 // ── Full settings page — GET all tabs at once ─────────────────────────────────
 router.get('/', requireRole('tenant_admin'), controller.getAllSettings);
@@ -65,11 +70,13 @@ router.patch('/company',       requireRole('tenant_admin'), validateCompany,    
 // ── Tab 2: Branding ───────────────────────────────────────────────────────────
 router.patch('/branding',      requireRole('tenant_admin'), validateBranding,      controller.updateBranding);
 
-// ── Tab 3: Lead Fields (read-only) ────────────────────────────────────────────
+// ── Tab 3: Lead Fields (which are required) ───────────────────────────────────
 router.get('/lead-fields',     requireRole('tenant_admin'), controller.getLeadFields);
+router.patch('/lead-fields',   requireRole('tenant_admin'), validateLeadFields,    controller.updateLeadFields);
 
-// ── Tab 4: Pipeline Stages (read-only — system-defined) ──────────────────────
-router.get('/pipeline-stages', requireRole('tenant_admin'), controller.getPipelineStages);
+// ── Tab 4: Pipeline Stages (fixed keys; label/color editable) ────────────────
+router.get('/pipeline-stages',   requireRole('tenant_admin'), controller.getPipelineStages);
+router.patch('/pipeline-stages', requireRole('tenant_admin'), validatePipelineStages, controller.updatePipelineStages);
 
 // ── Tab 5: Qualification Questions ───────────────────────────────────────────
 router.patch('/qualification',  requireRole('tenant_admin'), validateQualification, controller.updateQualification);

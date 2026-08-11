@@ -3,6 +3,7 @@ import { Modal, Button, Field, Input, Select, Textarea } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
 import { STAGE_ORDER } from '@/types/deal';
+import { usePipelineStageLabels } from '@/hooks/usePipelineStageLabels';
 import type { Deal, DealInput, DealStage } from '@/types/deal';
 
 /**
@@ -22,6 +23,7 @@ export function EditDealModal({ deal, onClose, onSave }: {
   const [stage, setStage] = useState<DealStage>(deal.stage);
   const [source, setSource] = useState(deal.source);
   const [saving, setSaving] = useState(false);
+  const { stageLabel } = usePipelineStageLabels();
 
   const submit = async () => {
     if (!title.trim()) return toast.error('Title is required');
@@ -56,7 +58,7 @@ export function EditDealModal({ deal, onClose, onSave }: {
         <Field label="Probability (%)"><Input type="number" min={0} max={100} value={probability} onChange={(e) => setProbability(Number(e.target.value))} /></Field>
         <Field label="Stage">
           <Select value={stage} onChange={(e) => setStage(e.target.value as DealStage)}>
-            {STAGE_ORDER.map((s) => <option key={s} value={s}>{s}</option>)}
+            {STAGE_ORDER.map((s) => <option key={s} value={s}>{stageLabel(s)}</option>)}
           </Select>
         </Field>
         <div className="sm:col-span-2">

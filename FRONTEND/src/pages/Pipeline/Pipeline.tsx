@@ -10,6 +10,7 @@ import { formatCurrency, formatCompact } from '@/utils/formatters';
 import { exportToCSV } from '@/utils/csvExport';
 import { toast } from '@/store/toastStore';
 import { usePipelineBoard } from '@/hooks/usePipelineBoard';
+import { usePipelineStageLabels } from '@/hooks/usePipelineStageLabels';
 import { useLeadNames } from '@/hooks/useLeadNames';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -49,6 +50,7 @@ export function Pipeline() {
   const { members, nameById } = useTeamMembers();
   const [ownerFilter, setOwnerFilter] = useState<string | undefined>(undefined);
   const { board, stats, loading, error, refetch, createDeal, updateDeal, moveStage, archiveDeal } = usePipelineBoard(ownerFilter);
+  const { stageLabel, stageColor } = usePipelineStageLabels();
 
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverStage, setDragOverStage] = useState<DealStage | null>(null);
@@ -168,10 +170,10 @@ export function Pipeline() {
                   onClick={() => scrollToStage(stage)}
                   className="flex shrink-0 items-center gap-2 rounded-lg border border-ink-100 bg-white px-3 py-1.5 transition hover:border-brand-200 hover:bg-brand-50"
                 >
-                  <span className="flex h-5 w-5 items-center justify-center rounded-full" style={{ background: `${STAGE_COLOR[stage]}1a`, color: STAGE_COLOR[stage] }}>
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full" style={{ background: `${stageColor(stage)}1a`, color: stageColor(stage) }}>
                     <Icon size={12} />
                   </span>
-                  <span className="text-xs font-semibold text-ink-700">{stage}</span>
+                  <span className="text-xs font-semibold text-ink-700">{stageLabel(stage)}</span>
                   <span className="text-xs text-ink-400">{t.count}</span>
                   <span className="text-xs font-medium text-ink-500">{formatCompact(t.value)}</span>
                 </button>
@@ -216,8 +218,8 @@ export function Pipeline() {
                 >
                   <div className="sticky top-0 z-10 flex items-center justify-between bg-ink-100/95 px-3 py-2.5 backdrop-blur">
                     <div className="flex items-center gap-2">
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: STAGE_COLOR[stage] }} />
-                      <span className="text-sm font-semibold text-ink-800">{stage}</span>
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ background: stageColor(stage) }} />
+                      <span className="text-sm font-semibold text-ink-800">{stageLabel(stage)}</span>
                       <span className="rounded-full bg-white px-1.5 text-xs font-medium text-ink-500">{stageDeals.length}</span>
                     </div>
                     <span className="text-xs font-medium text-ink-400">{formatCompact(stageValue)}</span>
@@ -225,7 +227,7 @@ export function Pipeline() {
                   <div className="flex-1 space-y-2 px-2 pb-2">
                     {isDragTarget && (
                       <div className="rounded-lg border-2 border-dashed border-brand-400 bg-brand-50 py-6 text-center text-xs font-medium text-brand-600">
-                        Drop here to move to {stage}
+                        Drop here to move to {stageLabel(stage)}
                       </div>
                     )}
                     {stageDeals.map((deal) => (
@@ -327,17 +329,19 @@ function LegendDot({ color, label }: { color: string; label: string }) {
  * instead of shipping a form that would silently do nothing.
  */
 function PipelineSettingsModal({ onClose }: { onClose: () => void }) {
+  const { stageLabel, stageColor } = usePipelineStageLabels();
   return (
     <Modal open onClose={onClose} title="Pipeline Settings" footer={<Button onClick={onClose}>Close</Button>}>
       <p className="mb-3 text-sm text-ink-500">
-        Pipeline stages are fixed on this platform and not currently configurable per workspace.
-        Here is the full stage list and the default win-probability applied when a deal enters each stage:
+        Stage names and colors can be customized in Settings → Pipeline Stages. The 9 stages
+        themselves and their order are fixed. Here is the current list and the default
+        win-probability applied when a deal enters each stage:
       </p>
       <div className="divide-y divide-ink-100 rounded-lg border border-ink-100">
         {STAGE_ORDER.map((stage) => (
           <div key={stage} className="flex items-center justify-between px-3 py-2 text-sm">
             <span className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: STAGE_COLOR[stage] }} /> {stage}
+              <span className="h-2.5 w-2.5 rounded-full" style={{ background: stageColor(stage) }} /> {stageLabel(stage)}
             </span>
             <span className="text-ink-400">{STAGE_DEFAULT_PROBABILITY[stage]}% default</span>
           </div>
@@ -412,6 +416,7 @@ function AddDealModal({ initialStage, onClose, onCreated, createDeal }: {
   const [value, setValue] = useState(5000);
   const [stage, setStage] = useState<DealStage>(initialStage);
   const [saving, setSaving] = useState(false);
+  const { stageLabel } = usePipelineStageLabels();
 
   useEffect(() => {
     let cancelled = false;
@@ -466,7 +471,7 @@ function AddDealModal({ initialStage, onClose, onCreated, createDeal }: {
         <Field label="Deal value (USD)"><Input type="number" value={value} onChange={(e) => setValue(Number(e.target.value))} /></Field>
         <Field label="Stage">
           <Select value={stage} onChange={(e) => setStage(e.target.value as DealStage)}>
-            {STAGE_ORDER.filter((s) => !CLOSED_STAGES.includes(s)).map((s) => <option key={s} value={s}>{s}</option>)}
+            {STAGE_ORDER.filter((s) => !CLOSED_STAGES.includes(s)).map((s) => <option key={s} value={s}>{stageLabel(s)}</option>)}
           </Select>
         </Field>
       </div>

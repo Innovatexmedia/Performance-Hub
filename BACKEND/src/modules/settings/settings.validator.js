@@ -58,6 +58,38 @@ export const validateBranding = [
   handleValidation,
 ];
 
+/** validateLeadFields — PATCH /api/settings/lead-fields */
+export const validateLeadFields = [
+  body('required')
+    .notEmpty().withMessage('required array is required')
+    .isArray({ min: 1 }).withMessage('At least one field must be required'),
+
+  body('required.*')
+    .isString().withMessage('Each field must be a string'),
+
+  handleValidation,
+];
+
+/** validatePipelineStages — PATCH /api/settings/pipeline-stages */
+export const validatePipelineStages = [
+  body('stages')
+    .notEmpty().withMessage('stages array is required')
+    .isArray({ min: 9, max: 9 }).withMessage('stages must contain exactly 9 items'),
+
+  body('stages.*.key')
+    .isString().withMessage('Each stage needs its fixed key'),
+
+  body('stages.*.name')
+    .isString().trim()
+    .notEmpty().withMessage('Each stage needs a label')
+    .isLength({ max: 40 }).withMessage('Stage label cannot exceed 40 characters'),
+
+  body('stages.*.color')
+    .isHexColor().withMessage('Each stage needs a valid hex color'),
+
+  handleValidation,
+];
+
 /** validateQualification — PATCH /api/settings/qualification */
 export const validateQualification = [
   body('questions')

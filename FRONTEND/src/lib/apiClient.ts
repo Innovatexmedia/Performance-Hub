@@ -20,6 +20,22 @@ export class ApiError extends Error {
 }
 
 /**
+ * apiErrorMessage -- a friendly, field-aware message for any caught error.
+ * Field-level validation errors (e.g. "email must be valid", "phone is
+ * required") are far more useful than the generic top-level "Validation
+ * failed" every form used to show, so prefer those when present.
+ */
+export function apiErrorMessage(err: unknown, fallback = 'Please try again.'): string {
+  if (err instanceof ApiError) {
+    if (err.errors && err.errors.length > 0) {
+      return err.errors.map((e) => e.message).join(' · ');
+    }
+    return err.message || fallback;
+  }
+  return fallback;
+}
+
+/**
  * Auth wiring -- injected by authStore.ts at startup to avoid a circular
  * import (apiClient -> authStore -> apiClient). authStore calls
  * `setAuthHandlers` once; apiClient calls back into it only on 401.

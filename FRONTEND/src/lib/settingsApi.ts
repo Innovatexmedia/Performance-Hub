@@ -1,6 +1,7 @@
 import { apiClient } from '@/lib/apiClient';
 import type {
-  AllSettings, CompanySettings, BrandingSettings, QualificationSettings, ScoringRulesSettings,
+  AllSettings, CompanySettings, BrandingSettings, LeadFieldsSettings, PipelineStageDisplay,
+  QualificationSettings, ScoringRulesSettings,
   NotificationSettings, ConsentSettings, BillingSettings, SecuritySettings,
 } from '@/types/settings';
 
@@ -28,6 +29,22 @@ export const settingsApi = {
 
   updateBranding: (data: Partial<BrandingSettings>) =>
     apiClient.patch<BrandingSettings>('/settings/branding', data),
+
+  updateLeadFields: (required: string[]) =>
+    apiClient.patch<LeadFieldsSettings>('/settings/lead-fields', { required }),
+
+  /**
+   * getPipelineStagesForBoard -- calls the narrow, deliberately ungated
+   * /settings/pipeline-stages/board endpoint (same reasoning as
+   * getQualificationQuestions above), so the real Pipeline board
+   * (sales_user+) can render each stage's current label/color even though
+   * the full /settings bundle is tenant_admin-gated.
+   */
+  getPipelineStagesForBoard: () =>
+    apiClient.get<PipelineStageDisplay[]>('/settings/pipeline-stages/board'),
+
+  updatePipelineStages: (stages: PipelineStageDisplay[]) =>
+    apiClient.patch<PipelineStageDisplay[]>('/settings/pipeline-stages', { stages }),
 
   updateQualification: (questions: string[]) =>
     apiClient.patch<QualificationSettings>('/settings/qualification', { questions }),

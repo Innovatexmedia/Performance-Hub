@@ -58,21 +58,25 @@ export const LEAD_FIELDS = Object.freeze([
 ]);
 
 /**
- * PIPELINE_STAGES — system-defined stages (read-only display).
+ * PIPELINE_STAGES — system-defined stages. Keys/order/count are fixed (see
+ * Tenant.pipelineStageOverrides' comment for why); `key` matches
+ * STAGE_BOARD_KEY in deal.constants.js exactly and is what a tenant's
+ * label/color override is keyed by. `name`/`color` here are the DEFAULTS,
+ * used whenever a tenant hasn't overridden that stage.
  * SOURCE: FRONTEND_SPEC §19 Pipeline Stages tab + deal.constants.js DEAL_STAGE
  * Screenshot: New Lead(#1), Qualified(#2), Booked Call(#3), Call Completed(#4),
  *             Proposal Sent(#5), Negotiation(#6), Won(#7), Lost(#8), Nurture(#9)
  */
 export const PIPELINE_STAGES = Object.freeze([
-  { id: 1, name: 'New Lead',       color: '#64748b' },
-  { id: 2, name: 'Qualified',      color: '#3b82f6' },
-  { id: 3, name: 'Booked Call',    color: '#7c3aed' },
-  { id: 4, name: 'Call Completed', color: '#0d9488' },
-  { id: 5, name: 'Proposal Sent',  color: '#f59e0b' },
-  { id: 6, name: 'Negotiation',    color: '#ec4899' },
-  { id: 7, name: 'Won',            color: '#10b981' },
-  { id: 8, name: 'Lost',           color: '#ef4444' },
-  { id: 9, name: 'Nurture',        color: '#14b8a6' },
+  { id: 1, key: 'new_lead',       name: 'New Lead',       color: '#64748b' },
+  { id: 2, key: 'qualified',      name: 'Qualified',      color: '#3b82f6' },
+  { id: 3, key: 'booked_call',    name: 'Booked Call',    color: '#7c3aed' },
+  { id: 4, key: 'call_completed', name: 'Call Completed', color: '#0d9488' },
+  { id: 5, key: 'proposal_sent',  name: 'Proposal Sent',  color: '#f59e0b' },
+  { id: 6, key: 'negotiation',    name: 'Negotiation',    color: '#ec4899' },
+  { id: 7, key: 'won',            name: 'Won',             color: '#10b981' },
+  { id: 8, key: 'lost',           name: 'Lost',            color: '#ef4444' },
+  { id: 9, key: 'nurture',        name: 'Nurture',         color: '#14b8a6' },
 ]);
 
 /**

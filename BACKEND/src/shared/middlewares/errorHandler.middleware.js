@@ -104,7 +104,12 @@ export const errorHandler = (err, req, res, next) => {
     message: error.isOperational ? error.message : 'Something went wrong. Please try again.',
   };
 
-  if (error.errors && error.errors.length > 0) {
+  if (error.details && error.details.length > 0) {
+    response.errors = error.details;
+  } else if (error.errors && error.errors.length > 0) {
+    // Some error sources (e.g. handleMongooseValidationError below) build
+    // their AppError with a differently-named field -- keep this as a
+    // fallback so neither convention silently drops detail.
     response.errors = error.errors;
   }
 

@@ -2,10 +2,12 @@
  * Real Settings types -- match the backend exactly, all 10 tabs.
  *
  * Standard envelope. SOURCE: src/modules/settings/settings.service.js +
- * .constants.js. GET /settings returns all 10 tabs in one call; 7 of the
- * 10 have a dedicated PATCH endpoint (Lead Fields, Pipeline Stages, and
- * Billing are read-only -- confirmed via settings.routes.js, which marks
- * exactly these 3 as GET-only "system-defined"/"updated by webhooks").
+ * .constants.js. GET /settings returns all 10 tabs in one call; 8 of the
+ * 10 have a dedicated PATCH endpoint. Billing is read-only (updated by
+ * payment webhooks, not user-editable). Pipeline Stages' 9 keys/order are
+ * fixed (see settings.service.js's comment on why), but label/color ARE
+ * editable via its PATCH endpoint. Lead Fields' field SET is fixed too,
+ * but which ones are required is editable the same way.
  */
 
 export interface CompanySettings {
@@ -23,10 +25,14 @@ export interface BrandingSettings {
   available_colors: string[];
 }
 
-export type LeadFields = string[];
+export interface LeadFieldsSettings {
+  fields: string[];
+  required: string[];
+}
 
 export interface PipelineStageDisplay {
   id: number;
+  key: string;
   name: string;
   color: string;
 }
@@ -93,7 +99,7 @@ export interface SecuritySettings {
 export interface AllSettings {
   company: CompanySettings;
   branding: BrandingSettings;
-  lead_fields: LeadFields;
+  lead_fields: LeadFieldsSettings;
   pipeline_stages: PipelineStageDisplay[];
   qualification: QualificationSettings;
   scoring_rules: ScoringRulesSettings;

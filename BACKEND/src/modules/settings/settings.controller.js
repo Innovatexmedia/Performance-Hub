@@ -50,20 +50,48 @@ export const updateBranding = asyncHandler(async (req, res) => {
 
 /**
  * getLeadFields — GET /api/settings/lead-fields
- * SOURCE: FRONTEND_SPEC §19 Lead Fields tab — read-only display
+ * SOURCE: FRONTEND_SPEC §19 Lead Fields tab
  */
 export const getLeadFields = asyncHandler(async (req, res) => {
-  const { LEAD_FIELDS } = await import('./settings.constants.js');
-  return sendSuccess(res, LEAD_FIELDS, 'Lead fields fetched successfully');
+  const data = await settingsService.getLeadFieldsConfig(req.user.tenantId);
+  return sendSuccess(res, data, 'Lead fields fetched successfully');
+});
+
+/**
+ * updateLeadFields — PATCH /api/settings/lead-fields
+ * SOURCE: FRONTEND_SPEC §19 Lead Fields tab — which fields are required
+ */
+export const updateLeadFields = asyncHandler(async (req, res) => {
+  const data = await settingsService.updateLeadFields(req.user.tenantId, req.body, req.user);
+  return sendSuccess(res, data, 'Lead fields saved successfully');
 });
 
 /**
  * getPipelineStages — GET /api/settings/pipeline-stages
- * SOURCE: FRONTEND_SPEC §19 Pipeline Stages tab — read-only display
+ * SOURCE: FRONTEND_SPEC §19 Pipeline Stages tab
  */
 export const getPipelineStages = asyncHandler(async (req, res) => {
-  const { PIPELINE_STAGES } = await import('./settings.constants.js');
-  return sendSuccess(res, PIPELINE_STAGES, 'Pipeline stages fetched successfully');
+  const data = await settingsService.getPipelineStageOverrides(req.user.tenantId);
+  return sendSuccess(res, data.stages, 'Pipeline stages fetched successfully');
+});
+
+/**
+ * getPipelineStagesPublic — GET /api/settings/pipeline-stages/board
+ * Narrow, ungated (below tenant_admin) read for the real Pipeline board
+ * (sales_user+) -- same reasoning as getQualificationQuestions.
+ */
+export const getPipelineStagesPublic = asyncHandler(async (req, res) => {
+  const data = await settingsService.getPipelineStageOverrides(req.user.tenantId);
+  return sendSuccess(res, data.stages, 'Pipeline stages fetched successfully');
+});
+
+/**
+ * updatePipelineStages — PATCH /api/settings/pipeline-stages
+ * SOURCE: FRONTEND_SPEC §19 Pipeline Stages tab — rename/recolor + Save
+ */
+export const updatePipelineStages = asyncHandler(async (req, res) => {
+  const data = await settingsService.updatePipelineStages(req.user.tenantId, req.body, req.user);
+  return sendSuccess(res, data.stages, 'Pipeline stages saved successfully');
 });
 
 /**

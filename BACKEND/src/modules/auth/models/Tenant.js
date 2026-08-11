@@ -216,6 +216,19 @@ const tenantSchema = new Schema(
     dataRetentionDays:      { type: Number, default: 365, min: 30 },
     optOutKeywords:         { type: [String], default: ["STOP", "UNSUBSCRIBE", "OPTOUT"] },
 
+    // Per-stage label/color overrides, keyed by the fixed DEAL_STAGE board
+    // key (e.g. "new_lead", "qualified", ...). Stage KEYS/order/count are
+    // NOT tenant-configurable -- see types/deal.ts's note on why (deal
+    // validation, lead-status mapping, Won/Lost side effects, and tracking
+    // events all key off the fixed set). Only display label + color can be
+    // customized. Missing keys fall back to PIPELINE_STAGES' defaults.
+    pipelineStageOverrides: { type: Map, of: { label: String, color: String }, default: () => ({}) },
+
+    // Which of the fixed LEAD_FIELDS are required when creating a lead.
+    // Defaults to name+phone (validateCreateLead's original hardcoded
+    // rule) so existing behavior is unchanged until a tenant customizes it.
+    requiredLeadFields: { type: [String], default: ['name', 'phone'] },
+
     // ── Embedded Settings ─────────────────────────────────────────────────────
     branding:                { type: brandingSchema,                default: () => ({}) },
     whatsAppSettings:        { type: whatsAppSettingsSchema,        default: () => ({}) },

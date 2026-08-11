@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Modal, Button, Input, Field, Select } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
-import { ApiError } from '@/lib/apiClient';
+import { apiErrorMessage } from '@/lib/apiClient';
 import type { Lead, LeadInput, LeadStatus } from '@/types/lead';
 
 const SOURCES = ['Meta Ads', 'Google Ads', 'LinkedIn', 'Webinar', 'Referral', 'Organic', 'Cold Outreach', 'YouTube', 'Direct'];
@@ -32,8 +32,11 @@ export function LeadFormModal({ lead, onClose, onSubmit }: LeadFormModalProps) {
   const set = (k: string, v: string | number) => setForm((f) => ({ ...f, [k]: v }));
 
   const submit = async () => {
-    if (!form.name.trim()) return toast.error('Name required');
-    if (!form.phone.trim()) return toast.error('Phone required');
+    // Not "if phone missing, block" -- which fields are actually required is
+    // tenant-configurable now (Settings > Lead Fields). "name" is the one
+    // exception: the backend never allows it to be un-required, so it's
+    // safe (and saves a round-trip) to still catch it here specifically.
+    if (!form.name.trim()) return toast.error('Name is required');
 
     setSaving(true);
     try {
@@ -47,7 +50,7 @@ export function LeadFormModal({ lead, onClose, onSubmit }: LeadFormModalProps) {
       toast.success(isEdit ? 'Lead updated' : 'Lead created', form.name);
       onClose();
     } catch (err) {
-      toast.error(isEdit ? 'Could not update lead' : 'Could not create lead', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(isEdit ? 'Could not update lead' : 'Could not create lead', apiErrorMessage(err));
     } finally {
       setSaving(false);
     }

@@ -8,7 +8,8 @@ import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
 import { PageHeader, Card, Button, Tabs, Field, Input, Toggle, Badge } from '@/components/ui';
 import type {
-  AllSettings, CompanySettings, BrandingSettings, QualificationSettings, ScoringRulesSettings,
+  AllSettings, CompanySettings, BrandingSettings, LeadFieldsSettings, PipelineStageDisplay,
+  QualificationSettings, ScoringRulesSettings,
   NotificationSettings, ConsentSettings, SecuritySettings, ScoringRule,
 } from '@/types/settings';
 
@@ -22,12 +23,12 @@ const TABS = [
 
 /**
  * Settings -- confirmed spec-aligned (FRONTEND_SPEC §19, MASTER_SPEC B18):
- * 10 tabs, one action (`updateSettings`) per DEVELOPER_HANDOFF's terse
- * action table -- realized on the real backend as 7 dedicated PATCH
- * endpoints (one per editable tab), since Lead Fields/Pipeline
- * Stages/Billing are explicitly read-only/system-defined. Confirmed every
- * field the backend writes genuinely exists on the real Tenant schema --
- * nothing here silently fails to persist.
+ * 10 tabs, 9 of which have a dedicated PATCH endpoint. Billing stays
+ * read-only (updated by payment webhooks, not user-editable). Pipeline
+ * Stages' 9 keys/order are fixed, but label/color are editable; Lead
+ * Fields' field set is fixed, but which are required is editable.
+ * Confirmed every field the backend writes genuinely exists on the real
+ * Tenant schema -- nothing here silently fails to persist.
  *
  * Billing stays a real display of real backend data, but no actual
  * payment-processor action -- spec explicitly marks it "(placeholder)".
@@ -56,8 +57,8 @@ export function Settings() {
           <div>
             {tab === 'company' && <CompanyTab data={settings.company} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'branding' && <BrandingTab data={settings.branding} canEdit={canEdit} onSaved={refetch} />}
-            {tab === 'fields' && <FieldsTab fields={settings.lead_fields} />}
-            {tab === 'pipeline' && <PipelineTab stages={settings.pipeline_stages} />}
+            {tab === 'fields' && <FieldsTab data={settings.lead_fields} canEdit={canEdit} onSaved={refetch} />}
+            {tab === 'pipeline' && <PipelineTab stages={settings.pipeline_stages} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'qualification' && <QualificationTab data={settings.qualification} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'scoring' && <ScoringTab data={settings.scoring_rules} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'notifications' && <NotificationsTab data={settings.notifications} canEdit={canEdit} onSaved={refetch} />}
@@ -140,28 +141,80 @@ function BrandingTab({ data, canEdit, onSaved }: { data: BrandingSettings; canEd
   );
 }
 
-function FieldsTab({ fields }: { fields: string[] }) {
+function FieldsTab({ data, canEdit, onSaved }: { data: LeadFieldsSettings; canEdit: boolean; onSaved: () => void }) {
+  const [required, setRequired] = useState<string[]>(data.required);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setRequired(data.required), [data.required]);
+
+  const toggle = (field: string) => {
+    if (field === 'name') return; // name can never be turned off, mirrors the backend guard
+    setRequired((r) => r.includes(field) ? r.filter((f) => f !== field) : [...r, field]);
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await settingsApi.updateLeadFields(required);
+      toast.success('Lead fields saved');
+      onSaved();
+    } catch (err) {
+      toast.error('Could not save', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Card className="p-6">
-      <CardHeaderInline title="Lead Fields" subtitle="Standard fields captured for every lead" />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{fields.map((f) => <div key={f} className="rounded-lg border border-ink-100 px-3 py-2 text-sm text-ink-700">{f}</div>)}</div>
+      <CardHeaderInline title="Lead Fields" subtitle="Standard fields captured for every lead — choose which are required" />
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {data.fields.map((f) => (
+          <label key={f} className={`flex items-center gap-2 rounded-lg border border-ink-100 px-3 py-2 text-sm text-ink-700 ${f === 'name' ? 'opacity-60' : canEdit ? 'cursor-pointer hover:border-ink-200' : ''}`}>
+            <input type="checkbox" checked={required.includes(f)} disabled={!canEdit || f === 'name'} onChange={() => toggle(f)} className="rounded border-ink-300" />
+            {f} {f === 'name' && <span className="text-xs text-ink-400">(always required)</span>}
+          </label>
+        ))}
+      </div>
+      {canEdit && <Button className="mt-4" disabled={saving} onClick={() => void save()}><Save size={15} /> {saving ? 'Saving…' : 'Save'}</Button>}
     </Card>
   );
 }
 
-function PipelineTab({ stages }: { stages: AllSettings['pipeline_stages'] }) {
+function PipelineTab({ stages, canEdit, onSaved }: { stages: AllSettings['pipeline_stages']; canEdit: boolean; onSaved: () => void }) {
+  const [rows, setRows] = useState<PipelineStageDisplay[]>(stages);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setRows(stages), [stages]);
+
+  const setRow = (i: number, patch: Partial<PipelineStageDisplay>) =>
+    setRows(rows.map((r, j) => j === i ? { ...r, ...patch } : r));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      const saved = await settingsApi.updatePipelineStages(rows);
+      setRows(saved);
+      toast.success('Pipeline stages saved');
+      onSaved();
+    } catch (err) {
+      toast.error('Could not save', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Card className="p-6">
-      <CardHeaderInline title="Pipeline Stages" subtitle="Stages used across the pipeline — system-defined" />
+      <CardHeaderInline title="Pipeline Stages" subtitle="Rename or recolor each stage — the 9 stages themselves and their order are fixed" />
       <div className="space-y-2">
-        {stages.map((s, i) => (
-          <div key={s.id} className="flex items-center gap-3 rounded-lg border border-ink-100 px-3 py-2">
-            <span className="h-3 w-3 rounded-full" style={{ background: s.color }} />
-            <span className="text-sm font-medium text-ink-800">{s.name}</span>
-            <Badge tone="gray" className="ml-auto">#{i + 1}</Badge>
+        {rows.map((s, i) => (
+          <div key={s.key} className="flex items-center gap-3 rounded-lg border border-ink-100 px-3 py-2">
+            <input type="color" value={s.color} disabled={!canEdit} onChange={(e) => setRow(i, { color: e.target.value })} className="h-7 w-7 shrink-0 cursor-pointer rounded border border-ink-200 bg-transparent p-0" />
+            <Input disabled={!canEdit} value={s.name} onChange={(e) => setRow(i, { name: e.target.value })} className="flex-1" />
+            <Badge tone="gray">#{i + 1}</Badge>
           </div>
         ))}
       </div>
+      {canEdit && <Button className="mt-4" disabled={saving} onClick={() => void save()}><Save size={15} /> {saving ? 'Saving…' : 'Save'}</Button>}
     </Card>
   );
 }

@@ -79,6 +79,24 @@ const getTenant = async (tenantId) => {
  * Same real fallback logic as the Qualification tab inside
  * getAllSettings below -- not duplicated logic, just not the full bundle.
  */
+/**
+ * mergeStageOverrides — the fixed stage list with any tenant label/color
+ * overrides applied. Shared by getPipelineStageOverrides (uses its own
+ * tenant fetch) and getAllSettings (reuses the tenant it already loaded).
+ */
+const mergeStageOverrides = (tenant) => {
+  const overrides = tenant.pipelineStageOverrides || new Map();
+  return PIPELINE_STAGES.map((stage) => {
+    const override = overrides.get ? overrides.get(stage.key) : overrides[stage.key];
+    return {
+      id:    stage.id,
+      key:   stage.key,
+      name:  override?.label || stage.name,
+      color: override?.color || stage.color,
+    };
+  });
+};
+
 export const getQualificationQuestions = async (tenantId) => {
   const tenant = await getTenant(tenantId);
   return {
@@ -86,6 +104,36 @@ export const getQualificationQuestions = async (tenantId) => {
       ? tenant.qualificationQuestions
       : [...DEFAULT_QUALIFICATION_QUESTIONS],
   };
+};
+
+/**
+ * leadFieldsConfig — the fixed field list + which are required. Shared by
+ * getLeadFieldsConfig (own tenant fetch) and getAllSettings (reuses the
+ * tenant it already loaded), same pattern as mergeStageOverrides.
+ */
+const leadFieldsConfig = (tenant) => ({
+  fields:   LEAD_FIELDS,
+  required: tenant.requiredLeadFields?.length ? tenant.requiredLeadFields : ['name', 'phone'],
+});
+
+/**
+ * getLeadFieldsConfig — narrow read used by the GET /lead-fields endpoint.
+ */
+export const getLeadFieldsConfig = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  return leadFieldsConfig(tenant);
+};
+
+/**
+ * getPipelineStageOverrides — narrow, ungated cross-module read, same
+ * reasoning as getQualificationQuestions above: the real Pipeline board
+ * (sales_user+) needs each stage's current label/color, but the full
+ * settings bundle is tenant_admin-gated. Returns the fixed stage list with
+ * any tenant overrides merged in -- never fewer/more/reordered stages.
+ */
+export const getPipelineStageOverrides = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  return { stages: mergeStageOverrides(tenant) };
 };
 
 /**
@@ -113,11 +161,11 @@ export const getAllSettings = async (tenantId) => {
       available_colors: ACCENT_COLORS,
     },
 
-    // Tab 3: Lead Fields (read-only display)
-    lead_fields: LEAD_FIELDS,
+    // Tab 3: Lead Fields -- which of the fixed fields are required
+    lead_fields: leadFieldsConfig(tenant),
 
-    // Tab 4: Pipeline Stages (read-only display — system-defined)
-    pipeline_stages: PIPELINE_STAGES,
+    // Tab 4: Pipeline Stages -- fixed keys/order, editable label + color
+    pipeline_stages: mergeStageOverrides(tenant),
 
     // Tab 5: Qualification Questions
     qualification: {
@@ -177,6 +225,90 @@ export const getAllSettings = async (tenantId) => {
       session_timeout_minutes: tenant.securitySettings?.sessionTimeoutMinutes   ?? 480,
     },
   };
+};
+
+// =============================================================================
+// TAB 3 — LEAD FIELDS
+// =============================================================================
+
+/**
+ * updateLeadFields — saves which of the fixed LEAD_FIELDS are required when
+ * creating a lead. The field SET itself is not editable (it maps directly
+ * to real columns on the Lead schema) -- only which ones are mandatory.
+ * validateCreateLead reads this instead of its old hardcoded name+phone rule.
+ */
+export const updateLeadFields = async (tenantId, data, reqUser) => {
+  const ctx    = buildCtx(reqUser);
+  const tenant = await getTenant(tenantId);
+
+  if (!Array.isArray(data.required)) {
+    throw AppError.badRequest('required must be an array');
+  }
+  const invalid = data.required.filter((f) => !LEAD_FIELDS.includes(f));
+  if (invalid.length) {
+    throw AppError.badRequest(`Unknown field(s): ${invalid.join(', ')}`);
+  }
+  if (!data.required.includes('name')) {
+    // name is the one field every list/board/detail view assumes exists --
+    // never let it be toggled off, same spirit as phone being effectively
+    // mandatory for a WhatsApp-first product.
+    throw AppError.badRequest('"name" must always be required');
+  }
+
+  tenant.requiredLeadFields = [...new Set(data.required)];
+  tenant.markModified('requiredLeadFields');
+  tenant.updatedBy = ctx.userId;
+  await tenant.save();
+
+  return leadFieldsConfig(tenant);
+};
+
+// =============================================================================
+// TAB 4 — PIPELINE STAGES
+// =============================================================================
+
+/**
+ * updatePipelineStages — saves per-stage label/color overrides. Accepts the
+ * full 9-stage array back (as returned by GET), validates it's exactly the
+ * same fixed set of keys in the same order (nothing added/removed/
+ * reordered), and stores only the label/color that differ from the default
+ * as overrides -- see Tenant.pipelineStageOverrides' comment for why keys
+ * themselves aren't editable.
+ */
+export const updatePipelineStages = async (tenantId, data, reqUser) => {
+  const ctx    = buildCtx(reqUser);
+  const tenant = await getTenant(tenantId);
+
+  if (!Array.isArray(data.stages) || data.stages.length !== PIPELINE_STAGES.length) {
+    throw AppError.badRequest(`stages must be an array of exactly ${PIPELINE_STAGES.length} items`);
+  }
+
+  const overrides = new Map();
+  data.stages.forEach((incoming, i) => {
+    const expected = PIPELINE_STAGES[i];
+    if (!incoming || incoming.key !== expected.key) {
+      throw AppError.badRequest(
+        `Stage ${i + 1} must be "${expected.key}" (stages cannot be added, removed, or reordered)`,
+      );
+    }
+    const label = String(incoming.name || '').trim();
+    const color = String(incoming.color || '').trim();
+    if (!label) throw AppError.badRequest(`Stage "${expected.key}" needs a label`);
+    if (!/^#[0-9a-fA-F]{6}$/.test(color)) {
+      throw AppError.badRequest(`Stage "${expected.key}" needs a valid hex color`);
+    }
+    if (label !== expected.name || color !== expected.color) {
+      overrides.set(expected.key, { label, color });
+    }
+    // else: matches the default exactly -> no override stored for it.
+  });
+
+  tenant.pipelineStageOverrides = overrides;
+  tenant.markModified('pipelineStageOverrides');
+  tenant.updatedBy = ctx.userId;
+  await tenant.save();
+
+  return { stages: mergeStageOverrides(tenant) };
 };
 
 // =============================================================================

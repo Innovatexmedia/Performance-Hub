@@ -1,4 +1,5 @@
 import { AppError } from '../../../shared/helpers/lead.helpers.js';
+import Tenant from '../../auth/models/Tenant.js';
 import {
   LEAD_STATUS_VALUES,
   LEAD_TEMPERATURE_VALUES,
@@ -88,16 +89,39 @@ function rejectUnknown(body, errors) {
   }
 }
 
-/** Phase 2.1/2.2 — create: name + phone required. */
-export const validateCreateLead = (req, _res, next) => {
+/** True if `field` has a real value in `body` -- string fields must be
+ * non-blank after trim, numeric fields (qualification_score) must parse. */
+function isFieldPresent(body, field) {
+  const value = body[field];
+  if (value === undefined || value === null) return false;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (typeof value === 'number') return !Number.isNaN(value);
+  return true;
+}
+
+/**
+ * Phase 2.1/2.2 — create: which fields are required is now tenant-
+ * configurable (Settings > Lead Fields), not hardcoded to name+phone.
+ * Falls back to name+phone if the tenant lookup fails for any reason, so a
+ * DB hiccup here degrades to the old default rather than blocking every
+ * lead creation outright.
+ */
+export const validateCreateLead = async (req, _res, next) => {
   const body = req.body || {};
   const errors = [];
 
-  if (!isString(body.name) || !body.name.trim()) {
-    errors.push({ field: 'name', message: 'name is required' });
+  let requiredFields = ['name', 'phone'];
+  try {
+    const tenant = await Tenant.findById(req.context?.tenantId).select('requiredLeadFields').lean();
+    if (tenant?.requiredLeadFields?.length) requiredFields = tenant.requiredLeadFields;
+  } catch {
+    // fall through to the default above
   }
-  if (!isString(body.phone) || !body.phone.trim()) {
-    errors.push({ field: 'phone', message: 'phone is required' });
+
+  for (const field of requiredFields) {
+    if (!isFieldPresent(body, field)) {
+      errors.push({ field, message: `${field} is required` });
+    }
   }
   checkCommonFields(body, errors);
   rejectUnknown(body, errors);
