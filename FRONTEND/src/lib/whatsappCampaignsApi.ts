@@ -1,7 +1,7 @@
 import { apiClient, doRequest, throwIfError, ApiError } from '@/lib/apiClient';
 import type {
   WhatsAppCampaign, CreateCampaignInput, UpdateCampaignInput, CampaignListQuery,
-  Pagination, CampaignResource,
+  Pagination, CampaignResource, AudiencePreview,
 } from '@/types/whatsappCampaign';
 
 /**
@@ -54,7 +54,7 @@ function buildCampaignApi(resource: CampaignResource) {
       apiClient.post<WhatsAppCampaign>(`${base}/${id}/cancel`, { comment }),
 
     previewAudience: (audience: CreateCampaignInput['audience']) =>
-      apiClient.post<{ recipientCount: number }>(`${base}/preview-audience`, {
+      apiClient.post<AudiencePreview>(`${base}/preview-audience`, {
         filters: audience?.filters,
         includedContacts: audience?.includedContacts,
         excludedContacts: audience?.excludedContacts,

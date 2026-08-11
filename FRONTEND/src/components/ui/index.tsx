@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { X, ChevronRight, Search, Inbox } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, ChevronRight, Search, Inbox, Eye, EyeOff, Copy, Check, Info } from 'lucide-react';
 import { initials } from '@/utils/formatters';
 
 export function cn(...parts: (string | false | null | undefined)[]): string {
@@ -31,12 +31,27 @@ export function Button({
 export function Card({ className, children }: { className?: string; children: React.ReactNode }) {
   return <div className={cn('card', className)}>{children}</div>;
 }
-export function CardHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
+export function CardHeader({
+  title, subtitle, action, icon, iconTone = 'violet',
+}: {
+  title: string;
+  subtitle?: string;
+  action?: React.ReactNode;
+  icon?: React.ReactNode;
+  iconTone?: BadgeTone;
+}) {
   return (
     <div className="flex items-start justify-between gap-3 border-b border-ink-100 px-5 py-4">
-      <div>
-        <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
-        {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
+      <div className="flex items-start gap-3">
+        {icon && (
+          <span className={cn('mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full', iconCircleToneMap[iconTone])}>
+            {icon}
+          </span>
+        )}
+        <div>
+          <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
+          {subtitle && <p className="mt-0.5 text-xs text-ink-500">{subtitle}</p>}
+        </div>
       </div>
       {action}
     </div>
@@ -54,6 +69,16 @@ const toneMap: Record<BadgeTone, string> = {
   violet: 'bg-violet-50 text-violet-700',
   teal: 'bg-teal-50 text-teal-700',
   pink: 'bg-pink-50 text-pink-700',
+};
+const iconCircleToneMap: Record<BadgeTone, string> = {
+  gray: 'bg-ink-100 text-ink-600',
+  blue: 'bg-blue-100 text-blue-600',
+  green: 'bg-emerald-100 text-emerald-600',
+  amber: 'bg-amber-100 text-amber-600',
+  red: 'bg-red-100 text-red-600',
+  violet: 'bg-violet-100 text-violet-600',
+  teal: 'bg-teal-100 text-teal-600',
+  pink: 'bg-pink-100 text-pink-600',
 };
 export function Badge({ tone = 'gray', children, className }: { tone?: BadgeTone; children: React.ReactNode; className?: string }) {
   return (
@@ -163,10 +188,22 @@ export function Drawer({
 }
 
 // ---- Inputs ----------------------------------------------------------------
-export function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
+export function Field({
+  label, children, hint, info,
+}: { label: string; children: React.ReactNode; hint?: string; info?: string }) {
   return (
     <div>
-      <label className="label">{label}</label>
+      <label className="label flex items-center gap-1">
+        {label}
+        {info && (
+          <span className="group relative inline-flex">
+            <Info size={12} className="text-ink-300 hover:text-ink-500" />
+            <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1.5 w-56 -translate-x-1/2 rounded-lg bg-ink-900 px-2.5 py-1.5 text-[11px] font-normal leading-snug text-white opacity-0 shadow-soft transition group-hover:opacity-100">
+              {info}
+            </span>
+          </span>
+        )}
+      </label>
       {children}
       {hint && <p className="mt-1 text-xs text-ink-400">{hint}</p>}
     </div>
@@ -183,6 +220,90 @@ export function Select({ children, ...props }: React.SelectHTMLAttributes<HTMLSe
     <select className={cn('input', props.className)} {...props}>
       {children}
     </select>
+  );
+}
+
+// ---- IconInput: input with a leading icon --------------------------------
+export function IconInput({ icon, className, ...props }: { icon: React.ReactNode } & React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400">{icon}</span>
+      <input className={cn('input pl-9', className)} {...props} />
+    </div>
+  );
+}
+
+// ---- SecretField: masked value with show/hide + copy ----------------------
+export function SecretField({
+  icon, value, className, onCopy, ...props
+}: {
+  icon: React.ReactNode;
+  value?: string;
+  onCopy?: () => void;
+} & React.InputHTMLAttributes<HTMLInputElement>) {
+  const [visible, setVisible] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    if (!value) return;
+    navigator.clipboard?.writeText(value);
+    onCopy?.();
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="relative">
+      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400">{icon}</span>
+      <input
+        type={visible ? 'text' : 'password'}
+        value={value}
+        className={cn('input pl-9 pr-16', className)}
+        {...props}
+      />
+      <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-0.5">
+        <button type="button" onClick={() => setVisible((v) => !v)} className="rounded-md p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-600" tabIndex={-1}>
+          {visible ? <EyeOff size={14} /> : <Eye size={14} />}
+        </button>
+        {value && (
+          <button type="button" onClick={handleCopy} className="rounded-md p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-600" tabIndex={-1}>
+            {copied ? <Check size={14} className="text-emerald-600" /> : <Copy size={14} />}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---- StatusStrip: Live/Connected/Last-verified/Disconnect row -------------
+export function StatusStrip({
+  live, connected, lastVerified, onDisconnect, disconnecting,
+}: {
+  live?: boolean;
+  connected?: boolean;
+  lastVerified?: string;
+  onDisconnect?: () => void;
+  disconnecting?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge tone={live ? 'green' : 'amber'} className="gap-1.5">
+        <span className={cn('h-1.5 w-1.5 rounded-full', live ? 'bg-emerald-500' : 'bg-amber-500')} />
+        {live ? 'Live' : 'Not verified yet'}
+      </Badge>
+      <Badge tone={connected ? 'green' : 'gray'}>{connected ? 'Connected' : 'Not connected'}</Badge>
+      {lastVerified && (
+        <span className="rounded-lg border border-ink-200 px-2.5 py-1 text-xs text-ink-500">Last verified {lastVerified}</span>
+      )}
+      {connected && onDisconnect && (
+        <Button
+          variant="secondary"
+          className="border-red-200 px-2.5 py-1 text-xs text-red-600 hover:border-red-300 hover:bg-red-50"
+          onClick={onDisconnect}
+          disabled={disconnecting}
+        >
+          <X size={13} /> {disconnecting ? 'Disconnecting…' : 'Disconnect'}
+        </Button>
+      )}
+    </div>
   );
 }
 

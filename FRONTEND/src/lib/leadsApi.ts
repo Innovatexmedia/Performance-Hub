@@ -28,6 +28,8 @@ export const leadsApi = {
 
   archive: (id: string) => apiClientRaw.delete<{ message: string; lead: Lead }>(`/leads/${id}`),
 
+  restore: (id: string) => apiClientRaw.post<{ message: string; lead: Lead }>(`/leads/${id}/restore`),
+
   getDetails: (id: string) => apiClientRaw.get<LeadDetails>(`/leads/${id}/details`),
 
   listNotes: (id: string) => apiClientRaw.get<LeadNote[]>(`/leads/${id}/notes`),

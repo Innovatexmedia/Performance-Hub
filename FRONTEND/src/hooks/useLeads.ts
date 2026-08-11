@@ -12,6 +12,7 @@ export interface UseLeadsResult {
   createLead: (input: LeadInput) => Promise<Lead>;
   updateLead: (id: string, patch: LeadInput) => Promise<Lead>;
   archiveLead: (id: string) => Promise<void>;
+  restoreLead: (id: string) => Promise<void>;
 }
 
 /**
@@ -74,5 +75,10 @@ export function useLeads(query: LeadListQuery): UseLeadsResult {
     refetch();
   }, [refetch]);
 
-  return { leads, pagination, loading, error, refetch, createLead, updateLead, archiveLead };
+  const restoreLead = useCallback(async (id: string) => {
+    await leadsApi.restore(id);
+    refetch();
+  }, [refetch]);
+
+  return { leads, pagination, loading, error, refetch, createLead, updateLead, archiveLead, restoreLead };
 }

@@ -162,9 +162,35 @@ export const campaignsService = {
     return Lead.countDocuments(query);
   },
 
+  /** Same audience query as calculateAudience, but also returns a capped
+   * sample of the actual matching leads (name/phone/source/score) so a
+   * campaign creator can sanity-check the filters before sending, not just
+   * see a bare number. */
   async previewAudience(ctx, audience = {}) {
-    const count = await this.calculateAudience(ctx.tenantId, audience);
-    return { recipientCount: count };
+    const { filters = {}, includedContacts = [], excludedContacts = [] } = audience;
+    const query = buildAudienceQuery(ctx.tenantId, filters, includedContacts, excludedContacts);
+    const SAMPLE_SIZE = 25;
+
+    const [count, sampleDocs] = await Promise.all([
+      Lead.countDocuments(query),
+      Lead.find(query)
+        .select('name phone whatsapp_number source qualification_score')
+        .sort({ createdAt: -1 })
+        .limit(SAMPLE_SIZE)
+        .lean(),
+    ]);
+
+    return {
+      recipientCount: count,
+      sample: sampleDocs.map((l) => ({
+        id: String(l._id),
+        name: l.name || '',
+        phone: l.whatsapp_number || l.phone || '',
+        source: l.source || '',
+        qualificationScore: l.qualification_score ?? null,
+      })),
+      sampleTruncated: count > SAMPLE_SIZE,
+    };
   },
 
   // ── CRUD ────────────────────────────────────────────────────────────────

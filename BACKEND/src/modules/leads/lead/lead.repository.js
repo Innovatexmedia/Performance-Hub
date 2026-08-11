@@ -48,6 +48,14 @@ export const leadRepository = {
     );
   },
 
+  unarchiveById(tenantId, id) {
+    return Lead.findOneAndUpdate(
+      { _id: id, tenant_id: tenantId },
+      { $set: { archived: false } },
+      { new: true },
+    );
+  },
+
   findByEmail(tenantId, email) {
     if (!email) return null;
     return Lead.findOne({

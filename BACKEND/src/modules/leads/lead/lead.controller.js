@@ -43,6 +43,12 @@ export const leadController = {
     res.json({ message: 'Lead archived', lead: toLeadDTO(lead) });
   }),
 
+  // POST /api/leads/:id/restore  (un-archive)
+  restore: asyncHandler(async (req, res) => {
+    const lead = await leadService.unarchiveLead(req.context, req.params.id);
+    res.json({ message: 'Lead restored', lead: toLeadDTO(lead) });
+  }),
+
   // GET /api/leads/:id/details  (drawer)
   details: asyncHandler(async (req, res) => {
     const details = await leadService.getLeadDetails(

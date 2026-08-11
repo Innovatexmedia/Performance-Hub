@@ -40,6 +40,7 @@ router.use('/:id/activities', activityRoutes); // Phase 9 (timeline)
 router.use(assignmentRoutes); // /:id/assign, /:id/unassign, /:id/assign/auto, /assign/bulk
 
 router.get('/:id/details', authorize(ACTIONS.READ), leadController.details); // Phase 10
+router.post('/:id/restore', authorize(ACTIONS.DELETE), leadController.restore); // un-archive
 
 // --- core CRUD ----------------------------------------------------------
 router

@@ -117,6 +117,7 @@ export interface LeadListQuery {
   assigned_user_id?: string;
   group_id?: string;
   includeArchived?: boolean;
+  archivedOnly?: boolean;
   sort?: string;
   page?: number;
   limit?: number;

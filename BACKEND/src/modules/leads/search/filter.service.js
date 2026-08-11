@@ -111,10 +111,15 @@ export function normalizeFilters(query = {}) {
   |--------------------------------------------------------------------------
   | Archived
   |--------------------------------------------------------------------------
+  | Three states a caller can ask for:
+  |   (default)             -> active leads only (archived: false)
+  |   ?archivedOnly=true    -> ONLY archived leads (the "Archived" view/tab)
+  |   ?includeArchived=true -> both active AND archived together
+  | archivedOnly wins if both are somehow sent at once.
   */
 
-  filters.includeArchived =
-    query.includeArchived === 'true';
+  filters.archivedOnly = query.archivedOnly === 'true';
+  filters.includeArchived = query.includeArchived === 'true';
 
   return filters;
 }

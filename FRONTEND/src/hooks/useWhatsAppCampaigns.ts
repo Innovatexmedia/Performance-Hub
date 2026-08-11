@@ -3,7 +3,7 @@ import { whatsappCampaignsApi, whatsappBroadcastsApi } from '@/lib/whatsappCampa
 import { ApiError } from '@/lib/apiClient';
 import type {
   WhatsAppCampaign, CreateCampaignInput, UpdateCampaignInput, CampaignListQuery,
-  Pagination, CampaignResource, Audience,
+  Pagination, CampaignResource, Audience, AudiencePreview,
 } from '@/types/whatsappCampaign';
 
 export interface UseWhatsAppCampaignsResult {
@@ -21,7 +21,7 @@ export interface UseWhatsAppCampaignsResult {
   completeCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
   cancelCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
   failCampaign: (id: string, failureReason?: string, comment?: string) => Promise<WhatsAppCampaign>;
-  previewAudience: (audience: Audience) => Promise<number>;
+  previewAudience: (audience: Audience) => Promise<AudiencePreview>;
   /**
    * Merges a single campaign/broadcast into local state in place -- no
    * network call, no loading flag touched. Use this for real-time socket
@@ -126,8 +126,7 @@ export function useWhatsAppCampaigns(
   }, [api, refetch]);
 
   const previewAudience = useCallback(async (audience: Audience) => {
-    const result = await api.previewAudience(audience);
-    return result.recipientCount;
+    return api.previewAudience(audience);
   }, [api]);
 
   const applyRealtimeUpdate = useCallback((campaign: WhatsAppCampaign) => {

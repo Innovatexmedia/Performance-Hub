@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Download, Upload, Pencil, Archive, ExternalLink, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Download, Upload, Pencil, Archive, ArchiveRestore, ExternalLink, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   PageHeader, Button, Card, Table, Th, Td, Tr, Badge, StatusBadge, Avatar,
-  SearchInput, Select, EmptyState,
+  SearchInput, Select, EmptyState, cn,
 } from '@/components/ui';
 import { LeadFormModal } from './LeadFormModal';
 import { LeadDrawer } from './LeadDrawer';
@@ -43,6 +43,7 @@ export function Leads() {
   const [statusFilter, setStatusFilter] = useState('all');
   const [tempFilter, setTempFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [view, setView] = useState<'active' | 'archived'>('active');
   const [page, setPage] = useState(1);
 
   const [showAdd, setShowAdd] = useState(false);
@@ -53,18 +54,19 @@ export function Leads() {
 
   // Reset to page 1 whenever a filter changes (a stale page number past the
   // new result set would otherwise silently show an empty table).
-  useEffect(() => setPage(1), [debouncedQ, statusFilter, tempFilter, sourceFilter]);
+  useEffect(() => setPage(1), [debouncedQ, statusFilter, tempFilter, sourceFilter, view]);
 
   const query = useMemo(() => ({
     search: debouncedQ || undefined,
     status: statusFilter === 'all' ? undefined : (statusFilter as LeadStatus),
     lead_temperature: tempFilter === 'all' ? undefined : (tempFilter as LeadTemperature),
     source: sourceFilter === 'all' ? undefined : sourceFilter,
+    archivedOnly: view === 'archived' ? true : undefined,
     page,
     limit: 20,
-  }), [debouncedQ, statusFilter, tempFilter, sourceFilter, page]);
+  }), [debouncedQ, statusFilter, tempFilter, sourceFilter, view, page]);
 
-  const { leads, pagination, loading, error, refetch, createLead, updateLead, archiveLead } = useLeads(query);
+  const { leads, pagination, loading, error, refetch, createLead, updateLead, archiveLead, restoreLead } = useLeads(query);
 
   const exportCsv = async () => {
     try {
@@ -75,6 +77,7 @@ export function Leads() {
         status: query.status,
         lead_temperature: query.lead_temperature,
         source: query.source,
+        archivedOnly: query.archivedOnly,
       });
     } catch (err) {
       toast.error('Export failed', err instanceof ApiError ? err.message : 'Please try again.');
@@ -87,6 +90,15 @@ export function Leads() {
       toast.success('Lead archived', name);
     } catch (err) {
       toast.error('Could not archive lead', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
+
+  const handleRestore = async (id: string, name: string) => {
+    try {
+      await restoreLead(id);
+      toast.success('Lead restored', name);
+    } catch (err) {
+      toast.error('Could not restore lead', err instanceof ApiError ? err.message : 'Please try again.');
     }
   };
 
@@ -106,7 +118,7 @@ export function Leads() {
     <div>
       <PageHeader
         title="Leads"
-        description={pagination ? `${pagination.total} leads` : 'Loading…'}
+        description={pagination ? `${pagination.total} ${view === 'archived' ? 'archived ' : ''}leads` : 'Loading…'}
         breadcrumb={['Revenue', 'Leads']}
         actions={
           <>
@@ -120,6 +132,13 @@ export function Leads() {
           </>
         }
       />
+
+      {permissions.leads.canDelete && (
+        <div className="mb-4 flex gap-1.5 rounded-lg bg-ink-100 p-1 text-sm w-fit">
+          <button onClick={() => setView('active')} className={cn('rounded-md px-4 py-1.5 font-medium transition', view === 'active' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500')}>Active</button>
+          <button onClick={() => setView('archived')} className={cn('rounded-md px-4 py-1.5 font-medium transition', view === 'archived' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500')}>Archived</button>
+        </div>
+      )}
 
       <Card className="mb-4 p-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -146,7 +165,9 @@ export function Leads() {
         ) : loading ? (
           <p className="p-8 text-center text-sm text-ink-400">Loading leads…</p>
         ) : leads.length === 0 ? (
-          <EmptyState title="No leads match your filters" description="Try adjusting the search or filters, or add a new lead." action={permissions.leads.canCreate ? <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Lead</Button> : undefined} />
+          view === 'archived'
+            ? <EmptyState title="No archived leads" description="Leads you archive will show up here, and can be restored any time." />
+            : <EmptyState title="No leads match your filters" description="Try adjusting the search or filters, or add a new lead." action={permissions.leads.canCreate ? <Button onClick={() => setShowAdd(true)}><Plus size={16} /> Add Lead</Button> : undefined} />
         ) : (
           <>
             <Table>
@@ -182,7 +203,11 @@ export function Leads() {
                           <button onClick={() => void openEdit(l.id)} disabled={editLoadingId === l.id} className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600 disabled:opacity-40" title="Edit"><Pencil size={15} /></button>
                         )}
                         {permissions.leads.canDelete && (
-                          <button onClick={() => void handleArchive(l.id, l.name)} className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-red-600" title="Archive"><Archive size={15} /></button>
+                          view === 'archived' ? (
+                            <button onClick={() => void handleRestore(l.id, l.name)} className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-emerald-600" title="Restore"><ArchiveRestore size={15} /></button>
+                          ) : (
+                            <button onClick={() => void handleArchive(l.id, l.name)} className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-red-600" title="Archive"><Archive size={15} /></button>
+                          )
                         )}
                       </div>
                     </Td>

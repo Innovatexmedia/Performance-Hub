@@ -1,4 +1,5 @@
 import { SEARCHABLE_FIELDS } from '../lead/lead.constants.js';
+import { ROLES } from '../../auth/constants/roles.js';
 
 /** Escape user input for safe use inside a RegExp. */
 export function escapeRegex(str = '') {
@@ -8,6 +9,12 @@ export function escapeRegex(str = '') {
 /**
  * Build a Mongo filter (tenant scoping is applied by the repository).
  * Handles free-text search + equality filters + archived flag.
+ *
+ * ctx is passed so this can also enforce row-level visibility: a sales_user
+ * must only ever see leads assigned to them (plus unassigned ones, so new
+ * leads are still pickable) -- never another rep's, regardless of what
+ * `assigned_user_id` the client asked to filter by. tenant_owner/
+ * tenant_admin/read_only_user/super_admin see (and may filter by) everyone.
  */
 export function buildLeadFilter({
   search,
@@ -18,16 +25,33 @@ export function buildLeadFilter({
   assigned_user_id,
   group_id,
   includeArchived = false,
-} = {}) {
+  archivedOnly = false,
+} = {}, ctx = null) {
   const filter = {};
 
-  if (!includeArchived) filter.archived = false;
+  if (archivedOnly) {
+    filter.archived = true;
+  } else if (!includeArchived) {
+    filter.archived = false;
+  }
+  // else: includeArchived && !archivedOnly -> no `archived` filter at all,
+  // matches both states.
 
   if (status) filter.status = status;
   if (temperature) filter.lead_temperature = temperature;
   if (source) filter.source = source;
   if (segment) filter.segment = segment;
-  if (assigned_user_id) filter.assigned_user_id = assigned_user_id;
+
+  if (ctx?.role === ROLES.SALES_USER) {
+    // Force-scoped, ignoring whatever (if anything) the client asked for.
+    // Strictly leads assigned to THIS rep -- unassigned leads are
+    // intentionally excluded (product decision: a sales_user should not
+    // see any lead that isn't explicitly theirs, even an unclaimed one).
+    filter.assigned_user_id = ctx.userId;
+  } else if (assigned_user_id) {
+    filter.assigned_user_id = assigned_user_id;
+  }
+
   if (group_id) filter.group_id = group_id;
 
   if (search) {

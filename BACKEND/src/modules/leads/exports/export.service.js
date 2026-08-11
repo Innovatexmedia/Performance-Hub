@@ -10,7 +10,7 @@ const EXPORT_LIMIT = 100000;
  */
 export const exportService = {
   async exportLeadsCsv(ctx, query) {
-    const filter = buildExportFilter(query);
+    const filter = buildExportFilter(query, ctx);
     const leads = await leadRepository.find(ctx.tenantId, filter, {
       sort: { created_at: -1 },
       skip: 0,

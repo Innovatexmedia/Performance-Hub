@@ -11,6 +11,7 @@ export const ACTIVITY_TYPE = Object.freeze({
   AI_QUALIFIED:  'AI Qualified',
   NOTE_ADDED: 'Note Added',
   LEAD_ARCHIVED: 'Lead Archived',
+  LEAD_RESTORED: 'Lead Restored',
   LEAD_CAPTURED: 'Lead Captured',
   // WhatsApp Inbox module
   WHATSAPP_ASSIGNED: 'WhatsApp Conversation Assigned',

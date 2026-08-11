@@ -27,6 +27,7 @@ export type BroadcastType =
   | 'REMINDER' | 'FESTIVAL' | 'PRODUCT_UPDATE' | 'CUSTOM';
 
 export interface AudienceFilters {
+  groupId?: string;
   tags?: string[];
   source?: string;
   minimumScore?: number;
@@ -123,4 +124,22 @@ export interface Pagination {
   totalPages: number;
   hasNext: boolean;
   hasPrev: boolean;
+}
+
+export interface AudiencePreviewContact {
+  id: string;
+  name: string;
+  phone: string;
+  source: string;
+  qualificationScore: number | null;
+}
+
+export interface AudiencePreview {
+  recipientCount: number;
+  /** Only present for Broadcasts -- Campaigns don't compute this breakdown. */
+  excludedRecipientCount?: number;
+  optedOutCount?: number;
+  suppressedCount?: number;
+  sample: AudiencePreviewContact[];
+  sampleTruncated: boolean;
 }

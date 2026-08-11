@@ -222,11 +222,30 @@ export const broadcastsService = {
 
   async previewAudience(ctx, audience = {}) {
     const summary = await resolveAudienceSummary(ctx.tenantId, audience);
+    const SAMPLE_SIZE = 25;
+    const eligibleQuery = buildBaseContactQuery(ctx.tenantId, audience.filters || {});
+    if (audience.includedContacts?.length) eligibleQuery._id = { $in: audience.includedContacts };
+    if (audience.excludedContacts?.length) eligibleQuery._id = { ...(eligibleQuery._id || {}), $nin: audience.excludedContacts };
+
+    const sampleDocs = await Lead.find(eligibleQuery)
+      .select('name phone whatsapp_number source qualification_score')
+      .sort({ createdAt: -1 })
+      .limit(SAMPLE_SIZE)
+      .lean();
+
     return {
       recipientCount:         summary.recipientCount,
       excludedRecipientCount: summary.excludedRecipientCount,
       optedOutCount:          summary.optedOutCount,
       suppressedCount:        summary.suppressedCount,
+      sample: sampleDocs.map((l) => ({
+        id: String(l._id),
+        name: l.name || '',
+        phone: l.whatsapp_number || l.phone || '',
+        source: l.source || '',
+        qualificationScore: l.qualification_score ?? null,
+      })),
+      sampleTruncated: summary.recipientCount > SAMPLE_SIZE,
     };
   },
 

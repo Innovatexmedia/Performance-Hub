@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
-  ChevronLeft, ChevronRight, Trash2, Unplug,
+  ChevronLeft, ChevronRight, Trash2, Inbox as InboxIcon, Users, Layers, FileText,
+  ShieldCheck, Megaphone, Repeat, Radio, Zap, ScrollText, BarChart3, Settings as SettingsIcon,
+  Phone, Hash, Building2, KeyRound, Link2, Fingerprint,
 } from 'lucide-react';
 import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
@@ -17,6 +19,7 @@ import { useDb, useSettings, userName } from '@/store/hooks';
 import {
   PageHeader, Card, CardHeader, Tabs, Table, Th, Td, Tr, Badge, StatusBadge, Button,
   Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
+  IconInput, SecretField, StatusStrip,
 } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
@@ -29,13 +32,14 @@ import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
 import type { LeadListItem } from '@/types/lead';
 import { useGroups } from '@/hooks/useGroups';
+import { useTeamMembers } from '@/hooks/useTeamMembers';
 import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
 import { USABLE_APPROVAL_STATUS } from '@/types/whatsappTemplate';
 import { useWhatsAppCampaigns } from '@/hooks/useWhatsAppCampaigns';
-import type { CreateCampaignInput, WhatsAppCampaign as WhatsAppCampaignReal } from '@/types/whatsappCampaign';
+import type { CreateCampaignInput, WhatsAppCampaign as WhatsAppCampaignReal, AudiencePreviewContact } from '@/types/whatsappCampaign';
 import { PROVIDER_LABELS, NATIVE_PROVIDER, THIRD_PARTY_PROVIDER_VALUES, IMPLEMENTED_THIRD_PARTY_PROVIDERS } from '@/types/whatsappSettings';
 import type { WhatsAppProvider as WhatsAppProviderReal, PanelMode, WhatsAppSettingsSync } from '@/types/whatsappSettings';
 import { ApiError } from '@/lib/apiClient';
@@ -67,7 +71,30 @@ const TABS = [
   { id: 'settings', label: 'WhatsApp Settings' },
 ];
 
+// Mirrors the fixed source list Leads.tsx offers, so campaign audience
+// filters always match what a lead can actually be created with.
+const LEAD_SOURCES = ['Meta Ads', 'Google Ads', 'LinkedIn', 'Webinar', 'Referral', 'Organic', 'Cold Outreach', 'YouTube', 'Direct'];
+
 const PROVIDERS: WhatsAppProvider[] = ['Native Meta Cloud API', 'WATI', 'Interakt', 'AiSensy', 'Gallabox', 'Twilio WhatsApp', '360dialog', 'Custom Webhook Provider', 'Simulation Mode'];
+
+// Consistent icon language for each tab's section header (image-2 style: a
+// tinted circle icon to the left of the title). Sizes match CardHeader's 16px.
+const TAB_ICONS: Record<string, React.ReactNode> = {
+  inbox: <InboxIcon size={16} />,
+  contacts: <Users size={16} />,
+  groups: <Layers size={16} />,
+  templates: <FileText size={16} />,
+  approval: <ShieldCheck size={16} />,
+  campaigns: <Megaphone size={16} />,
+  nurture: <Repeat size={16} />,
+  ai: <Sparkles size={16} />,
+  broadcasts: <Radio size={16} />,
+  rules: <Zap size={16} />,
+  consent: <ShieldCheck size={16} />,
+  logs: <ScrollText size={16} />,
+  analytics: <BarChart3 size={16} />,
+  settings: <SettingsIcon size={16} />,
+};
 
 export function WhatsAppPanel() {
   const [tab, setTab] = useState('inbox');
@@ -265,7 +292,7 @@ function ContactsTab() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
+        <CardHeader icon={TAB_ICONS.contacts} title="WhatsApp Contacts" subtitle={pagination ? `${pagination.total} contacts synced` : 'Loading…'} />
         {error ? (
           <EmptyState title="Couldn't load contacts" description={error} />
         ) : loading && leads.length === 0 ? (
@@ -460,10 +487,14 @@ function GroupsTab() {
 
   return (
     <div>
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-ink-500">Groups are used to target campaigns and broadcasts at a whole audience, never at individually-picked contacts.</p>
-        <Button onClick={openCreate}><Plus size={16} /> New Group</Button>
-      </div>
+      <Card className="mb-4">
+        <CardHeader
+          icon={TAB_ICONS.groups}
+          title="Groups"
+          subtitle="Used to target campaigns and broadcasts at a whole audience, never at individually-picked contacts."
+          action={<Button onClick={openCreate}><Plus size={16} /> New Group</Button>}
+        />
+      </Card>
 
       {groups.length === 0 ? (
         <EmptyState title="No groups yet" description="Create a group, then add members to it." action={<Button onClick={openCreate}><Plus size={16} /> Create group</Button>} />
@@ -673,6 +704,14 @@ function TemplatesTab() {
 
   return (
     <div>
+      <Card className="mb-4">
+        <CardHeader
+          icon={TAB_ICONS.templates}
+          title="Templates"
+          subtitle="Create, edit and duplicate WhatsApp templates before they go into internal review."
+          action={<Button onClick={() => setShowBuilder(true)}><Plus size={16} /> New Template</Button>}
+        />
+      </Card>
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
         {visibleTemplates.map((t) => (
           <Card key={t.id} className={cn('flex flex-col p-4', t.approvalStatus === 'REJECTED' && 'opacity-70')}>
@@ -868,7 +907,7 @@ function ApprovalTab() {
 
   return (
     <Card>
-      <CardHeader title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
+      <CardHeader icon={TAB_ICONS.approval} title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
       <div className="divide-y divide-ink-100">
         {visibleTemplates.length === 0 && (
           <p className="p-8 text-center text-sm text-ink-400">Nothing here right now — templates appear once someone submits them for review.</p>
@@ -1035,10 +1074,23 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
+  const { members } = useTeamMembers();
+
+  type AudienceMode = 'group' | 'filters';
+  const emptyFilters = {
+    tags: [] as string[], source: '', minimumScore: '', maximumScore: '',
+    consentStatus: '', optOutStatus: '', assignedUserId: '',
+    createdAfter: '', createdBefore: '', lastContactedAfter: '', lastContactedBefore: '',
+  };
   const [form, setForm] = useState({
     name: '', type: typeOptions[0], templateId: '', groupId: '',
+    audienceMode: 'group' as AudienceMode,
+    filters: emptyFilters,
   });
+  const [tagInput, setTagInput] = useState('');
   const [previewCount, setPreviewCount] = useState<number | null>(null);
+  const [previewSample, setPreviewSample] = useState<AudiencePreviewContact[]>([]);
+  const [previewTruncated, setPreviewTruncated] = useState(false);
   const [previewing, setPreviewing] = useState(false);
 
   // Mirrors LOCKED_STATUSES / READ_ONLY_STATUSES in campaigns.constants.js /
@@ -1047,17 +1099,37 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const EDIT_LOCKED = ['SCHEDULED', 'RUNNING', 'COMPLETED', 'CANCELLED'];
   const DELETE_LOCKED = ['COMPLETED', 'CANCELLED'];
 
-  // Audience is always a Group -- not raw per-contact filters -- per product
-  // decision: campaigns target a named group, never individuals directly.
-  const buildAudience = () => ({
-    filters: { groupId: form.groupId },
-  });
+  // Audience is either a whole named Group, OR a set of raw contact filters
+  // (tags, source, score range, consent, owner, date ranges) -- the backend's
+  // buildAudienceQuery already supports all of these; this just exposes it.
+  const buildAudience = () => {
+    if (form.audienceMode === 'group') return { filters: { groupId: form.groupId } };
+    const f = form.filters;
+    const filters: Record<string, unknown> = {};
+    if (f.tags.length) filters.tags = f.tags;
+    if (f.source) filters.source = f.source;
+    if (f.minimumScore !== '') filters.minimumScore = Number(f.minimumScore);
+    if (f.maximumScore !== '') filters.maximumScore = Number(f.maximumScore);
+    if (f.consentStatus) filters.consentStatus = f.consentStatus;
+    if (f.optOutStatus) filters.optOutStatus = f.optOutStatus;
+    if (f.assignedUserId) filters.assignedUserId = f.assignedUserId;
+    if (f.createdAfter) filters.createdAfter = f.createdAfter;
+    if (f.createdBefore) filters.createdBefore = f.createdBefore;
+    if (f.lastContactedAfter) filters.lastContactedAfter = f.lastContactedAfter;
+    if (f.lastContactedBefore) filters.lastContactedBefore = f.lastContactedBefore;
+    return { filters };
+  };
+  const audienceIsEmpty = form.audienceMode === 'group'
+    ? !form.groupId
+    : Object.keys(buildAudience().filters).length === 0;
 
   const runPreview = async () => {
     setPreviewing(true);
     try {
-      const count = await previewAudience(buildAudience());
-      setPreviewCount(count);
+      const result = await previewAudience(buildAudience());
+      setPreviewCount(result.recipientCount);
+      setPreviewSample(result.sample);
+      setPreviewTruncated(result.sampleTruncated);
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Failed to preview audience');
     } finally {
@@ -1066,28 +1138,59 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   };
 
   const resetForm = () => {
-    setForm({ name: '', type: typeOptions[0], templateId: '', groupId: '' });
+    setForm({ name: '', type: typeOptions[0], templateId: '', groupId: '', audienceMode: 'group', filters: emptyFilters });
+    setTagInput('');
     setPreviewCount(null);
+    setPreviewSample([]);
+    setPreviewTruncated(false);
     setEditingId(null);
   };
 
   const startEdit = (c: WhatsAppCampaignReal) => {
     setEditingId(c.id);
+    const f = (c.audience?.filters || {}) as Record<string, unknown>;
+    const hasGroupId = typeof f.groupId === 'string' && f.groupId;
     setForm({
       name: c.name,
       type: c.type,
       templateId: c.templateId || '',
-      groupId: c.audience?.filters?.groupId || '',
+      groupId: hasGroupId ? (f.groupId as string) : '',
+      audienceMode: hasGroupId ? 'group' : 'filters',
+      filters: {
+        tags: Array.isArray(f.tags) ? (f.tags as string[]) : [],
+        source: typeof f.source === 'string' ? f.source : '',
+        minimumScore: f.minimumScore !== undefined ? String(f.minimumScore) : '',
+        maximumScore: f.maximumScore !== undefined ? String(f.maximumScore) : '',
+        consentStatus: typeof f.consentStatus === 'string' ? f.consentStatus : '',
+        optOutStatus: typeof f.optOutStatus === 'string' ? f.optOutStatus : '',
+        assignedUserId: typeof f.assignedUserId === 'string' ? f.assignedUserId : '',
+        createdAfter: typeof f.createdAfter === 'string' ? f.createdAfter : '',
+        createdBefore: typeof f.createdBefore === 'string' ? f.createdBefore : '',
+        lastContactedAfter: typeof f.lastContactedAfter === 'string' ? f.lastContactedAfter : '',
+        lastContactedBefore: typeof f.lastContactedBefore === 'string' ? f.lastContactedBefore : '',
+      },
     });
+    setTagInput('');
     setPreviewCount(null);
+    setPreviewSample([]);
+    setPreviewTruncated(false);
     setShow(true);
   };
+
+  const addTag = () => {
+    const t = tagInput.trim();
+    if (!t || form.filters.tags.includes(t)) return;
+    setForm({ ...form, filters: { ...form.filters, tags: [...form.filters.tags, t] } });
+    setTagInput('');
+  };
+  const removeTag = (t: string) => setForm({ ...form, filters: { ...form.filters, tags: form.filters.tags.filter((x) => x !== t) } });
 
   const create = async () => {
     if (submitting) return; // guards against a double-click firing two creates
     if (!form.name.trim()) return toast.error('Name required');
     if (!form.templateId) return toast.error('An approved template is required');
-    if (!form.groupId) return toast.error('A target group is required — campaigns send to a group, not individual contacts');
+    if (form.audienceMode === 'group' && !form.groupId) return toast.error('A target group is required, or switch to Custom filters');
+    if (form.audienceMode === 'filters' && audienceIsEmpty) return toast.error('Add at least one filter, or switch to Target group');
     setSubmitting(true);
     try {
       if (editingId) {
@@ -1146,7 +1249,14 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
 
   return (
     <div>
-      <div className="mb-4 flex justify-end"><Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button></div>
+      <Card className="mb-4">
+        <CardHeader
+          icon={broadcast ? TAB_ICONS.broadcasts : TAB_ICONS.campaigns}
+          title={broadcast ? 'Broadcasts' : 'Campaigns'}
+          subtitle={broadcast ? 'Broadcast-flagged campaigns — opted-out contacts are always excluded.' : 'Audience filter + approved template, with approve/schedule/send.'}
+          action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button>}
+        />
+      </Card>
       {campaigns.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> Create</Button>} /> : (
         <div className="grid gap-3 lg:grid-cols-2">
           {campaigns.map((c) => {
@@ -1216,16 +1326,132 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                 {usableTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </Select>
             </Field>
-            <Field label="Target group" hint={groups.length === 0 ? 'No groups yet — create one in Contacts / Leads first.' : 'Campaigns send to a whole group, not individually-picked contacts.'}>
-              <Select value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
-                <option value="">Select a group…</option>
-                {groups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberCount})</option>)}
-              </Select>
+            <Field label="Audience">
+              <div className="mb-2 flex gap-1.5 rounded-lg bg-ink-100 p-1 text-xs">
+                <button type="button" onClick={() => setForm({ ...form, audienceMode: 'group' })} className={cn('flex-1 rounded-md py-1.5 font-medium transition', form.audienceMode === 'group' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500')}>Target group</button>
+                <button type="button" onClick={() => setForm({ ...form, audienceMode: 'filters' })} className={cn('flex-1 rounded-md py-1.5 font-medium transition', form.audienceMode === 'filters' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500')}>Custom filters</button>
+              </div>
+
+              {form.audienceMode === 'group' ? (
+                <>
+                  <Select value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
+                    <option value="">Select a group…</option>
+                    {groups.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberCount})</option>)}
+                  </Select>
+                  {groups.length === 0 && <p className="mt-1 text-xs text-ink-400">No groups yet — create one in Contacts / Leads first.</p>}
+                </>
+              ) : (
+                <div className="space-y-3 rounded-xl border border-ink-100 p-3">
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-ink-600">Tags</p>
+                    <div className="mb-1.5 flex flex-wrap gap-1.5">
+                      {form.filters.tags.map((t) => (
+                        <button key={t} type="button" onClick={() => removeTag(t)} title="Remove tag"><Badge tone="teal">{t} ×</Badge></button>
+                      ))}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <input value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }} placeholder="Add a tag and press Enter…" className="input flex-1 py-1.5 text-xs" />
+                      <button type="button" onClick={addTag} disabled={!tagInput.trim()} className="rounded-lg border border-ink-200 p-2 text-ink-500 hover:bg-ink-50 disabled:opacity-40"><Plus size={14} /></button>
+                    </div>
+                    <p className="mt-1 text-[11px] text-ink-400">Only contacts with ALL of these tags will match.</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Source</p>
+                      <Select value={form.filters.source} onChange={(e) => setForm({ ...form, filters: { ...form.filters, source: e.target.value } })} className="py-1.5 text-xs">
+                        <option value="">Any source</option>
+                        {LEAD_SOURCES.map((s) => <option key={s}>{s}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Owner</p>
+                      <Select value={form.filters.assignedUserId} onChange={(e) => setForm({ ...form, filters: { ...form.filters, assignedUserId: e.target.value } })} className="py-1.5 text-xs">
+                        <option value="">Any owner</option>
+                        {members.map((m) => <option key={m.id} value={m.id}>{m.fullName}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Consent status</p>
+                      <Select value={form.filters.consentStatus} onChange={(e) => setForm({ ...form, filters: { ...form.filters, consentStatus: e.target.value } })} className="py-1.5 text-xs">
+                        <option value="">Any</option>
+                        {CONSENT_STATUS_VALUES.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Opt-out status</p>
+                      <Select value={form.filters.optOutStatus} onChange={(e) => setForm({ ...form, filters: { ...form.filters, optOutStatus: e.target.value } })} className="py-1.5 text-xs">
+                        <option value="">Any</option>
+                        <option value="OPTED_IN">Reachable (not opted out)</option>
+                        <option value="OPTED_OUT">Opted out</option>
+                      </Select>
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Min. score</p>
+                      <Input type="number" min={0} max={100} value={form.filters.minimumScore} onChange={(e) => setForm({ ...form, filters: { ...form.filters, minimumScore: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Max. score</p>
+                      <Input type="number" min={0} max={100} value={form.filters.maximumScore} onChange={(e) => setForm({ ...form, filters: { ...form.filters, maximumScore: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Created after</p>
+                      <Input type="date" value={form.filters.createdAfter} onChange={(e) => setForm({ ...form, filters: { ...form.filters, createdAfter: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Created before</p>
+                      <Input type="date" value={form.filters.createdBefore} onChange={(e) => setForm({ ...form, filters: { ...form.filters, createdBefore: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Last contacted after</p>
+                      <Input type="date" value={form.filters.lastContactedAfter} onChange={(e) => setForm({ ...form, filters: { ...form.filters, lastContactedAfter: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-ink-600">Last contacted before</p>
+                      <Input type="date" value={form.filters.lastContactedBefore} onChange={(e) => setForm({ ...form, filters: { ...form.filters, lastContactedBefore: e.target.value } })} className="py-1.5 text-xs" />
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-ink-400">Opted-out contacts are always excluded, on top of these filters.</p>
+                </div>
+              )}
             </Field>
             <div className="flex items-center gap-3">
-              <Button variant="secondary" className="px-3 py-1 text-xs" onClick={runPreview} disabled={previewing || !form.groupId}>{previewing ? 'Checking…' : 'Preview audience'}</Button>
+              <Button variant="secondary" className="px-3 py-1 text-xs" onClick={runPreview} disabled={previewing || audienceIsEmpty}>{previewing ? 'Checking…' : 'Preview audience'}</Button>
               {previewCount !== null && <p className="text-xs text-ink-600">{previewCount} matching contact{previewCount === 1 ? '' : 's'} (opted-out contacts already excluded)</p>}
             </div>
+            {previewCount !== null && (
+              previewSample.length === 0 ? (
+                <p className="text-xs text-ink-400">No contacts match these filters yet.</p>
+              ) : (
+                <div className="max-h-52 overflow-y-auto rounded-lg border border-ink-100">
+                  <table className="w-full text-xs">
+                    <thead className="sticky top-0 bg-ink-50 text-ink-500">
+                      <tr>
+                        <th className="px-2.5 py-1.5 text-left font-medium">Name</th>
+                        <th className="px-2.5 py-1.5 text-left font-medium">Phone</th>
+                        <th className="px-2.5 py-1.5 text-left font-medium">Source</th>
+                        <th className="px-2.5 py-1.5 text-right font-medium">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-ink-50">
+                      {previewSample.map((c) => (
+                        <tr key={c.id}>
+                          <td className="px-2.5 py-1.5 font-medium text-ink-800">{c.name || '—'}</td>
+                          <td className="px-2.5 py-1.5 text-ink-600">{c.phone || '—'}</td>
+                          <td className="px-2.5 py-1.5 text-ink-600">{c.source || '—'}</td>
+                          <td className="px-2.5 py-1.5 text-right text-ink-600">{c.qualificationScore ?? '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {previewTruncated && (
+                    <p className="border-t border-ink-100 px-2.5 py-1.5 text-[11px] text-ink-400">
+                      Showing first {previewSample.length} of {previewCount} — the rest will still receive the message.
+                    </p>
+                  )}
+                </div>
+              )
+            )}
           </div>
         </Modal>
       )}
@@ -1240,7 +1466,7 @@ function NurtureMessagesTab() {
   const waSteps = seqs.flatMap((s) => s.steps.filter((st) => st.channel === 'WhatsApp').map((st) => ({ seq: s.name, ...st })));
   return (
     <Card>
-      <CardHeader title="WhatsApp Nurture Messages" subtitle="WhatsApp steps across all active sequences" />
+      <CardHeader icon={TAB_ICONS.nurture} title="WhatsApp Nurture Messages" subtitle="WhatsApp steps across all active sequences" />
       <Table>
         <thead><tr><Th>Sequence</Th><Th>Step</Th><Th>Delay</Th><Th>Message</Th></tr></thead>
         <tbody>
@@ -1462,7 +1688,7 @@ function RulesTab() {
   const autos = db.automations.filter((a) => a.tenant_id === tenantId);
   return (
     <Card>
-      <CardHeader title="WhatsApp Automation Rules" subtitle="Trigger-based WhatsApp actions" />
+      <CardHeader icon={TAB_ICONS.rules} title="WhatsApp Automation Rules" subtitle="Trigger-based WhatsApp actions" />
       <div className="divide-y divide-ink-100">
         {autos.map((a) => (
           <div key={a.id} className="flex items-center justify-between px-5 py-3.5">
@@ -1580,6 +1806,7 @@ function ConsentTab() {
 
       <Card>
         <CardHeader
+          icon={TAB_ICONS.consent}
           title="Consent & Suppression List"
           subtitle="Opt-out keywords: STOP · UNSUBSCRIBE · CANCEL · NO · REMOVE"
           action={
@@ -1714,7 +1941,7 @@ function CreateConsentModal({ onClose, onCreated, create }: {
     >
       <div className="space-y-4">
         <Field label="Phone number" hint="International format, e.g. +14155550142">
-          <Input value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} placeholder="+14155550142" />
+          <IconInput icon={<Phone size={14} />} value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} placeholder="+14155550142" />
         </Field>
         <Field label="Initial status">
           <Select value={status} onChange={(e) => setStatus(e.target.value as ConsentStatus)}>
@@ -1797,6 +2024,7 @@ function LogsTab() {
 
       <Card>
         <CardHeader
+          icon={TAB_ICONS.logs}
           title="Delivery Logs"
           subtitle={pagination ? `${pagination.total} messages tracked` : 'Loading…'}
           action={
@@ -1899,6 +2127,9 @@ function AnalyticsTab() {
 
   return (
     <div className="space-y-4">
+      <Card>
+        <CardHeader icon={TAB_ICONS.analytics} title="WhatsApp Analytics" subtitle="KPIs and charts across conversations, campaigns and templates." />
+      </Card>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label="Conversations" value={convos.length} icon={<MessageSquare size={18} />} accent="#22c55e" />
         <KpiCard label="Messages sent" value={sent} icon={<Send size={18} />} accent="#6366f1" />
@@ -2067,178 +2298,176 @@ function SettingsTab() {
     }
   };
 
-  if (loading && !settings) return <Card className="max-w-3xl p-6"><p className="text-sm text-ink-400">Loading settings…</p></Card>;
-  if (error) return <Card className="max-w-3xl p-6"><p className="text-sm text-red-600">{error}</p></Card>;
+  if (loading && !settings) return <Card className="p-6"><p className="text-sm text-ink-400">Loading settings…</p></Card>;
+  if (error) return <Card className="p-6"><p className="text-sm text-red-600">{error}</p></Card>;
   if (!settings) return null;
 
   return (
-    <Card className="max-w-3xl p-6">
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 className="text-sm font-semibold text-ink-900">WhatsApp Provider Settings</h3>
-          <p className="mt-1 text-xs text-ink-500">Choose native InnovateX panel or a third-party BSP. Only Meta Cloud API is fully connected in this phase.</p>
-        </div>
-        <div className="flex flex-col items-end gap-1">
-          <div className="flex items-center gap-2">
-            <Badge tone={settings.providerMode === 'LIVE' ? 'green' : 'amber'}>
-              {settings.providerMode === 'LIVE' ? 'Live' : 'Not verified yet'}
-            </Badge>
-            <Badge tone={settings.meta.connected ? 'green' : 'gray'}>{settings.meta.connected ? 'Connected' : 'Not connected'}</Badge>
-          </div>
-          {settings.meta.lastVerifiedAt && (
-            <p className="text-[11px] text-ink-400">Last verified {timeAgo(settings.meta.lastVerifiedAt)}</p>
-          )}
-          {settings.meta.connected && (
-            <Button
-              variant="secondary"
-              className="border-red-200 px-2.5 py-1 text-xs text-red-600 hover:border-red-300 hover:bg-red-50"
-              onClick={() => void handleDisconnect()}
-              disabled={disconnecting}
-            >
-              <Unplug size={13} /> {disconnecting ? 'Disconnecting…' : 'Disconnect'}
-            </Button>
-          )}
-        </div>
-      </div>
+    <Card>
+      <CardHeader
+        icon={<CheckCircle2 size={16} />}
+        iconTone="violet"
+        title="WhatsApp Provider Settings"
+        subtitle="Choose native InnovateX panel or a third-party BSP. Only Meta Cloud API is fully connected in this phase."
+        action={
+          <StatusStrip
+            live={settings.providerMode === 'LIVE'}
+            connected={settings.meta.connected}
+            lastVerified={settings.meta.lastVerifiedAt ? timeAgo(settings.meta.lastVerifiedAt) : undefined}
+            onDisconnect={() => void handleDisconnect()}
+            disconnecting={disconnecting}
+          />
+        }
+      />
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <Field label="WhatsApp mode">
-          <Select value={panelMode} onChange={(e) => handlePanelModeChange(e.target.value as PanelMode)}>
-            <option value="NATIVE">Native InnovateX Panel</option>
-            <option value="THIRD_PARTY">Third-party Provider</option>
-          </Select>
-        </Field>
-        <Field label="Provider">
-          {panelMode === 'NATIVE' ? (
-            <>
-              <Select value={NATIVE_PROVIDER} disabled>
-                <option value={NATIVE_PROVIDER}>{PROVIDER_LABELS[NATIVE_PROVIDER]}</option>
-              </Select>
-              <p className="mt-1 text-[11px] text-ink-400">Locked to Native Meta Cloud API while WhatsApp mode is Native InnovateX Panel.</p>
-            </>
-          ) : (
-            <Select value={provider} onChange={(e) => { setProvider(e.target.value as WhatsAppProviderReal); clearTestFeedback(); }}>
-              {THIRD_PARTY_PROVIDER_VALUES.map((p) => (
-                <option key={p} value={p} disabled={!IMPLEMENTED_THIRD_PARTY_PROVIDERS.includes(p)}>
-                  {PROVIDER_LABELS[p]}{!IMPLEMENTED_THIRD_PARTY_PROVIDERS.includes(p) ? ' (coming soon)' : ''}
-                </option>
-              ))}
+      <div className="p-6">
+        <div className="grid gap-5 sm:grid-cols-2">
+          <Field label="WhatsApp mode" info="Native uses InnovateX's own panel. Third-party routes through a BSP like WATI or Twilio.">
+            <Select value={panelMode} onChange={(e) => handlePanelModeChange(e.target.value as PanelMode)}>
+              <option value="NATIVE">Native InnovateX Panel</option>
+              <option value="THIRD_PARTY">Third-party Provider</option>
             </Select>
-          )}
-        </Field>
-        <Field label="Default sender number">
-          <Input value={settings.meta.displayPhoneNumber || 'Not verified yet — run Test Connection'} readOnly className="bg-ink-50 text-ink-500" />
-        </Field>
-        <Field label="Phone number ID">
-          <Input
-            value={phoneNumberId}
-            onChange={(e) => { setPhoneNumberId(e.target.value); clearTestFeedback(); }}
-            placeholder="e.g. 119128780406310"
-            className={fieldError(hasPhoneNumberId) ? 'border-red-300 focus:border-red-400' : ''}
-          />
-          {fieldError(hasPhoneNumberId) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
-        </Field>
-        <Field label="Business account ID">
-          <Input
-            value={businessAccountId}
-            onChange={(e) => { setBusinessAccountId(e.target.value); clearTestFeedback(); }}
-            placeholder="e.g. 951181964646443"
-            className={fieldError(hasBusinessAccountId) ? 'border-red-300 focus:border-red-400' : ''}
-          />
-          {fieldError(hasBusinessAccountId) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
-        </Field>
-        <Field label="Access token">
-          <Input
-            type="password"
-            value={accessToken}
-            onChange={(e) => { setAccessToken(e.target.value); clearTestFeedback(); }}
-            placeholder={settings.meta.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Meta access token'}
-            className={fieldError(hasAccessToken) ? 'border-red-300 focus:border-red-400' : ''}
-          />
-          {fieldError(hasAccessToken) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
-        </Field>
-        <Field label="App secret">
-          <Input
-            type="password"
-            value={appSecret}
-            onChange={(e) => setAppSecret(e.target.value)}
-            placeholder={settings.meta.hasAppSecret ? 'Already set — leave blank to keep' : 'Required to verify inbound webhook signatures'}
-          />
-        </Field>
-        <Field label="Verify token">
-          <Input
-            value={verifyToken}
-            onChange={(e) => setVerifyToken(e.target.value)}
-            placeholder={settings.meta.hasVerifyToken ? 'Already set — leave blank to keep' : 'Choose any string, then paste it into Meta'}
-          />
-        </Field>
-        <div className="sm:col-span-2">
-          <Field label="Webhook URL">
-            <div className="flex gap-2">
-              <Input value={settings.meta.webhookUrl} readOnly className="bg-ink-50 text-ink-500" />
-              <Button variant="secondary" onClick={copyWebhookUrl}><Copy size={14} /> Copy</Button>
-            </div>
-            <p className="mt-1 text-[11px] text-ink-400">Auto-generated for your workspace — paste this into your Meta App's webhook configuration, not the other way around.</p>
           </Field>
+          <Field label="Provider" info="The BSP that actually sends/receives messages on your behalf.">
+            {panelMode === 'NATIVE' ? (
+              <>
+                <Select value={NATIVE_PROVIDER} disabled>
+                  <option value={NATIVE_PROVIDER}>{PROVIDER_LABELS[NATIVE_PROVIDER]}</option>
+                </Select>
+                <p className="mt-1 text-[11px] text-ink-400">Locked to Native Meta Cloud API while WhatsApp mode is Native InnovateX Panel.</p>
+              </>
+            ) : (
+              <Select value={provider} onChange={(e) => { setProvider(e.target.value as WhatsAppProviderReal); clearTestFeedback(); }}>
+                {THIRD_PARTY_PROVIDER_VALUES.map((p) => (
+                  <option key={p} value={p} disabled={!IMPLEMENTED_THIRD_PARTY_PROVIDERS.includes(p)}>
+                    {PROVIDER_LABELS[p]}{!IMPLEMENTED_THIRD_PARTY_PROVIDERS.includes(p) ? ' (coming soon)' : ''}
+                  </option>
+                ))}
+              </Select>
+            )}
+          </Field>
+          <Field label="Default sender number">
+            <IconInput
+              icon={<Phone size={14} />}
+              value={settings.meta.displayPhoneNumber || 'Not verified yet — run Test Connection'}
+              readOnly
+              className="bg-ink-50 text-ink-500"
+            />
+          </Field>
+          <Field label="Phone number ID">
+            <IconInput
+              icon={<Hash size={14} />}
+              value={phoneNumberId}
+              onChange={(e) => { setPhoneNumberId(e.target.value); clearTestFeedback(); }}
+              placeholder="e.g. 119128780406310"
+              className={fieldError(hasPhoneNumberId) ? 'border-red-300 focus:border-red-400' : ''}
+            />
+            {fieldError(hasPhoneNumberId) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
+          </Field>
+          <Field label="Business account ID">
+            <IconInput
+              icon={<Building2 size={14} />}
+              value={businessAccountId}
+              onChange={(e) => { setBusinessAccountId(e.target.value); clearTestFeedback(); }}
+              placeholder="e.g. 951181964646443"
+              className={fieldError(hasBusinessAccountId) ? 'border-red-300 focus:border-red-400' : ''}
+            />
+            {fieldError(hasBusinessAccountId) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
+          </Field>
+          <Field label="Access token">
+            <SecretField
+              icon={<KeyRound size={14} />}
+              value={accessToken}
+              onChange={(e) => { setAccessToken(e.target.value); clearTestFeedback(); }}
+              placeholder={settings.meta.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Meta access token'}
+              className={fieldError(hasAccessToken) ? 'border-red-300 focus:border-red-400' : ''}
+            />
+            {fieldError(hasAccessToken) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
+          </Field>
+          <Field label="App secret" info="Used to verify inbound webhook signatures from Meta (X-Hub-Signature-256).">
+            <SecretField
+              icon={<Fingerprint size={14} />}
+              value={appSecret}
+              onChange={(e) => setAppSecret(e.target.value)}
+              placeholder={settings.meta.hasAppSecret ? 'Already set — leave blank to keep' : 'Required to verify inbound webhook signatures'}
+            />
+          </Field>
+          <Field label="Verify token">
+            <SecretField
+              icon={<KeyRound size={14} />}
+              value={verifyToken}
+              onChange={(e) => setVerifyToken(e.target.value)}
+              placeholder={settings.meta.hasVerifyToken ? 'Already set — leave blank to keep' : 'Choose any string, then paste it into Meta'}
+            />
+          </Field>
+          <div className="sm:col-span-2">
+            <Field label="Webhook URL">
+              <div className="flex gap-2">
+                <IconInput icon={<Link2 size={14} />} value={settings.meta.webhookUrl} readOnly className="bg-ink-50 text-ink-500" />
+                <Button variant="secondary" onClick={copyWebhookUrl}><Copy size={14} /> Copy</Button>
+              </div>
+              <p className="mt-1 text-[11px] text-ink-400">Auto-generated for your workspace — paste this into your Meta App's webhook configuration, not the other way around.</p>
+            </Field>
+          </div>
         </div>
-      </div>
 
-      <div className="mt-4 space-y-2 rounded-lg border border-ink-100 p-3">
-        {([
-          ['autoSyncTemplates', 'Sync templates'],
-          ['autoSyncMessages', 'Sync messages'],
-          ['autoSyncContacts', 'Sync contacts'],
-        ] as const).map(([k, label]) => (
-          <div key={k} className="flex items-center justify-between">
-            <span className="text-sm text-ink-700">{label}</span>
-            <div className="flex items-center gap-2">
-              {k === 'autoSyncTemplates' && (
-                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => void handleSyncTemplates()} disabled={syncingTemplates}>
-                  <RefreshCw size={12} /> {syncingTemplates ? 'Syncing…' : 'Sync now'}
-                </Button>
+        <div className="mt-6 space-y-2 rounded-xl border border-ink-100 p-4">
+          {([
+            ['autoSyncTemplates', 'Sync templates'],
+            ['autoSyncMessages', 'Sync messages'],
+            ['autoSyncContacts', 'Sync contacts'],
+          ] as const).map(([k, label]) => (
+            <div key={k} className="flex items-center justify-between">
+              <span className="text-sm text-ink-700">{label}</span>
+              <div className="flex items-center gap-2">
+                {k === 'autoSyncTemplates' && (
+                  <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => void handleSyncTemplates()} disabled={syncingTemplates}>
+                    <RefreshCw size={12} className={syncingTemplates ? 'animate-spin' : ''} /> {syncingTemplates ? 'Syncing…' : 'Sync now'}
+                  </Button>
+                )}
+                <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
+              </div>
+            </div>
+          ))}
+          <p className="text-[11px] text-ink-400">The toggle only controls whether templates auto-sync in the background later — click "Sync now" to pull your real current templates from Meta immediately, including any that were deleted here but still exist on Meta's side.</p>
+        </div>
+
+        <div className="mt-6 flex items-center gap-2">
+          <Button onClick={() => void handleSave()} disabled={saving || (attemptedSave && !canSave)}>
+            {saving ? 'Saving…' : 'Save settings'}
+          </Button>
+          <Button variant="secondary" onClick={() => void handleTest()} disabled={testing || !canTest}>
+            <RefreshCw size={15} className={testing ? 'animate-spin' : ''} /> {testing ? 'Testing…' : 'Test Connection'}
+          </Button>
+        </div>
+        {panelMode !== 'NATIVE' && (
+          <p className="mt-2 text-[11px] text-ink-400">Test Connection is only available for Native Meta Cloud API in this phase.</p>
+        )}
+        {panelMode === 'NATIVE' && !nativeFieldsComplete && (
+          <p className="mt-2 text-[11px] text-amber-600">Enter Phone Number ID, Business Account ID, and an Access Token before saving or testing.</p>
+        )}
+
+        {testResult && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />
+            <div className="text-sm text-emerald-800">
+              <p className="font-medium">Connected — verified against Meta's Graph API</p>
+              {testResult.displayPhoneNumber && (
+                <p className="mt-0.5 text-emerald-700">Sending as {testResult.displayPhoneNumber}{testResult.verifiedName ? ` (${testResult.verifiedName})` : ''}</p>
               )}
-              <Toggle checked={settings.sync[k]} onChange={(v) => void handleSyncToggle(k, v)} />
             </div>
           </div>
-        ))}
-        <p className="text-[11px] text-ink-400">The toggle only controls whether templates auto-sync in the background later — click "Sync now" to pull your real current templates from Meta immediately, including any that were deleted here but still exist on Meta's side.</p>
-      </div>
-
-      <div className="mt-4 flex items-center gap-2">
-        <Button onClick={() => void handleSave()} disabled={saving || (attemptedSave && !canSave)}>
-          {saving ? 'Saving…' : 'Save settings'}
-        </Button>
-        <Button variant="secondary" onClick={() => void handleTest()} disabled={testing || !canTest}>
-          <RefreshCw size={15} className={testing ? 'animate-spin' : ''} /> {testing ? 'Testing…' : 'Test Connection'}
-        </Button>
-      </div>
-      {panelMode !== 'NATIVE' && (
-        <p className="mt-2 text-[11px] text-ink-400">Test Connection is only available for Native Meta Cloud API in this phase.</p>
-      )}
-      {panelMode === 'NATIVE' && !nativeFieldsComplete && (
-        <p className="mt-2 text-[11px] text-amber-600">Enter Phone Number ID, Business Account ID, and an Access Token before saving or testing.</p>
-      )}
-
-      {testResult && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-          <CheckCircle2 size={16} className="mt-0.5 shrink-0 text-emerald-600" />
-          <div className="text-sm text-emerald-800">
-            <p className="font-medium">Connected — verified against Meta's Graph API</p>
-            {testResult.displayPhoneNumber && (
-              <p className="mt-0.5 text-emerald-700">Sending as {testResult.displayPhoneNumber}{testResult.verifiedName ? ` (${testResult.verifiedName})` : ''}</p>
-            )}
+        )}
+        {testError && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
+            <XCircle size={16} className="mt-0.5 shrink-0 text-red-600" />
+            <div className="text-sm text-red-800">
+              <p className="font-medium">Connection test failed</p>
+              <p className="mt-0.5 text-red-700">{testError}</p>
+            </div>
           </div>
-        </div>
-      )}
-      {testError && (
-        <div className="mt-3 flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-          <XCircle size={16} className="mt-0.5 shrink-0 text-red-600" />
-          <div className="text-sm text-red-800">
-            <p className="font-medium">Connection test failed</p>
-            <p className="mt-0.5 text-red-700">{testError}</p>
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </Card>
   );
 }
