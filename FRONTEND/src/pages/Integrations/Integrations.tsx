@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useIntegrations } from '@/hooks/useIntegrations';
+import { integrationsApi } from '@/lib/integrationsApi';
 import { integrationPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -26,12 +27,51 @@ export function Integrations() {
   const { integrations, counts, loading, error, toggle, sync, updateConfig } =
     useIntegrations(category === 'all' ? {} : { category: category as never });
 
+  const [googleAdsAccountPicker, setGoogleAdsAccountPicker] = useState<string[] | null>(null);
+  const [selectingAccount, setSelectingAccount] = useState(false);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('google_ads_connected');
+    const customerIds = params.get('customer_ids');
+    const oauthError = params.get('google_ads_error');
+
+    if (connected && customerIds) {
+      setGoogleAdsAccountPicker(customerIds.split(',').filter(Boolean));
+    } else if (oauthError) {
+      toast.error('Google authorization failed', decodeURIComponent(oauthError));
+    }
+
+    if (connected || oauthError) {
+      // Clean the URL so a refresh doesn't re-trigger this.
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
+  const handleSelectGoogleAdsAccount = async (customerId: string) => {
+    const card = integrations.find((i) => i.key === 'google_ads_campaigns');
+    if (!card) return;
+    setSelectingAccount(true);
+    try {
+      await updateConfig(card.id, { clientCustomerId: customerId });
+      toast.success('Google Ads account connected', `Account ${customerId} is now linked. Click Sync to pull real campaign data.`);
+      setGoogleAdsAccountPicker(null);
+    } catch (err) {
+      toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSelectingAccount(false);
+    }
+  };
+
   const [config, setConfig] = useState<Integration | null>(null);
   const [configForm, setConfigForm] = useState({ api_key: '', webhook_url: '' });
   const [waForm, setWaForm] = useState({ phoneNumberId: '', businessAccountId: '', accessToken: '', appSecret: '' });
   const [dialog360Form, setDialog360Form] = useState({ apiKey: '' });
   const [twilioForm, setTwilioForm] = useState({ accountSid: '', authToken: '', whatsappNumber: '' });
   const [interaktForm, setInteraktForm] = useState({ apiKey: '' });
+  const [metaAdsForm, setMetaAdsForm] = useState({ pixelId: '', accessToken: '', testEventCode: '' });
+  const [googleAdsForm, setGoogleAdsForm] = useState({ measurementId: '', apiSecret: '' });
+  const [calcomForm, setCalcomForm] = useState({ apiKey: '' });
   const [logsFor, setLogsFor] = useState<Integration | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -42,7 +82,16 @@ export function Integrations() {
   ];
 
   const handleToggle = async (i: Integration) => {
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt') && i.status === 'disconnected') {
+    if (i.key === 'google_ads_campaigns' && i.status === 'disconnected') {
+      try {
+        const authUrl = await integrationsApi.startGoogleAdsCampaignsAuth();
+        window.location.href = authUrl; // real Google consent screen -- full navigation, not a fetch
+      } catch (err) {
+        toast.error('Could not start Google authorization', err instanceof ApiError ? err.message : 'Please try again.');
+      }
+      return;
+    }
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -71,6 +120,13 @@ export function Integrations() {
 
   const openConfig = (i: Integration) => {
     setConfig(i);
+    if (i.key === 'google_ads_campaigns') {
+      return; // no form -- the JSX below shows real read-only connection info for this key
+    }
+    if (i.key === 'calcom') {
+      setCalcomForm({ apiKey: '' });
+      return;
+    }
     if (i.key === 'meta_cloud') {
       setWaForm({
         phoneNumberId: typeof i.config.phoneNumberId === 'string' ? i.config.phoneNumberId : '',
@@ -94,6 +150,21 @@ export function Integrations() {
     }
     if (i.key === 'interakt') {
       setInteraktForm({ apiKey: '' });
+      return;
+    }
+    if (i.key === 'meta_ads') {
+      setMetaAdsForm({
+        pixelId: typeof i.config.pixelId === 'string' ? i.config.pixelId : '',
+        accessToken: '',
+        testEventCode: typeof i.config.testEventCode === 'string' ? i.config.testEventCode : '',
+      });
+      return;
+    }
+    if (i.key === 'google_ads') {
+      setGoogleAdsForm({
+        measurementId: typeof i.config.measurementId === 'string' ? i.config.measurementId : '',
+        apiSecret: '',
+      });
       return;
     }
     setConfigForm({
@@ -131,16 +202,25 @@ export function Integrations() {
           ...(interaktForm.apiKey ? { apiKey: interaktForm.apiKey } : {}),
         });
         toast.success('Connected', 'API key verified. Note: Interakt only supports pre-approved templates, not free text.');
+      } else if (config.key === 'meta_ads') {
+        await updateConfig(config.id, {
+          pixelId: metaAdsForm.pixelId,
+          testEventCode: metaAdsForm.testEventCode,
+          ...(metaAdsForm.accessToken ? { accessToken: metaAdsForm.accessToken } : {}),
+        });
+        toast.success('Connected', 'Credentials verified against Meta\u2019s real Graph API.');
+      } else if (config.key === 'google_ads') {
+        await updateConfig(config.id, {
+          measurementId: googleAdsForm.measurementId,
+          ...(googleAdsForm.apiSecret ? { apiSecret: googleAdsForm.apiSecret } : {}),
+        });
+        toast.success('Connected', 'Credentials verified against Google\u2019s real Measurement Protocol API.');
+      } else if (config.key === 'calcom') {
+        await updateConfig(config.id, { apiKey: calcomForm.apiKey });
+        toast.success('Connected', 'API key verified against Cal.com\u2019s real API, and a real webhook was set up for automatic sync.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
-        // "Save & Connect" should actually connect: saving alone only
-        // persists the config, status stays 'disconnected' until toggled.
-        // Flip it now (only from disconnected, and only when a real key
-        // was entered) so the card doesn't require a separate manual click.
-        if (config.status === 'disconnected' && configForm.api_key.trim()) {
-          await toggle(config.id);
-        }
-        toast.success('Settings saved', configForm.api_key.trim() ? 'Connected' : undefined);
+        toast.success('Settings saved');
       }
       setConfig(null);
     } catch (err) {
@@ -206,7 +286,9 @@ export function Integrations() {
       {config && (
         <Modal
           open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={<><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
+          footer={config.key === 'google_ads_campaigns'
+            ? <Button variant="secondary" onClick={() => setConfig(null)}>Close</Button>
+            : <><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
         >
           {config.key === 'meta_cloud' ? (
             <div className="space-y-4">
@@ -236,15 +318,51 @@ export function Integrations() {
               </div>
               <Field label="API Key"><Input type="password" value={interaktForm.apiKey} onChange={(e) => setInteraktForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'Paste your Interakt API key'} /></Field>
             </div>
+          ) : config.key === 'meta_ads' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This makes a real, live call to Meta's Graph API to verify these credentials, then sends real server-side conversion events (Lead, Qualified, Booking, Purchase) whenever they happen in your workspace.</p>
+              <Field label="Pixel / Dataset ID" hint="Meta Events Manager → your Pixel or Conversions API dataset"><Input value={metaAdsForm.pixelId} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, pixelId: e.target.value })} placeholder="e.g. 1234567890123456" /></Field>
+              <Field label="Access Token"><Input type="password" value={metaAdsForm.accessToken} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, accessToken: e.target.value })} placeholder={config.config.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Conversions API access token'} /></Field>
+              <Field label="Test Event Code (optional)" hint="Shows events in Meta's Test Events tool without affecting real ad optimization"><Input value={metaAdsForm.testEventCode} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, testEventCode: e.target.value })} placeholder="e.g. TEST12345" /></Field>
+            </div>
+          ) : config.key === 'google_ads' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This verifies your credentials against Google's real validation endpoint, then sends real server-side events (generate_lead, sign_up, schedule, purchase) via GA4's Measurement Protocol whenever they happen in your workspace.</p>
+              <Field label="Measurement ID" hint="GA4 Admin → Data Streams → your stream"><Input value={googleAdsForm.measurementId} onChange={(e) => setGoogleAdsForm({ ...googleAdsForm, measurementId: e.target.value })} placeholder="G-XXXXXXXXXX" /></Field>
+              <Field label="API Secret" hint="GA4 Admin → Data Streams → your stream → Measurement Protocol API secrets"><Input type="password" value={googleAdsForm.apiSecret} onChange={(e) => setGoogleAdsForm({ ...googleAdsForm, apiSecret: e.target.value })} placeholder={config.config.hasApiSecret ? 'Already set — leave blank to keep' : 'Paste your Measurement Protocol API secret'} /></Field>
+            </div>
+          ) : config.key === 'calcom' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">This makes a real, live call to Cal.com's API to verify your key, then sets up a real webhook so new bookings, reschedules, and cancellations sync automatically.</p>
+              <Field label="API Key" hint="Cal.com → Settings → Developer → API Keys"><Input type="password" value={calcomForm.apiKey} onChange={(e) => setCalcomForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'cal_live_...'} /></Field>
+              {typeof config.config.accountEmail === 'string' && config.config.accountEmail && (
+                <div className="rounded-lg border border-ink-100 p-3 text-xs"><p className="text-ink-400">Connected account</p><p className="font-medium text-ink-900">{config.config.accountEmail}</p></div>
+              )}
+              {config.config.hasWebhook === false && !!config.config.hasApiKey && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  Connected, but the real webhook setup failed — new bookings won't sync automatically yet. Click Sync manually, or check that your server's API_BASE_URL is publicly reachable and reconnect.
+                </div>
+              )}
+            </div>
+          ) : config.key === 'google_ads_campaigns' ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-xs text-ink-500">Real campaign, spend, and conversion data synced via the official Google Ads API — connected through Google's own OAuth consent screen, not an API key typed here.</p>
+              {config.config.clientCustomerId ? (
+                <>
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Connected account</p><p className="font-medium text-ink-900">{String(config.config.clientCustomerId).replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}</p></div>
+                  {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
+                  )}
+                </>
+              ) : (
+                <p className="text-ink-400">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
+              )}
+            </div>
           ) : (
             <div className="space-y-4">
               <Field label="API Key / Token"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter API key…" /></Field>
               <Field label="Webhook URL"><Input value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} placeholder="https://…" /></Field>
-              <p className="text-xs text-ink-400">
-                {config.key === 'gemini'
-                  ? 'This key is used for real, live AI calls in the AI Reply Assistant once connected.'
-                  : `This runs in simulation mode — credentials are saved but no live connection is made to ${config.name}.`}
-              </p>
+              <p className="text-xs text-ink-400">This runs in simulation mode — credentials are saved but no live connection is made to {config.name}.</p>
             </div>
           )}
         </Modal>
@@ -260,6 +378,28 @@ export function Integrations() {
               </div>
             ))}
           </div>
+        </Modal>
+      )}
+
+      {googleAdsAccountPicker && (
+        <Modal open onClose={() => setGoogleAdsAccountPicker(null)} title="Choose a Google Ads account">
+          <p className="mb-4 text-sm text-ink-500">Google authorized successfully. Choose which real Google Ads account this workspace should sync data from.</p>
+          {googleAdsAccountPicker.length === 0 ? (
+            <p className="text-sm text-ink-400">No accessible Google Ads accounts were found for this login.</p>
+          ) : (
+            <div className="space-y-2">
+              {googleAdsAccountPicker.map((customerId) => (
+                <button
+                  key={customerId}
+                  disabled={selectingAccount}
+                  onClick={() => void handleSelectGoogleAdsAccount(customerId)}
+                  className="w-full rounded-lg border border-ink-200 px-4 py-3 text-left text-sm font-medium hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
+                >
+                  {customerId.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}
+                </button>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
     </div>

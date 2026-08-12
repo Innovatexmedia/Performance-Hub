@@ -165,6 +165,24 @@ const bookingSchema = new Schema(
       default: null,
     },
 
+    // ── External provider sync (added for real Cal.com integration) ─────────
+    // external_source/external_id together are what makes sync genuinely
+    // idempotent -- re-processing the same Cal.com booking (whether via a
+    // webhook retry or a periodic sync overlap) updates the same
+    // document instead of creating a duplicate. null/null for bookings
+    // created natively in this app, unaffected by this addition.
+    external_source: {
+      type:    String,
+      enum:    ['calcom', null],
+      default: null,
+      index:   true,
+    },
+    external_id: {
+      type:    String,
+      default: null,
+      index:   true,
+    },
+
     // ── Audit ─────────────────────────────────────────────────────────────────
     created_by: { type: String, default: null },
     updated_by: { type: String, default: null },
@@ -181,6 +199,12 @@ bookingSchema.index({ tenant_id: 1, status: 1 });
 bookingSchema.index({ tenant_id: 1, lead_id: 1 });
 bookingSchema.index({ tenant_id: 1, meeting_date: 1, status: 1 });
 bookingSchema.index({ tenant_id: 1, assigned_user_id: 1, status: 1 });
+// Real, DB-level dedup guarantee for externally-synced bookings -- sparse
+// so this never applies to natively-created bookings (external_id: null).
+bookingSchema.index(
+  { tenant_id: 1, external_source: 1, external_id: 1 },
+  { unique: true, sparse: true }
+);
 
 // Named export — matches Lead and Deal model export patterns
 export const Booking = mongoose.model('Booking', bookingSchema);

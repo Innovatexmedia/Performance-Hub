@@ -83,10 +83,11 @@ export const INTEGRATION_CATALOG = Object.freeze([
   // Calendars (2)
   { key: 'google_calendar', name: 'Google Calendar', category: INTEGRATION_CATEGORY.CALENDARS, description: 'Sync bookings with Google Calendar.', logo_color: '#4285F4', available: true },
   { key: 'calendly',        name: 'Calendly',        category: INTEGRATION_CATEGORY.CALENDARS, description: 'Self-serve meeting scheduling.', logo_color: '#006BFF', available: true },
+  { key: 'calcom',          name: 'Cal.com',          category: INTEGRATION_CATEGORY.CALENDARS, description: 'Real, free-tier scheduling sync — bookings, reschedules, and cancellations via the official Cal.com API.', logo_color: '#292929', available: true },
 
   // Email (3)
   { key: 'google_workspace', name: 'Google Workspace', category: INTEGRATION_CATEGORY.EMAIL, description: 'Gmail sending and inbox sync.', logo_color: '#EA4335', available: true },
-  { key: 'sendgrid',         name: 'SendGrid',         category: INTEGRATION_CATEGORY.EMAIL, description: 'Transactional and marketing email delivery.', logo_color: '#1A82E2', available: true },
+  { key: 'sendgrid',         name: 'SendGrid',         category: INTEGRATION_CATEGORY.EMAIL, description: 'Platform-level transactional email — password resets, invites, and verification for every workspace.', logo_color: '#1A82E2', available: true },
   { key: 'mailchimp',        name: 'Mailchimp',        category: INTEGRATION_CATEGORY.EMAIL, description: 'Email marketing campaigns and audiences.', logo_color: '#FFE01B', available: true },
 
   // Calls (2)
@@ -95,7 +96,9 @@ export const INTEGRATION_CATALOG = Object.freeze([
 
   // CRM/Ads (2) - "coming soon"
   { key: 'salesforce', name: 'Salesforce', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Sync leads and deals with Salesforce CRM.', logo_color: '#00A1E0', available: false },
-  { key: 'google_ads',  name: 'Google Ads', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Import ad spend and conversion data.', logo_color: '#4285F4', available: false },
+  { key: 'google_ads',  name: 'Google Analytics 4 (GA4)', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real-time conversion tracking via GA4 Measurement Protocol — separate from Google Ads Campaigns below.', logo_color: '#E37400', available: true },
+  { key: 'meta_ads',    name: 'Meta Ads',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Server-side conversion tracking via Meta Conversions API.', logo_color: '#0866FF', available: true },
+  { key: 'google_ads_campaigns', name: 'Google Ads Campaigns', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real campaign, spend, and conversion sync via the official Google Ads API.', logo_color: '#34A853', available: true },
 ]);
 
 // Pagination / search defaults

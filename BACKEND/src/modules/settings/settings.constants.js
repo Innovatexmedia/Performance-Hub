@@ -16,6 +16,8 @@
  * No separate settings collection needed.
  */
 
+import config from '../../config/config.js';
+
 /**
  * SETTINGS_TAB — the 10 tabs from FRONTEND_SPEC §19
  */
@@ -58,25 +60,21 @@ export const LEAD_FIELDS = Object.freeze([
 ]);
 
 /**
- * PIPELINE_STAGES — system-defined stages. Keys/order/count are fixed (see
- * Tenant.pipelineStageOverrides' comment for why); `key` matches
- * STAGE_BOARD_KEY in deal.constants.js exactly and is what a tenant's
- * label/color override is keyed by. `name`/`color` here are the DEFAULTS,
- * used whenever a tenant hasn't overridden that stage.
+ * PIPELINE_STAGES — system-defined stages (read-only display).
  * SOURCE: FRONTEND_SPEC §19 Pipeline Stages tab + deal.constants.js DEAL_STAGE
  * Screenshot: New Lead(#1), Qualified(#2), Booked Call(#3), Call Completed(#4),
  *             Proposal Sent(#5), Negotiation(#6), Won(#7), Lost(#8), Nurture(#9)
  */
 export const PIPELINE_STAGES = Object.freeze([
-  { id: 1, key: 'new_lead',       name: 'New Lead',       color: '#64748b' },
-  { id: 2, key: 'qualified',      name: 'Qualified',      color: '#3b82f6' },
-  { id: 3, key: 'booked_call',    name: 'Booked Call',    color: '#7c3aed' },
-  { id: 4, key: 'call_completed', name: 'Call Completed', color: '#0d9488' },
-  { id: 5, key: 'proposal_sent',  name: 'Proposal Sent',  color: '#f59e0b' },
-  { id: 6, key: 'negotiation',    name: 'Negotiation',    color: '#ec4899' },
-  { id: 7, key: 'won',            name: 'Won',             color: '#10b981' },
-  { id: 8, key: 'lost',           name: 'Lost',            color: '#ef4444' },
-  { id: 9, key: 'nurture',        name: 'Nurture',         color: '#14b8a6' },
+  { id: 1, name: 'New Lead',       color: '#64748b' },
+  { id: 2, name: 'Qualified',      color: '#3b82f6' },
+  { id: 3, name: 'Booked Call',    color: '#7c3aed' },
+  { id: 4, name: 'Call Completed', color: '#0d9488' },
+  { id: 5, name: 'Proposal Sent',  color: '#f59e0b' },
+  { id: 6, name: 'Negotiation',    color: '#ec4899' },
+  { id: 7, name: 'Won',            color: '#10b981' },
+  { id: 8, name: 'Lost',           color: '#ef4444' },
+  { id: 9, name: 'Nurture',        color: '#14b8a6' },
 ]);
 
 /**
@@ -116,11 +114,18 @@ export const DATA_RETENTION_OPTIONS = Object.freeze([30, 60, 90, 180, 365]);
 /**
  * SUBSCRIPTION_PLAN_DETAILS — billing tab display info.
  * SOURCE: FRONTEND_SPEC §19 Billing tab
+ *
+ * maxUsers now reads from the same PLAN_MAX_USERS_* env vars as
+ * Tenant.js's PLAN_LIMITS (see config.js) -- previously this was a
+ * SEPARATE, hardcoded set of numbers, with a real risk of silently
+ * drifting out of sync with what Tenant.js actually enforces. Now both
+ * read from one real source, so the Billing tab always shows the number
+ * that's genuinely enforced.
  */
 export const SUBSCRIPTION_PLAN_DETAILS = Object.freeze({
-  free:       { name: 'Free',       price: 0,    currency: 'USD', maxUsers: 3,   maxLeads: 250 },
-  starter:    { name: 'Starter',    price: 29,   currency: 'USD', maxUsers: 5,   maxLeads: 1000 },
-  growth:     { name: 'Growth',     price: 79,   currency: 'USD', maxUsers: 15,  maxLeads: 10000 },
-  scale:      { name: 'Scale',      price: 199,  currency: 'USD', maxUsers: 50,  maxLeads: 50000 },
-  enterprise: { name: 'Enterprise', price: null, currency: 'USD', maxUsers: 999, maxLeads: 999999 },
+  free:       { name: 'Free',       price: 0,    currency: 'USD', maxUsers: config.PLAN_MAX_USERS_FREE,       maxLeads: 250 },
+  starter:    { name: 'Starter',    price: 29,   currency: 'USD', maxUsers: config.PLAN_MAX_USERS_STARTER,    maxLeads: 1000 },
+  growth:     { name: 'Growth',     price: 79,   currency: 'USD', maxUsers: config.PLAN_MAX_USERS_GROWTH,     maxLeads: 10000 },
+  scale:      { name: 'Scale',      price: 199,  currency: 'USD', maxUsers: config.PLAN_MAX_USERS_SCALE,      maxLeads: 50000 },
+  enterprise: { name: 'Enterprise', price: null, currency: 'USD', maxUsers: config.PLAN_MAX_USERS_ENTERPRISE, maxLeads: 999999 },
 });
