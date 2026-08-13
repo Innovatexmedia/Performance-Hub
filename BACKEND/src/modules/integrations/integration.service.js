@@ -36,6 +36,10 @@ import * as integrationRepo from './integration.repository.js';
 import { AppError, paginationMeta, normalizePaging } from '../../shared/helpers/lead.helpers.js';
 import { INTEGRATION_STATUS } from './integration.constants.js';
 import { whatsappSettingsService } from '../whatsapp/submodules/whatsappSettings/whatsappSettings.service.js';
+import { adTrackingSettingsService } from '../attribution/adTrackingSettings.service.js';
+import { googleAdsSettingsService } from '../attribution/googleAdsSettings.service.js';
+import { calcomSettingsService } from '../bookings/calcomSettings.service.js';
+import config from '../../config/config.js';
 
 // =============================================================================
 // META CLOUD API BRIDGE
@@ -48,6 +52,11 @@ import { whatsappSettingsService } from '../whatsapp/submodules/whatsappSettings
 
 const META_CLOUD_KEY = 'meta_cloud';
 const DIALOG360_KEY = '360dialog';
+const META_ADS_KEY = 'meta_ads';
+const GOOGLE_ADS_KEY = 'google_ads';
+const GOOGLE_ADS_CAMPAIGNS_KEY = 'google_ads_campaigns';
+const CALCOM_KEY = 'calcom';
+const SENDGRID_KEY = 'sendgrid';
 const TWILIO_WA_KEY = 'twilio_wa';
 const INTERAKT_KEY = 'interakt';
 
@@ -108,6 +117,92 @@ const overlayRealWhatsAppStatus = async (tenantId, userId, doc) => {
   return overlaid;
 };
 
+/**
+ * overlayRealAdTrackingStatus -- same real-status-overlay pattern as
+ * overlayRealWhatsAppStatus above, for the meta_ads and google_ads cards.
+ * Returns the doc unchanged for any of the other 20 cards.
+ */
+/**
+ * overlayRealPlatformStatus -- for integrations that are genuinely
+ * platform-level, not per-tenant (currently: SendGrid, used for every
+ * workspace's password resets/invites/verification emails from one
+ * shared account -- see src/config/config.js). No database lookup
+ * needed here, unlike every per-tenant integration below -- this is
+ * real, live server configuration, the same thing config.js's own
+ * startup warning already checks.
+ */
+const overlayRealPlatformStatus = (doc) => {
+  if (!doc || doc.key !== SENDGRID_KEY) return doc;
+
+  const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+  overlaid.status = config.SENDGRID_API_KEY ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+  overlaid.config = {
+    platformLevel: true,
+    fromAddress: config.EMAIL_FROM_ADDRESS || '',
+    fromName: config.EMAIL_FROM_NAME || '',
+    hasApiKey: !!config.SENDGRID_API_KEY,
+  };
+  return overlaid;
+};
+
+const overlayRealAdTrackingStatus = async (tenantId, userId, doc) => {
+  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY)) return doc;
+
+  if (doc.key === CALCOM_KEY) {
+    const settings = await calcomSettingsService.getSettings({ tenantId, userId });
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.lastSyncedAt || null;
+    overlaid.config = {
+      accountEmail: settings.accountEmail || '',
+      accountUsername: settings.accountUsername || '',
+      hasApiKey: settings.hasApiKey || false,
+      hasWebhook: !!settings.webhookId,
+      lastSyncError: settings.lastSyncError || null,
+    };
+    return overlaid;
+  }
+
+  if (doc.key === GOOGLE_ADS_CAMPAIGNS_KEY) {
+    const settings = await googleAdsSettingsService.getSettings({ tenantId, userId });
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.lastSyncedAt || null;
+    overlaid.config = {
+      accountName: settings.accountName || '',
+      clientCustomerId: settings.clientCustomerId || '',
+      hasRefreshToken: settings.hasRefreshToken || false,
+      lastSyncError: settings.lastSyncError || null,
+    };
+    return overlaid;
+  }
+
+  const settings = await adTrackingSettingsService.getSettings({ tenantId, userId });
+  const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+
+  if (doc.key === META_ADS_KEY) {
+    overlaid.status = settings.meta?.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.meta?.lastEventSentAt || settings.meta?.lastVerifiedAt || null;
+    overlaid.config = {
+      pixelId: settings.meta?.pixelId || '',
+      hasAccessToken: settings.meta?.hasAccessToken || false,
+      testEventCode: settings.meta?.testEventCode || '',
+      eventsSent: settings.meta?.eventsSent || 0,
+      eventsFailed: settings.meta?.eventsFailed || 0,
+    };
+  } else if (doc.key === GOOGLE_ADS_KEY) {
+    overlaid.status = settings.google?.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.google?.lastEventSentAt || settings.google?.lastVerifiedAt || null;
+    overlaid.config = {
+      measurementId: settings.google?.measurementId || '',
+      hasApiSecret: settings.google?.hasApiSecret || false,
+      eventsSent: settings.google?.eventsSent || 0,
+      eventsFailed: settings.google?.eventsFailed || 0,
+    };
+  }
+  return overlaid;
+};
+
 // =============================================================================
 // PRIVATE HELPERS
 // =============================================================================
@@ -132,7 +227,11 @@ export const listIntegrations = async (tenantId, filter, options, userId) => {
   ]);
 
   const overlaid = await Promise.all(
-    integrations.map((doc) => overlayRealWhatsAppStatus(tenantId, userId, doc)),
+    integrations.map(async (doc) => {
+      const withWhatsApp = await overlayRealWhatsAppStatus(tenantId, userId, doc);
+      const withAdTracking = await overlayRealAdTrackingStatus(tenantId, userId, withWhatsApp);
+      return overlayRealPlatformStatus(withAdTracking);
+    }),
   );
 
   return { integrations: overlaid, pagination: paginationMeta({ page, limit, total }) };
@@ -142,7 +241,9 @@ export const getIntegration = async (tenantId, id, userId) => {
   await integrationRepo.ensureCatalogSeeded(tenantId);
   const integration = await integrationRepo.findById(tenantId, id);
   if (!integration) throw AppError.notFound('Integration not found');
-  return overlayRealWhatsAppStatus(tenantId, userId, integration);
+  const withWhatsApp = await overlayRealWhatsAppStatus(tenantId, userId, integration);
+  const withAdTracking = await overlayRealAdTrackingStatus(tenantId, userId, withWhatsApp);
+  return overlayRealPlatformStatus(withAdTracking);
 };
 
 export const getCategoryCounts = async (tenantId, filter) => {
@@ -243,6 +344,58 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     return overlayRealWhatsAppStatus(tenantId, userId, existing);
   }
 
+  if (existing.key === META_ADS_KEY) {
+    const settings = await adTrackingSettingsService.getSettings({ tenantId, userId });
+    if (settings.meta?.connected) {
+      await adTrackingSettingsService.disconnectMeta({ tenantId, userId });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real Meta Pixel ID and Access Token first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === GOOGLE_ADS_KEY) {
+    const settings = await adTrackingSettingsService.getSettings({ tenantId, userId });
+    if (settings.google?.connected) {
+      await adTrackingSettingsService.disconnectGoogle({ tenantId, userId });
+    } else {
+      throw AppError.badRequest(
+        'Enter your real GA4 Measurement ID and API Secret first — this card cannot be connected with a single click, since it requires a genuine, verified connection.',
+      );
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === SENDGRID_KEY) {
+    throw AppError.badRequest(
+      'SendGrid is configured at the platform level by your system administrator (via a server environment variable), not per workspace — there\u2019s nothing to connect or disconnect here. This card just shows whether it\u2019s genuinely set up.',
+    );
+  }
+
+  if (existing.key === CALCOM_KEY) {
+    const settings = await calcomSettingsService.getSettings({ tenantId, userId });
+    if (settings.connected) {
+      await calcomSettingsService.disconnect({ tenantId, userId });
+    } else {
+      throw AppError.badRequest('Enter your real Cal.com API key first — this card cannot be connected with a single click.');
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === GOOGLE_ADS_CAMPAIGNS_KEY) {
+    const settings = await googleAdsSettingsService.getSettings({ tenantId, userId });
+    if (settings.connected) {
+      await googleAdsSettingsService.disconnect({ tenantId, userId });
+    } else {
+      throw AppError.badRequest(
+        'Connect your real Google Ads account first — this uses Google\u2019s real OAuth consent flow, not a single click, since it requires you to explicitly authorize access with your own Google account.',
+      );
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
   let newStatus;
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
     if (!existing.available) {
@@ -294,6 +447,22 @@ export const syncIntegration = async (tenantId, userId, id) => {
     // Real verification -- an actual live call to Interakt's Users API.
     await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
     return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === CALCOM_KEY) {
+    // Real Cal.com booking pull -- see calcomSettings.service.js's
+    // syncBookings for the actual API calls and Booking upserts.
+    const result = await calcomSettingsService.syncBookings({ tenantId, userId });
+    const overlaid = await overlayRealAdTrackingStatus(tenantId, userId, existing);
+    return { ...overlaid, _syncResult: result };
+  }
+
+  if (existing.key === GOOGLE_ADS_CAMPAIGNS_KEY) {
+    // Real GAQL pull -- see googleAdsSettings.service.js's syncCampaigns
+    // for the actual API call and campaign-metric storage.
+    const result = await googleAdsSettingsService.syncCampaigns({ tenantId, userId });
+    const overlaid = await overlayRealAdTrackingStatus(tenantId, userId, existing);
+    return { ...overlaid, _syncResult: result };
   }
 
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
@@ -389,6 +558,49 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     await whatsappSettingsService.testConnection(toWaCtx(tenantId, userId));
 
     return overlayRealWhatsAppStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === META_ADS_KEY) {
+    const { pixelId, accessToken, testEventCode } = configPatch || {};
+    await adTrackingSettingsService.updateMetaConfig({ tenantId, userId }, { pixelId, accessToken, testEventCode });
+
+    // Real verification, immediately -- this is what actually marks the
+    // card "connected", not the save above. Throws a real Meta error if
+    // the credentials are wrong; the card stays disconnected in that case.
+    await adTrackingSettingsService.testMetaConnection({ tenantId, userId });
+
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === GOOGLE_ADS_KEY) {
+    const { measurementId, apiSecret } = configPatch || {};
+    await adTrackingSettingsService.updateGoogleConfig({ tenantId, userId }, { measurementId, apiSecret });
+
+    // Real verification, immediately -- uses GA4's debug endpoint, the
+    // only one that returns genuine validation feedback (see
+    // googleAnalytics.provider.js). Throws a real error if invalid; the
+    // card stays disconnected in that case.
+    await adTrackingSettingsService.testGoogleConnection({ tenantId, userId });
+
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === CALCOM_KEY) {
+    const { apiKey } = configPatch || {};
+    // Real connect: saves + verifies live against Cal.com's own API,
+    // then creates a real webhook subscription -- see
+    // calcomSettings.service.js's connect().
+    await calcomSettingsService.connect({ tenantId, userId }, { apiKey });
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === GOOGLE_ADS_CAMPAIGNS_KEY) {
+    const { clientCustomerId } = configPatch || {};
+    if (!clientCustomerId) {
+      throw AppError.badRequest('clientCustomerId is required — complete Google authorization first to see your real account list.');
+    }
+    await googleAdsSettingsService.selectAccount({ tenantId, userId }, clientCustomerId);
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
   const mergedConfig = Object.assign({}, existing.config, configPatch || {});

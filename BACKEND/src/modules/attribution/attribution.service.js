@@ -27,6 +27,10 @@
 import * as attrRepo from './attribution.repository.js';
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 import { TRACKING_EVENT_TYPE } from './attribution.constants.js';
+import AdTrackingSettings from './adTrackingSettings.model.js';
+import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
+import { MetaConversionsProvider } from './providers/metaConversions.provider.js';
+import { GoogleAnalyticsProvider } from './providers/googleAnalytics.provider.js';
 
 // ── Import Lead model to enrich events with UTM data ─────────────────────────
 import { Lead } from '../leads/lead/lead.model.js';
@@ -53,13 +57,14 @@ import { Lead } from '../leads/lead/lead.model.js';
 export const createTrackingEvent = async (data) => {
   try {
     let enriched = { ...data };
+    let leadForMeta = null;
 
     // Auto-enrich source/utm from lead if not provided and lead_id exists
     if (data.lead_id && !data.source) {
       const lead = await Lead.findOne({
         _id:       data.lead_id,
         tenant_id: data.tenant_id,
-      }).select('source medium campaign utm_source utm_medium utm_campaign utm_content utm_term');
+      }).select('source medium campaign utm_source utm_medium utm_campaign utm_content utm_term email phone');
 
       if (lead) {
         enriched.source       = lead.source       || null;
@@ -70,10 +75,19 @@ export const createTrackingEvent = async (data) => {
         enriched.utm_campaign = lead.utm_campaign || null;
         enriched.utm_content  = lead.utm_content  || null;
         enriched.utm_term     = lead.utm_term     || null;
+        leadForMeta = lead;
       }
     }
 
-    return await attrRepo.create(enriched);
+    const savedEvent = await attrRepo.create(enriched);
+
+    // Real Meta Conversions API send -- fire-and-forget, same
+    // non-blocking principle as the rest of this function. A tenant
+    // without ad tracking configured (the default) skips this
+    // immediately with zero extra DB calls beyond the one lookup.
+    sendToAdPlatformsIfConfigured(savedEvent, leadForMeta).catch(() => {});
+
+    return savedEvent;
   } catch (err) {
     // Non-blocking — tracking failure never crashes the parent operation
     console.warn(`[attribution] tracking event failed: ${err.message}`, {
@@ -81,6 +95,91 @@ export const createTrackingEvent = async (data) => {
       lead_id:    data.lead_id,
     });
     return null;
+  }
+};
+
+/**
+ * sendToAdPlatformsIfConfigured -- real Meta Conversions API + real GA4
+ * Measurement Protocol delivery, fanned out independently to whichever
+ * platform(s) a tenant has genuinely connected (see
+ * adTrackingSettings.model.js and the Integrations page bridge). Both
+ * run in parallel and are fully independent -- Meta failing never blocks
+ * or affects Google, and vice versa. Silently does nothing for the
+ * (default) unconfigured case on either -- this is a real, optional
+ * integration, not a requirement for tracking events to work at all.
+ */
+const sendToAdPlatformsIfConfigured = async (event, lead) => {
+  const settings = await AdTrackingSettings.findOne({ tenantId: event.tenant_id });
+  if (!settings) return;
+
+  await Promise.all([
+    sendToMeta(settings, event, lead),
+    sendToGoogle(settings, event, lead),
+  ]);
+};
+
+const sendToMeta = async (settings, event, lead) => {
+  if (!settings.meta?.connected || !settings.meta?.pixelId || !settings.meta?.accessToken) return;
+
+  const provider = new MetaConversionsProvider({
+    pixelId:       settings.meta.pixelId,
+    accessToken:   settings.meta.accessToken,
+    testEventCode: settings.meta.testEventCode || undefined,
+  });
+
+  try {
+    const result = await provider.sendEvent({
+      internalEventType: event.event_type,
+      eventId:            String(event._id),
+      email:               lead?.email,
+      phone:               lead?.phone,
+      value:               event.revenue || undefined,
+    });
+
+    if (result.sent) {
+      await AdTrackingSettings.updateOne(
+        { _id: settings._id },
+        { $inc: { 'meta.eventsSent': 1 }, $set: { 'meta.lastEventSentAt': new Date() } }
+      );
+    }
+  } catch (err) {
+    console.warn(`[attribution] Meta Conversions API send failed: ${err.message}`);
+    await AdTrackingSettings.updateOne(
+      { _id: settings._id },
+      { $inc: { 'meta.eventsFailed': 1 } }
+    ).catch(() => {});
+  }
+};
+
+const sendToGoogle = async (settings, event, lead) => {
+  if (!settings.google?.connected || !settings.google?.measurementId || !settings.google?.apiSecret) return;
+  if (!lead?._id) return; // GA4 client_id is derived from the lead — nothing to send without one
+
+  const provider = new GoogleAnalyticsProvider({
+    measurementId: settings.google.measurementId,
+    apiSecret:     settings.google.apiSecret,
+  });
+
+  try {
+    const result = await provider.sendEvent({
+      internalEventType: event.event_type,
+      leadId:              lead._id,
+      transactionId:       String(event._id),
+      value:               event.revenue || undefined,
+    });
+
+    if (result.sent) {
+      await AdTrackingSettings.updateOne(
+        { _id: settings._id },
+        { $inc: { 'google.eventsSent': 1 }, $set: { 'google.lastEventSentAt': new Date() } }
+      );
+    }
+  } catch (err) {
+    console.warn(`[attribution] GA4 Measurement Protocol send failed: ${err.message}`);
+    await AdTrackingSettings.updateOne(
+      { _id: settings._id },
+      { $inc: { 'google.eventsFailed': 1 } }
+    ).catch(() => {});
   }
 };
 
@@ -184,6 +283,7 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
     eventsByType,
     sourceToRevenue,
     recentEventsResult,
+    adSpend,
   ] = await Promise.all([
     attrRepo.getKpiCounts(tenantId, filter),
     attrRepo.getLeadsBySource(tenantId, filter),
@@ -192,6 +292,7 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
     attrRepo.getEventsByType(tenantId, filter),
     attrRepo.getSourceToRevenueBreakdown(tenantId, filter),
     attrRepo.getRecentEvents(tenantId, filter, { skip: 0, limit: 20 }),
+    getAdSpendSummary(tenantId),
   ]);
 
   return {
@@ -202,6 +303,61 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
     eventsByType,
     sourceToRevenue,
     recentEvents: recentEventsResult,
+    adSpend,
+  };
+};
+
+/**
+ * getAdSpendSummary -- real Google Ads spend (from GoogleAdsCampaignMetric,
+ * already-synced data, not a live call on every dashboard load) combined
+ * with this app's own existing real revenue-by-source data to compute a
+ * genuine ROAS figure.
+ *
+ * Matching real ad spend to real internal revenue is inherently
+ * best-effort here: it matches by campaign name string equality against
+ * this app's own `source`/`campaign` lead fields, since there's no
+ * shared campaign ID between Google Ads and this CRM's own lead
+ * capture. Where no match is found, spend is still shown (real,
+ * unattributed cost), just without a matched revenue figure -- not
+ * hidden or guessed.
+ */
+const getAdSpendSummary = async (tenantId) => {
+  const campaigns = await GoogleAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50);
+  if (campaigns.length === 0) {
+    return { connected: false, totalSpend: 0, totalConversions: 0, campaigns: [] };
+  }
+
+  // Real revenue-by-source data this app already computes internally.
+  const revenueBySource = await attrRepo.getRevenueBySource(tenantId, {});
+  const revenueByName = new Map(revenueBySource.map((r) => [String(r.source || '').toLowerCase(), r.revenue || 0]));
+
+  const enriched = campaigns.map((c) => {
+    const matchedRevenue = revenueByName.get(String(c.campaignName).toLowerCase()) ?? null;
+    return {
+      campaignId: c.campaignId,
+      campaignName: c.campaignName,
+      status: c.status,
+      channelType: c.channelType,
+      spend: c.spend,
+      clicks: c.clicks,
+      impressions: c.impressions,
+      conversions: c.conversions,
+      conversionsValue: c.conversionsValue,
+      matchedRevenue,
+      roas: matchedRevenue && c.spend > 0 ? Number((matchedRevenue / c.spend).toFixed(2)) : null,
+      syncedAt: c.syncedAt,
+    };
+  });
+
+  const totalSpend = campaigns.reduce((sum, c) => sum + c.spend, 0);
+  const totalConversions = campaigns.reduce((sum, c) => sum + c.conversions, 0);
+
+  return {
+    connected: true,
+    totalSpend,
+    totalConversions,
+    lastSyncedAt: campaigns[0]?.syncedAt || null,
+    campaigns: enriched,
   };
 };
 

@@ -37,6 +37,7 @@
  */
 
 import mongoose from 'mongoose';
+import config from '../../../config/config.js';
 import {
   SUBSCRIPTION_STATUS,
 } from '../constants/auth.constants.js';
@@ -64,11 +65,11 @@ export const WORKSPACE_STATUS = Object.freeze({
 });
 
 export const PLAN_LIMITS = Object.freeze({
-  free:       { maxUsers: 3,   maxLeads: 250,    maxCampaigns: 3,   maxWorkspaces: 1   },
-  starter:    { maxUsers: 5,   maxLeads: 1000,   maxCampaigns: 10,  maxWorkspaces: 3   },
-  growth:     { maxUsers: 15,  maxLeads: 10000,  maxCampaigns: 50,  maxWorkspaces: 10  },
-  scale:      { maxUsers: 50,  maxLeads: 50000,  maxCampaigns: 200, maxWorkspaces: 25  },
-  enterprise: { maxUsers: 999, maxLeads: 999999, maxCampaigns: 999, maxWorkspaces: 999 },
+  free:       { maxUsers: config.PLAN_MAX_USERS_FREE,       maxLeads: 250,    maxCampaigns: 3,   maxWorkspaces: 1   },
+  starter:    { maxUsers: config.PLAN_MAX_USERS_STARTER,    maxLeads: 1000,   maxCampaigns: 10,  maxWorkspaces: 3   },
+  growth:     { maxUsers: config.PLAN_MAX_USERS_GROWTH,     maxLeads: 10000,  maxCampaigns: 50,  maxWorkspaces: 10  },
+  scale:      { maxUsers: config.PLAN_MAX_USERS_SCALE,      maxLeads: 50000,  maxCampaigns: 200, maxWorkspaces: 25  },
+  enterprise: { maxUsers: config.PLAN_MAX_USERS_ENTERPRISE, maxLeads: 999999, maxCampaigns: 999, maxWorkspaces: 999 },
 });
 
 // =============================================================================
@@ -231,19 +232,6 @@ const tenantSchema = new Schema(
     consentRequired:        { type: Boolean, default: true },
     dataRetentionDays:      { type: Number, default: 365, min: 30 },
     optOutKeywords:         { type: [String], default: ["STOP", "UNSUBSCRIBE", "OPTOUT"] },
-
-    // Per-stage label/color overrides, keyed by the fixed DEAL_STAGE board
-    // key (e.g. "new_lead", "qualified", ...). Stage KEYS/order/count are
-    // NOT tenant-configurable -- see types/deal.ts's note on why (deal
-    // validation, lead-status mapping, Won/Lost side effects, and tracking
-    // events all key off the fixed set). Only display label + color can be
-    // customized. Missing keys fall back to PIPELINE_STAGES' defaults.
-    pipelineStageOverrides: { type: Map, of: { label: String, color: String }, default: () => ({}) },
-
-    // Which of the fixed LEAD_FIELDS are required when creating a lead.
-    // Defaults to name+phone (validateCreateLead's original hardcoded
-    // rule) so existing behavior is unchanged until a tenant customizes it.
-    requiredLeadFields: { type: [String], default: ['name', 'phone'] },
 
     // ── Embedded Settings ─────────────────────────────────────────────────────
     branding:                { type: brandingSchema,                default: () => ({}) },

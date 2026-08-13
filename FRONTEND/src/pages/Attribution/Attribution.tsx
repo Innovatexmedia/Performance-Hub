@@ -96,6 +96,49 @@ export function Attribution() {
           </Card>
 
           <Card className="mt-4">
+            <CardHeader
+              title="Google Ads Spend"
+              subtitle={dashboard.adSpend.connected ? `Real, synced campaign data — last synced ${dashboard.adSpend.lastSyncedAt ? formatDateTime(dashboard.adSpend.lastSyncedAt) : 'never'}` : undefined}
+            />
+            {!dashboard.adSpend.connected ? (
+              <EmptyState
+                title="Google Ads not connected"
+                description="Connect your real Google Ads account from the Integrations page to see real spend, clicks, and ROAS here."
+                action={<a href="/integrations"><Button variant="secondary">Go to Integrations</Button></a>}
+              />
+            ) : dashboard.adSpend.campaigns.length === 0 ? (
+              <EmptyState title="No campaign data synced yet" description="Click Sync on the Google Ads Campaigns card in Integrations." />
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Total spend</p><p className="text-lg font-bold text-ink-900">{formatCurrency(dashboard.adSpend.totalSpend)}</p></div>
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Conversions</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.totalConversions}</p></div>
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Campaigns</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.campaigns.length}</p></div>
+                </div>
+                <Table>
+                  <thead>
+                    <tr><Th>Campaign</Th><Th>Status</Th><Th>Spend</Th><Th>Clicks</Th><Th>Impressions</Th><Th>Conversions</Th><Th>Matched Revenue</Th><Th>ROAS</Th></tr>
+                  </thead>
+                  <tbody>
+                    {dashboard.adSpend.campaigns.map((c) => (
+                      <Tr key={c.campaignId}>
+                        <Td className="font-medium">{c.campaignName}</Td>
+                        <Td><Badge tone={c.status === 'ENABLED' ? 'green' : 'gray'}>{c.status ?? '—'}</Badge></Td>
+                        <Td>{formatCurrency(c.spend)}</Td>
+                        <Td>{c.clicks}</Td>
+                        <Td>{formatCompact(c.impressions)}</Td>
+                        <Td>{c.conversions}</Td>
+                        <Td>{c.matchedRevenue !== null ? formatCurrency(c.matchedRevenue) : <span className="text-ink-400">Unmatched</span>}</Td>
+                        <Td className={c.roas !== null && c.roas >= 1 ? 'font-semibold text-emerald-700' : ''}>{c.roas !== null ? `${c.roas}x` : '—'}</Td>
+                      </Tr>
+                    ))}
+                  </tbody>
+                </Table>
+              </>
+            )}
+          </Card>
+
+          <Card className="mt-4">
             <CardHeader title="Recent Tracking Events" subtitle="Native vs provider attribution" />
             {dashboard.recentEvents.length === 0 ? (
               <EmptyState title="No events recorded yet" />

@@ -44,4 +44,13 @@ export const integrationsApi = {
 
   updateConfig: (id: string, config: Record<string, unknown>) =>
     apiClient.patch<Integration>(`/integrations/${id}/config`, { config }).then(normalize),
+
+  /**
+   * startGoogleAdsCampaignsAuth -- real OAuth authorize call. Returns the
+   * real Google consent URL as JSON (not a server redirect -- a plain
+   * browser navigation can't carry the Authorization header this
+   * endpoint requires), so the caller navigates the browser to it.
+   */
+  startGoogleAdsCampaignsAuth: () =>
+    apiClient.get<{ authUrl: string }>('/integrations/google-ads/oauth/authorize').then((r) => r.authUrl),
 };

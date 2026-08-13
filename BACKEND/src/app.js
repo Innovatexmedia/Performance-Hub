@@ -27,6 +27,7 @@ import attributionRoutes from './modules/attribution/attribution.routes.js';
 import paymentRoutes   from './modules/payments/payment.routes.js';
 import campaignRoutes  from './modules/campaigns/campaign.routes.js';
 import bookingRoutes from './modules/bookings/booking.routes.js';
+import calcomWebhookRoutes from './modules/bookings/calcomWebhook.routes.js';
 import reportRoutes  from './modules/reports/report.routes.js';
 import automationRoutes from './modules/automations/automation.routes.js';
 import teamRoutes from './modules/team/team.routes.js';
@@ -34,8 +35,10 @@ import superAdminRoutes from './modules/superAdmin/superAdmin.routes.js';
 import nurtureRoutes from './modules/nurture/nurture.routes.js';
 import templateRoutes from './modules/templates/template.routes.js';
 import integrationRoutes from './modules/integrations/integration.routes.js';
+
 import tenantProfileRoutes from './modules/tenant/tenantProfile.routes.js';
 import planRoutes from './modules/plans/plan.routes.js';
+import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
 // analytics, settings) are composed entirely inside whatsappRouter --
@@ -144,6 +147,7 @@ app.use('/api/qualification', qualificationRoutes);
 app.use('/api/attribution',  attributionRoutes);
 app.use('/api/payments',   paymentRoutes);
 app.use('/api/campaigns',  campaignRoutes);
+app.use('/api/bookings/calcom/webhook', calcomWebhookRoutes);
 app.use('/api/bookings',   bookingRoutes);
 app.use('/api/reports',    reportRoutes);
 app.use('/api/automations', automationRoutes);
@@ -153,6 +157,10 @@ app.use('/api/tenant', tenantProfileRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/nurture', nurtureRoutes);
 app.use('/api/templates', templateRoutes);
+// Mounted BEFORE integrationRoutes and at a more specific sub-path so
+// Express's route matching hits this first -- otherwise integration.routes.js's
+// generic GET /:id pattern would treat "google-ads" as an integration ID.
+app.use('/api/integrations/google-ads/oauth', googleAdsOAuthRoutes);
 app.use('/api/integrations', integrationRoutes);
 
 // NOTE: the WhatsApp submodules (contacts, templates, template-approval,

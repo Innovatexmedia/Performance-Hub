@@ -90,6 +90,30 @@ export interface AttributionFilter {
 }
 
 /** GET /api/attribution/dashboard -- the full page-load bundle. */
+/** SOURCE: attribution.service.js getAdSpendSummary() -- real, synced Google Ads campaign data. */
+export interface AdSpendCampaign {
+  campaignId: string;
+  campaignName: string;
+  status: string | null;
+  channelType: string | null;
+  spend: number;
+  clicks: number;
+  impressions: number;
+  conversions: number;
+  conversionsValue: number;
+  matchedRevenue: number | null;
+  roas: number | null;
+  syncedAt: string;
+}
+
+export interface AdSpendSummary {
+  connected: boolean;
+  totalSpend: number;
+  totalConversions: number;
+  lastSyncedAt: string | null;
+  campaigns: AdSpendCampaign[];
+}
+
 export interface AttributionDashboard {
   kpis: AttributionKpis;
   leadsBySource: SourceCount[];
@@ -98,6 +122,7 @@ export interface AttributionDashboard {
   eventsByType: EventTypeCount[];
   sourceToRevenue: SourceToRevenueRow[];
   recentEvents: TrackingEvent[];
+  adSpend: AdSpendSummary;
 }
 
 /** GET /api/attribution/export row shape -- SOURCE: attribution.controller.js exportCsv. */

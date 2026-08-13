@@ -19,8 +19,18 @@ import { INTEGRATION_CATALOG } from './integration.constants.js';
 
 /**
  * ensureCatalogSeeded - upserts one Integration doc per catalog entry for
- * this tenant. $setOnInsert means an existing (already toggled/configured)
- * record is never touched - this is safe to call on every list request.
+ * this tenant.
+ *
+ * REAL FIX: previously used $setOnInsert for EVERYTHING, meaning once a
+ * tenant's row existed, it could never receive updates to the catalog's
+ * own metadata (name/description/available/etc) again -- a developer
+ * renaming or un-hiding a card in code had no effect on any tenant who'd
+ * already loaded the Integrations page before that change shipped. Real
+ * catalog metadata (owned by the developer, not the tenant) is now a
+ * genuine $set on every call, so every tenant always sees the current,
+ * correct definition. Tenant-owned STATE (status/config/error_logs)
+ * still uses $setOnInsert -- set once at creation, never silently
+ * overwritten by a later catalog change.
  */
 export const ensureCatalogSeeded = (tenantId) =>
   Promise.all(
@@ -28,14 +38,16 @@ export const ensureCatalogSeeded = (tenantId) =>
       Integration.findOneAndUpdate(
         { tenant_id: tenantId, key: entry.key },
         {
-          $setOnInsert: {
-            tenant_id: tenantId,
-            key: entry.key,
+          $set: {
             name: entry.name,
             category: entry.category,
             description: entry.description,
             logo_color: entry.logo_color,
             available: entry.available,
+          },
+          $setOnInsert: {
+            tenant_id: tenantId,
+            key: entry.key,
             status: 'disconnected',
             config: {},
             error_logs: [],

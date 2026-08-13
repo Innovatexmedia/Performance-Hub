@@ -7,103 +7,75 @@
  *
  * PURPOSE
  * ───────
- * Sends transactional auth emails: verification, password reset.
- * Uses nodemailer with SMTP. Swap to SES/SendGrid by changing the transport.
+ * Sends transactional auth emails: verification, password reset, team invites.
+ * Real implementation via SendGrid's v3 REST API (docs.sendgrid.com).
  *
- * PACKAGES REQUIRED
- * ─────────────────
- * npm install nodemailer
- *
- * ENVIRONMENT VARIABLES REQUIRED
- * ───────────────────────────────
- * EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS, EMAIL_FROM, CLIENT_URL
+ * ENVIRONMENT VARIABLES REQUIRED FOR REAL SENDING
+ * ────────────────────────────────────────────────
+ * SENDGRID_API_KEY, EMAIL_FROM_ADDRESS (must be a verified sender in your
+ * SendGrid account), EMAIL_FROM_NAME, CLIENT_URL.
+ * Without SENDGRID_API_KEY set, emails log to console instead of sending
+ * (safe dev fallback, not the intended production behavior).
  * =============================================================================
  */
 
-// NOTE: nodemailer is not in current package.json — add it:
-// npm install nodemailer
-// For now we log to console in dev if nodemailer is unavailable.
+import config from '../../../config/config.js';
 
-let nodemailer;
-try {
-  nodemailer = (await import('nodemailer')).default;
-} catch {
-  nodemailer = null;
-}
-
-const createTransport = () => {
-  if (!nodemailer) return null;
-  return nodemailer.createTransport({
-    host:   process.env.EMAIL_HOST   || 'smtp.mailtrap.io',
-    port:   parseInt(process.env.EMAIL_PORT || '587'),
-    secure: process.env.EMAIL_PORT === '465',
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-};
-
-const FROM = () => process.env.EMAIL_FROM || '"InnovateX" <noreply@innovatex.io>';
+const FROM = () => ({ email: config.EMAIL_FROM_ADDRESS, name: config.EMAIL_FROM_NAME });
 const CLIENT_URL = () => process.env.CLIENT_URL || 'http://localhost:3000';
 
-//right now due to testing purpose we are not using nodemailer and just logging the email content to console. In production we can remove the comment line below and use nodemailer to send the email.
-// const sendMail = async ({ to, subject, html }) => {
-//   const transport = createTransport();
-//   if (!transport) {
-//     // Dev fallback — log to console
-//     console.log(`\n📧 [DEV EMAIL]\nTo: ${to}\nSubject: ${subject}\n${html}\n`);
-//     return;
-//   }
-//   await transport.sendMail({ from: FROM(), to, subject, html });
-// };
-
-
-//after testing remove this code section and uncomment the above code section to use nodemailer to send the email.
+/**
+ * sendMail — real transactional email via SendGrid's v3 REST API.
+ * SOURCE: real SendGrid API docs (docs.sendgrid.com) -- POST
+ * https://api.sendgrid.com/v3/mail/send, Authorization: Bearer <key>,
+ * `from` must be an object ({email, name}), not a string. A successful
+ * send returns 202, not 200 -- checked explicitly below, not assumed.
+ *
+ * Falls back to logging the email to console if SENDGRID_API_KEY isn't
+ * configured -- a genuine, safe dev fallback, not the permanent behavior.
+ */
 const sendMail = async ({ to, subject, html }) => {
-const isDevelopment = process.env.NODE_ENV !== 'production';
+  if (!config.SENDGRID_API_KEY) {
+    console.log('\n================================================');
+    console.log('📧 EMAIL SIMULATION (SENDGRID_API_KEY not set)');
+    console.log('================================================');
+    console.log('To:', to);
+    console.log('Subject:', subject);
+    console.log('Content:\n', html);
+    console.log('================================================\n');
+    return { success: true, simulated: true };
+  }
 
-// Development Mode
-if (isDevelopment) {
-console.log('\n================================================');
-console.log('📧 EMAIL SIMULATION (Development Mode)');
-console.log('================================================');
-console.log('To:', to);
-console.log('Subject:', subject);
-console.log('Content:\n', html);
-console.log('================================================\n');
+  let response;
+  try {
+    response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.SENDGRID_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: to }] }],
+        from: FROM(),
+        subject,
+        content: [{ type: 'text/html', value: html }],
+      }),
+    });
+  } catch (networkError) {
+    throw new Error(`Could not reach SendGrid's API — ${networkError.message}`);
+  }
 
+  // SendGrid returns 202 (not 200) on a genuine success, with an empty body.
+  if (response.status !== 202) {
+    const errJson = await response.json().catch(() => ({}));
+    const message = errJson?.errors?.[0]?.message || `HTTP ${response.status}`;
+    if (response.status === 403) {
+      throw new Error(`SendGrid rejected this email (403) — ${message}. This usually means the from address (${config.EMAIL_FROM_ADDRESS}) is not a verified sender in your SendGrid account yet.`);
+    }
+    throw new Error(`SendGrid send failed — ${message}`);
+  }
 
-return {
-  success: true,
-  simulated: true,
-};
-
-
-}
-
-// Production Mode
-if (!process.env.EMAIL_HOST ||
-!process.env.EMAIL_USER ||
-!process.env.EMAIL_PASS) {
-throw new Error(
-'Email configuration missing. Check EMAIL_HOST, EMAIL_USER and EMAIL_PASS.'
-);
-}
-
-const transport = createTransport();
-
-await transport.sendMail({
-from: FROM(),
-to,
-subject,
-html,
-});
-
-return {
-success: true,
-simulated: false,
-};
+  return { success: true, simulated: false };
 };
 
 
