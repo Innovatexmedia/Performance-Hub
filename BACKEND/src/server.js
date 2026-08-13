@@ -17,6 +17,7 @@ import app       from './app.js';
 import config    from '../src/config/config.js';
 import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
+import { ensureSeeded as ensurePlansSeeded, backfillTenantPlans } from './modules/plans/plan.service.js';
 import dns from 'dns';
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 
@@ -26,6 +27,18 @@ const startServer = async () => {
   try {
     // Connect to MongoDB
     await connectDB();
+
+    // Idempotent -- only inserts the 6 default plans if they don't already
+    // exist (by key), so this is safe to run on every boot. See
+    // plan.service.js's DEFAULT_PLANS for what gets seeded.
+    await ensurePlansSeeded();
+
+    // Backfills planId for any tenant that existed before the Plan system
+    // did (e.g. this deployment's pre-existing workspaces) -- without
+    // this, those tenants' plan_details stays null forever and crashes
+    // Settings > Billing. Also idempotent/safe on every boot -- only
+    // touches tenants where planId is still null.
+    await backfillTenantPlans();
 
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 InnovateX Revenue OS API`);

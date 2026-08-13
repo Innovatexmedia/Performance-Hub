@@ -19,7 +19,7 @@ export const superAdminApi = {
   createTenant: (data: CreateTenantInput) =>
     apiClient.post<{ tenant: PlatformTenant }>('/super-admin/tenants', data).then((r) => r.tenant),
 
-  updateTenant: (id: string, data: Partial<Pick<PlatformTenant, 'name' | 'plan' | 'maxUsers' | 'maxLeads' | 'maxCampaigns' | 'mrr'>>) =>
+  updateTenant: (id: string, data: Partial<Pick<PlatformTenant, 'name' | 'mrr' | 'maxUsers' | 'maxLeads' | 'maxCampaigns' | 'maxWorkspaces'>> & { planId?: string }) =>
     apiClient.patch<{ tenant: PlatformTenant }>(`/super-admin/tenants/${id}`, data).then((r) => r.tenant),
 
   suspendTenant: (id: string) => apiClient.post<{ tenant: PlatformTenant }>(`/super-admin/tenants/${id}/suspend`).then((r) => r.tenant),

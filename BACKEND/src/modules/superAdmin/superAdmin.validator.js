@@ -47,20 +47,20 @@ export const validateCreateTenant = [
     .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
     .matches(/[0-9]/).withMessage('Password must contain at least one number'),
 
-  body('plan')
+  body('planId')
     .optional()
-    .isIn(['free', 'starter', 'growth', 'scale', 'enterprise'])
-    .withMessage('plan must be one of: free, starter, growth, scale, enterprise'),
+    .isMongoId().withMessage('planId must be a valid plan ID'),
 
   handleValidation,
 ];
 
 export const validateUpdateTenant = [
   body('name').optional().trim().isLength({ min: 2, max: 100 }),
-  body('plan').optional().isIn(['free', 'starter', 'growth', 'scale', 'enterprise']),
+  body('planId').optional().isMongoId().withMessage('planId must be a valid plan ID'),
   body('maxUsers').optional().isInt({ min: 1 }),
   body('maxLeads').optional().isInt({ min: 1 }),
   body('maxCampaigns').optional().isInt({ min: 1 }),
+  body('maxWorkspaces').optional().isInt({ min: 1 }),
   body('mrr').optional().isFloat({ min: 0 }),
 
   handleValidation,

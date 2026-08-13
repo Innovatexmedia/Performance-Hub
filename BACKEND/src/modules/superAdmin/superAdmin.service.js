@@ -26,6 +26,7 @@ import Membership, { MEMBERSHIP_STATUS } from '../auth/models/Membership.js';
 import LoginAudit from '../auth/models/LoginAudit.js';
 import { Integration } from '../integrations/integration.model.js';
 import { GenericTemplate } from '../templates/template.model.js';
+import PlanModel from '../plans/plan.model.js';
 import * as userRepo from '../auth/repositories/user.repository.js';
 import { ROLES } from '../auth/constants/roles.js';
 import { USER_STATUS, SUBSCRIPTION_STATUS } from '../auth/constants/auth.constants.js';
@@ -116,10 +117,23 @@ export const getTenantDetail = async (tenantId) => {
  * system wired to this specific screen.
  */
 export const createTenant = async (data, actorUserId) => {
-  const { workspaceName, ownerFirstName, ownerLastName, ownerEmail, ownerPassword, plan } = data;
+  const { workspaceName, ownerFirstName, ownerLastName, ownerEmail, ownerPassword, planId, plan } = data;
 
   const existing = await userRepo.existsByEmail(ownerEmail);
   if (existing) throw AppError.conflict(`Email ${ownerEmail} is already registered`);
+
+  // Accept either a real planId, or (backward-compat / convenience) a
+  // plan `key` string like the old hardcoded 'free'/'starter'/etc. --
+  // resolved to a real Plan document before creation, since the tenant's
+  // own pre-save hook only reads `planId`, not a raw `plan` string, now
+  // that plans are dynamic (see Tenant.js's HOOK 2).
+  let resolvedPlanId = planId || null;
+  if (!resolvedPlanId && plan) {
+    const planDoc = await PlanModel.findOne({ key: plan });
+    if (planDoc) resolvedPlanId = planDoc._id;
+    // else: unknown key -- silently fall through to the tenant's own
+    // default-plan resolution rather than hard-erroring on a typo'd key.
+  }
 
   const session = await mongoose.startSession();
   let tenant, user;
@@ -129,7 +143,7 @@ export const createTenant = async (data, actorUserId) => {
         name: workspaceName,
         ownerName: `${ownerFirstName} ${ownerLastName}`.trim(),
         ownerEmail: ownerEmail.toLowerCase().trim(),
-        plan: plan || 'free',
+        planId: resolvedPlanId,
       }], { session }))[0];
 
       user = (await User.create([{
@@ -162,15 +176,49 @@ export const createTenant = async (data, actorUserId) => {
   return tenant;
 };
 
+/**
+ * updateTenant — general tenant edit from Super Admin.
+ *
+ * `planId` is handled specially: it goes through the actual Tenant
+ * document (findById + upgradePlan() + save()) so the pre-save hook
+ * resolves and denormalizes maxUsers/maxLeads/maxCampaigns/
+ * maxWorkspaces/planTrack/plan from the real Plan document. The OLD
+ * version of this function set `plan` directly via findOneAndUpdate's
+ * $set, which bypasses Mongoose document hooks entirely -- that would've
+ * silently left planTrack/limits stale (still pointing at whatever plan
+ * the tenant was on before), a real bug fixed here.
+ *
+ * name/mrr and DIRECT limit overrides (maxUsers etc., for one-off
+ * enterprise-style exceptions outside the normal plan tiers -- same
+ * intent the original allowedFields list already had) still go through
+ * the plain $set path below, since those don't need any hook logic.
+ */
 export const updateTenant = async (tenantId, data) => {
-  const allowedFields = ['name', 'plan', 'maxUsers', 'maxLeads', 'maxCampaigns', 'mrr'];
+  let tenant = null;
+
+  if (data.planId !== undefined) {
+    tenant = await Tenant.findOne({ _id: tenantId, deletedAt: null });
+    if (!tenant) throw AppError.notFound('Tenant not found');
+    await tenant.upgradePlan(data.planId);
+  }
+
+  const allowedFields = ['name', 'maxUsers', 'maxLeads', 'maxCampaigns', 'maxWorkspaces', 'mrr'];
   const update = {};
   for (const field of allowedFields) {
     if (data[field] !== undefined) update[field] = data[field];
   }
+
+  if (tenant) {
+    // planId branch already loaded the document -- apply the rest onto
+    // the SAME document and save once, so both changes persist together.
+    Object.assign(tenant, update);
+    await tenant.save();
+    return tenant;
+  }
+
   if (Object.keys(update).length === 0) throw AppError.badRequest('No valid fields to update');
 
-  const tenant = await Tenant.findOneAndUpdate(
+  tenant = await Tenant.findOneAndUpdate(
     { _id: tenantId, deletedAt: null },
     { $set: update },
     { new: true, runValidators: true }

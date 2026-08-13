@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Icons from 'lucide-react';
-import { Menu, Search, Bell, ChevronDown, LogOut, RefreshCw, Check } from 'lucide-react';
+import { Menu, Search, Bell, ChevronDown, LogOut, RefreshCw, Check, Plus } from 'lucide-react';
 import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
-import { Avatar, cn } from '@/components/ui';
+import { Avatar, cn, Modal, Button, Field, Input } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
-import { ApiError } from '@/lib/apiClient';
+import { ApiError, apiErrorMessage } from '@/lib/apiClient';
 import { ROLE_LABELS } from '@/types/auth';
 
 function useClickOutside(onClose: () => void) {
@@ -40,6 +40,7 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   const workspacesLoading = useAuthStore((s) => s.workspacesLoading);
   const loadWorkspaces = useAuthStore((s) => s.loadWorkspaces);
   const switchWorkspace = useAuthStore((s) => s.switchWorkspace);
+  const createWorkspace = useAuthStore((s) => s.createWorkspace);
   const notificationsAll = useStore((s) => s.db.notifications);
   const activeTenantId = useStore((s) => s.activeTenantId);
   const notifications = notificationsAll.filter((n) => n.tenant_id === activeTenantId);
@@ -49,6 +50,9 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [wsOpen, setWsOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
+  const [showCreateWs, setShowCreateWs] = useState(false);
+  const [newWsName, setNewWsName] = useState('');
+  const [creatingWs, setCreatingWs] = useState(false);
   const [search, setSearch] = useState('');
 
   const notifRef = useClickOutside(() => setNotifOpen(false));
@@ -81,13 +85,40 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
     }
   };
 
+  // Agencies managing multiple client companies: a fresh, completely
+  // isolated workspace (own leads/deals/campaigns/everything -- nothing
+  // carries over) that this user becomes tenant_owner of immediately.
+  // Backend gates this to tenant_owner/tenant_admin and caps the count by
+  // plan (see auth.service.js's createWorkspace) -- can_create_workspace
+  // below is just the matching UI-side gate so the option isn't shown to
+  // roles who'd just get a 403.
+  const canCreateWorkspace = user.role === 'tenant_owner' || user.role === 'tenant_admin';
+
+  const handleCreateWorkspace = async () => {
+    if (!newWsName.trim()) return;
+    setCreatingWs(true);
+    try {
+      await createWorkspace(newWsName.trim());
+      setShowCreateWs(false);
+      setWsOpen(false);
+      setNewWsName('');
+      toast.success('Workspace created', `Welcome to ${newWsName.trim()}`);
+      navigate('/dashboard');
+    } catch (err) {
+      toast.error('Could not create workspace', apiErrorMessage(err));
+    } finally {
+      setCreatingWs(false);
+    }
+  };
+
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     if (search.trim()) navigate(`/leads?q=${encodeURIComponent(search.trim())}`);
   };
 
   return (
-    <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-ink-200 bg-white/90 px-4 backdrop-blur lg:px-6">
+    <>
+      <header className="sticky top-0 z-20 flex h-16 items-center gap-3 border-b border-ink-200 bg-white/90 px-4 backdrop-blur lg:px-6">
       <button onClick={onMenu} className="rounded-lg p-2 text-ink-600 hover:bg-ink-100">
         <Menu size={20} />
       </button>
@@ -130,6 +161,18 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
                   {w.tenantId === user.tenantId && <Check size={15} className="text-brand-600" />}
                 </button>
               ))}
+              {canCreateWorkspace && (
+                <>
+                  <div className="my-1 border-t border-ink-100" />
+                  <button
+                    onClick={() => { setWsOpen(false); setShowCreateWs(true); }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm font-medium text-brand-600 hover:bg-brand-50"
+                  >
+                    <span className="flex h-7 w-7 items-center justify-center rounded-md border border-dashed border-brand-300 text-brand-500"><Plus size={14} /></span>
+                    Add company
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -218,6 +261,32 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
           )}
         </div>
       </div>
-    </header>
+      </header>
+
+      {showCreateWs && (
+        <Modal
+          open
+          onClose={() => { if (!creatingWs) { setShowCreateWs(false); setNewWsName(''); } }}
+          title="Add a company"
+          footer={
+            <>
+              <Button variant="secondary" onClick={() => { setShowCreateWs(false); setNewWsName(''); }} disabled={creatingWs}>Cancel</Button>
+              <Button onClick={() => void handleCreateWorkspace()} disabled={creatingWs || !newWsName.trim()}>{creatingWs ? 'Creating…' : 'Create workspace'}</Button>
+            </>
+          }
+        >
+          <p className="mb-3 text-sm text-ink-500">Creates a brand-new, completely separate workspace — its own leads, deals, campaigns, everything. Nothing from your current workspace carries over.</p>
+          <Field label="Company name">
+            <Input
+              autoFocus
+              value={newWsName}
+              onChange={(e) => setNewWsName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && newWsName.trim()) void handleCreateWorkspace(); }}
+              placeholder="e.g. Acme Corp"
+            />
+          </Field>
+        </Modal>
+      )}
+    </>
   );
 }

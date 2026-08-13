@@ -391,13 +391,16 @@ function BillingTab({ data }: { data: AllSettings['billing'] }) {
     <Card className="p-6">
       <CardHeaderInline title="Billing" subtitle="Placeholder — managed by InnovateX platform" />
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Plan" value={data.plan_details.name} />
+        <Stat label="Plan" value={data.plan_details?.name || data.plan || '—'} />
         <Stat label="Status" value={data.subscription_status} />
         <Stat label="MRR" value={`$${data.mrr}`} />
         <Stat label="Users" value={`${data.current_user_count} / ${data.max_users}`} />
         <Stat label="Leads" value={`${data.current_lead_count} / ${data.max_leads}`} />
         <Stat label="Campaigns" value={`${data.current_campaign_count} / ${data.max_campaigns}`} />
       </div>
+      {!data.plan_details && (
+        <p className="mt-3 text-xs text-amber-600">This workspace isn't linked to a billing plan yet — contact support if this persists after a page reload.</p>
+      )}
       {data.trial_ends_at && <p className="mt-3 text-xs text-ink-500">Trial ends in {data.trial_days_remaining} days</p>}
       <Button variant="secondary" className="mt-4" onClick={() => toast.info('Billing portal', 'This is a placeholder — no live payment processor is connected in this build.')}>Manage billing</Button>
     </Card>

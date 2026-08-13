@@ -113,6 +113,11 @@ export interface AnalyticsQuery {
   dateFrom?: string;
   dateTo?: string;
   provider?: string;
+  // Index signature so this satisfies apiClient.get's generic query param
+  // type (Record<string, string | number | boolean | undefined>) --
+  // without it, every call site below fails to typecheck even though the
+  // 3 named fields are all plain strings already.
+  [key: string]: string | number | boolean | undefined;
 }
 
 export const whatsappAnalyticsApi = {

@@ -23,6 +23,11 @@ export const authApi = {
   /** Every workspace the currently authenticated user belongs to -- for the Topbar switcher dropdown. */
   listMyWorkspaces: () => apiClient.get<{ workspaces: WorkspaceOption[] }>('/auth/my-workspaces').then((r) => r.workspaces),
 
+  /** Self-serve "add another company" -- tenant_owner/tenant_admin only.
+   * Same AuthResult shape as switchWorkspace: caller lands in the new,
+   * empty workspace immediately, no separate switch step needed. */
+  createWorkspace: (name: string) => apiClient.post<AuthResult>('/auth/workspaces', { name }),
+
   refresh: () => apiClient.post<AuthResult>('/auth/refresh'),
 
   logout: () => apiClient.post<undefined>('/auth/logout'),

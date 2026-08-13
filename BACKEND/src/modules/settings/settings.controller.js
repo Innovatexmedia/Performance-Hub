@@ -41,6 +41,16 @@ export const getBrandingPublic = asyncHandler(async (req, res) => {
 });
 
 /**
+ * getPlanPublic — GET /api/settings/plan/public
+ * Narrow, ungated (below tenant_admin) read so every role can render the
+ * sidebar correctly for their plan's track -- see settings.service.js.
+ */
+export const getPlanPublic = asyncHandler(async (req, res) => {
+  const data = await settingsService.getPlanPublic(req.user.tenantId);
+  return sendSuccess(res, data, 'Plan fetched successfully');
+});
+
+/**
  * updateCompany — PATCH /api/settings/company
  * SOURCE: FRONTEND_SPEC §19 Company tab — Company Name + Website + Save button
  */

@@ -25,6 +25,7 @@
 import { Router } from 'express';
 import * as authController from '../controllers/auth.controller.js';
 import { authenticate, optionalAuthenticate } from '../../../shared/middlewares/auth.middleware.js';
+import { requireRole } from '../../../shared/middlewares/role.middleware.js';
 import {
   loginRateLimit,
   forgotPasswordRateLimit,
@@ -63,6 +64,7 @@ router.delete('/sessions/:sessionId', authenticate, authController.revokeSession
 router.get('/me',                   authenticate, authController.getMe);
 router.patch('/profile',            authenticate, validateUpdateProfile, authController.updateProfile);
 router.get('/my-workspaces',        authenticate, authController.listMyWorkspaces);
+router.post('/workspaces',          authenticate, requireRole('tenant_admin'), authController.createWorkspace);
 router.patch('/change-password',    authenticate, validateChangePassword, authController.changePassword);
 router.post('/resend-verification', authenticate, authController.resendVerification);
 

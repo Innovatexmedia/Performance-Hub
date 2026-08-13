@@ -25,9 +25,11 @@
  *   tenantSchema.pre('validate', function (next) { ...; next(); })
  *   tenantSchema.pre('save',     function (next) { ...; next(); })
  *
- * None of the four hooks here do async work (no DB calls, no awaits).
- * But declaring them async and throwing on error is still the safest
- * pattern because Mongoose v8 handles both cases correctly:
+ * None of the four hooks here do async work (no DB calls, no awaits) --
+ * EXCEPT hook 2 below, which now resolves the tenant's Plan document (a
+ * real DB read, sometimes a write via getDefaultPlan()'s fallback).
+ * Declaring every hook async and throwing on error is still the safest
+ * pattern regardless, because Mongoose v8 handles both cases correctly:
  *   - Thrown error → Mongoose catches it, rejects the save promise
  *   - No error → Mongoose continues to next hook automatically
  *
@@ -38,6 +40,8 @@ import mongoose from 'mongoose';
 import {
   SUBSCRIPTION_STATUS,
 } from '../constants/auth.constants.js';
+import Plan from '../../plans/plan.model.js';
+import { getDefaultPlan } from '../../plans/plan.service.js';
 
 const { Schema } = mongoose;
 
@@ -60,11 +64,11 @@ export const WORKSPACE_STATUS = Object.freeze({
 });
 
 export const PLAN_LIMITS = Object.freeze({
-  free:       { maxUsers: 3,   maxLeads: 250,    maxCampaigns: 3   },
-  starter:    { maxUsers: 5,   maxLeads: 1000,   maxCampaigns: 10  },
-  growth:     { maxUsers: 15,  maxLeads: 10000,  maxCampaigns: 50  },
-  scale:      { maxUsers: 50,  maxLeads: 50000,  maxCampaigns: 200 },
-  enterprise: { maxUsers: 999, maxLeads: 999999, maxCampaigns: 999 },
+  free:       { maxUsers: 3,   maxLeads: 250,    maxCampaigns: 3,   maxWorkspaces: 1   },
+  starter:    { maxUsers: 5,   maxLeads: 1000,   maxCampaigns: 10,  maxWorkspaces: 3   },
+  growth:     { maxUsers: 15,  maxLeads: 10000,  maxCampaigns: 50,  maxWorkspaces: 10  },
+  scale:      { maxUsers: 50,  maxLeads: 50000,  maxCampaigns: 200, maxWorkspaces: 25  },
+  enterprise: { maxUsers: 999, maxLeads: 999999, maxCampaigns: 999, maxWorkspaces: 999 },
 });
 
 // =============================================================================
@@ -167,11 +171,22 @@ const tenantSchema = new Schema(
     ownerPhone:  { type: String, default: null },
 
     // ── Subscription ──────────────────────────────────────────────────────────
+    // `plan` is now a denormalized display string (the assigned Plan's
+    // `key`), kept for backward-compat with existing display code -- the
+    // real source of truth is `planId`. No more fixed enum: plan keys are
+    // dynamic now (Super Admin can add/remove them), so this just accepts
+    // whatever key the resolved Plan document has.
     plan: {
       type:    String,
-      enum:    Object.values(SUBSCRIPTION_PLANS),
       default: SUBSCRIPTION_PLANS.FREE,
     },
+    planId: { type: Schema.Types.ObjectId, ref: 'Plan', default: null },
+    /** Denormalized from planId's track, purely so requireModule()
+     * middleware can check it with zero extra DB query per request (same
+     * "copy the number onto the tenant" pattern maxUsers/maxLeads/
+     * maxCampaigns already used, extended to the new full/whatsapp_only
+     * concept -- see plan.model.js's TRACK_MODULES). */
+    planTrack: { type: String, enum: ['full', 'whatsapp_only'], default: 'full' },
     subscriptionStatus: {
       type:    String,
       enum:    Object.values(SUBSCRIPTION_STATUS),
@@ -198,6 +213,7 @@ const tenantSchema = new Schema(
     maxUsers:             { type: Number, default: PLAN_LIMITS.free.maxUsers,     min: 1 },
     maxLeads:             { type: Number, default: PLAN_LIMITS.free.maxLeads,     min: 1 },
     maxCampaigns:         { type: Number, default: PLAN_LIMITS.free.maxCampaigns, min: 1 },
+    maxWorkspaces:        { type: Number, default: 1, min: 1 },
     currentUserCount:     { type: Number, default: 0, min: 0 },
     currentLeadCount:     { type: Number, default: 0, min: 0 },
     currentCampaignCount: { type: Number, default: 0, min: 0 },
@@ -336,19 +352,49 @@ tenantSchema.pre('validate', async function () {
 });
 
 /**
- * HOOK 2 — Set plan limits on new tenant creation
+ * HOOK 2 — Resolve the tenant's Plan and sync denormalized limits/track
  *
- * Only runs on isNew to avoid overwriting custom enterprise limits that
- * a super_admin may have set manually after creation.
- * Plan upgrades go through the upgradePlan() method instead.
+ * Runs whenever a tenant is first created (isNew, no planId picked yet ->
+ * falls back to the platform default plan), whenever planId is
+ * explicitly changed (e.g. upgradePlan() below), OR whenever planId is
+ * simply still null on ANY save -- this last case covers tenants that
+ * existed before the Plan system did (see plan.service.js's
+ * backfillTenantPlans, which relies on exactly this). Denormalizes
+ * maxUsers/maxLeads/maxCampaigns/maxWorkspaces/planTrack/plan (display
+ * key) onto the tenant document itself -- same reasoning as the pre-
+ * existing maxUsers/maxLeads/maxCampaigns fields already had: every
+ * capacity check (canCreateUser/canCreateLead/canCreateCampaign) and the
+ * module-access gate (requireModule) need to read this synchronously,
+ * with zero extra DB query per request, not re-resolve the Plan on every
+ * single check.
+ *
+ * Only runs on isNew/planId-change to avoid overwriting custom enterprise
+ * limits a super_admin may have hand-set on maxUsers etc. directly after
+ * creation, same guarantee the original comment here promised.
  */
 tenantSchema.pre('save', async function () {
-  if (this.isNew) {
-    const limits = PLAN_LIMITS[this.plan];
-    if (limits) {
-      this.maxUsers     = limits.maxUsers;
-      this.maxLeads     = limits.maxLeads;
-      this.maxCampaigns = limits.maxCampaigns;
+  const session = this.$session();
+  const planIdWasMissing = !this.planId;
+  if (planIdWasMissing) {
+    // Applies regardless of isNew -- a pre-existing tenant from before the
+    // Plan system existed also has planId: null and needs this exact same
+    // fallback, not just brand-new ones. See plan.service.js's
+    // backfillTenantPlans, which relies on this firing on a plain .save()
+    // of an already-existing document.
+    const defaultPlan = await getDefaultPlan(session);
+    if (defaultPlan) this.planId = defaultPlan._id;
+  }
+  if (this.isNew || this.isModified('planId') || planIdWasMissing) {
+    if (this.planId) {
+      const plan = await Plan.findById(this.planId).session(session);
+      if (plan) {
+        this.plan          = plan.key;
+        this.planTrack     = plan.track;
+        this.maxUsers      = plan.limits.maxUsers;
+        this.maxLeads      = plan.limits.maxLeads;
+        this.maxCampaigns  = plan.limits.maxCampaigns;
+        this.maxWorkspaces = plan.limits.maxWorkspaces;
+      }
     }
   }
 });
@@ -440,16 +486,23 @@ tenantSchema.methods.softDelete = function (deletedByUserId) {
 
 /**
  * upgradePlan — changes plan and updates resource limits.
- * Call .save() after this to persist.
+ * Call .save() after this to persist -- the pre-save hook above does the
+ * actual field sync from the resolved Plan document once planId changes.
  * Usage counts are preserved — upgrading doesn't reset currentUserCount etc.
+ *
+ * @param {string} planKeyOrId — a Plan's `key` (e.g. "mid_full") or its
+ *   Mongo _id, either works.
  */
-tenantSchema.methods.upgradePlan = function (newPlan) {
-  const limits = PLAN_LIMITS[newPlan];
-  if (!limits) throw new Error(`Invalid plan: ${newPlan}`);
-  this.plan                  = newPlan;
-  this.maxUsers              = limits.maxUsers;
-  this.maxLeads              = limits.maxLeads;
-  this.maxCampaigns          = limits.maxCampaigns;
+tenantSchema.methods.upgradePlan = async function (planKeyOrId) {
+  const session = this.$session();
+  const isObjectId = mongoose.isValidObjectId(planKeyOrId);
+  const plan = isObjectId
+    ? await Plan.findById(planKeyOrId).session(session)
+    : await Plan.findOne({ key: planKeyOrId }).session(session);
+  if (!plan) throw new Error(`Invalid plan: ${planKeyOrId}`);
+  if (!plan.isActive) throw new Error(`Plan "${plan.name}" is no longer available -- choose a different plan`);
+
+  this.planId                = plan._id;
   this.subscriptionStatus    = SUBSCRIPTION_STATUS.ACTIVE;
   this.subscriptionStartDate = new Date();
   return this;

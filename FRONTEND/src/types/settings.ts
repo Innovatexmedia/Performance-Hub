@@ -10,6 +10,8 @@
  * but which ones are required is editable the same way.
  */
 
+import type { Plan } from './plan';
+
 export interface CompanySettings {
   company_name: string;
   company_website: string;
@@ -68,6 +70,7 @@ export interface ConsentSettings {
 
 export interface BillingSettings {
   plan: string;
+  plan_track: 'full' | 'whatsapp_only';
   subscription_status: string;
   trial_ends_at: string | null;
   trial_days_remaining: number;
@@ -75,16 +78,16 @@ export interface BillingSettings {
   max_users: number;
   max_leads: number;
   max_campaigns: number;
+  max_workspaces: number;
   current_user_count: number;
   current_lead_count: number;
   current_campaign_count: number;
-  plan_details: {
-    name: string;
-    price: number | null;
-    currency: string;
-    maxUsers: number;
-    maxLeads: number;
-  };
+  /** Null for a tenant whose planId hasn't resolved yet -- see
+   * BACKEND/src/modules/plans/plan.service.js's backfillTenantPlans and
+   * Tenant.js's pre-save hook. Should self-heal on the next server boot;
+   * BillingTab falls back to the plain `plan` string if this is null. */
+  plan_details: Plan | null;
+  available_plans: Plan[];
 }
 
 export interface SecuritySettings {

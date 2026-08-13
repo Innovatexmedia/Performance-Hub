@@ -35,13 +35,13 @@
  */
 
 import Tenant from '../auth/models/Tenant.js';
+import Plan from '../plans/plan.model.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 import {
   DEFAULT_QUALIFICATION_QUESTIONS,
   DEFAULT_SCORING_RULES,
   PIPELINE_STAGES,
   LEAD_FIELDS,
-  SUBSCRIPTION_PLAN_DETAILS,
   ACCENT_COLORS,
 } from './settings.constants.js';
 
@@ -149,11 +149,38 @@ export const getBrandingPublic = async (tenantId) => {
 };
 
 /**
+ * getPlanPublic — narrow, ungated cross-module read, same pattern as
+ * getBrandingPublic/getPipelineStageOverrides/getQualificationQuestions
+ * above: EVERY logged-in role needs to know their plan's track to render
+ * the sidebar correctly (hide full-only modules for whatsapp_only
+ * tenants), not just tenant_admin+, who are the only ones who can see
+ * the full billing bundle.
+ */
+export const getPlanPublic = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  const plan = tenant.planId ? await Plan.findById(tenant.planId) : null;
+  return {
+    track: tenant.planTrack,
+    planName: plan?.name || tenant.plan,
+    limits: {
+      maxUsers: tenant.maxUsers,
+      maxLeads: tenant.maxLeads,
+      maxCampaigns: tenant.maxCampaigns,
+      maxWorkspaces: tenant.maxWorkspaces,
+    },
+  };
+};
+
+/**
  * getAllSettings — returns all 10 tabs of settings data.
  * Called on Settings page load — one request, all tabs.
  */
 export const getAllSettings = async (tenantId) => {
   const tenant = await getTenant(tenantId);
+  const [currentPlan, availablePlans] = await Promise.all([
+    tenant.planId ? Plan.findById(tenant.planId) : null,
+    Plan.find({ isActive: true }).sort({ sortOrder: 1, price: 1 }),
+  ]);
 
   return {
     // Tab 1: Company
@@ -211,9 +238,12 @@ export const getAllSettings = async (tenantId) => {
       opt_out_keywords:     tenant.optOutKeywords       || ['STOP', 'UNSUBSCRIBE', 'OPTOUT'],
     },
 
-    // Tab 9: Billing
+    // Tab 9: Billing -- real Plan document (not the old hardcoded
+    // SUBSCRIPTION_PLAN_DETAILS object), plus the full list of currently
+    // purchasable plans so the tab can show upgrade options.
     billing: {
       plan:                  tenant.plan,
+      plan_track:            tenant.planTrack,
       subscription_status:   tenant.subscriptionStatus,
       trial_ends_at:         tenant.trialEndsAt || null,
       trial_days_remaining:  tenant.trialDaysRemaining || 0,
@@ -221,10 +251,12 @@ export const getAllSettings = async (tenantId) => {
       max_users:             tenant.maxUsers,
       max_leads:             tenant.maxLeads,
       max_campaigns:         tenant.maxCampaigns,
+      max_workspaces:        tenant.maxWorkspaces,
       current_user_count:    tenant.currentUserCount,
       current_lead_count:    tenant.currentLeadCount,
       current_campaign_count:tenant.currentCampaignCount,
-      plan_details:          SUBSCRIPTION_PLAN_DETAILS[tenant.plan] || SUBSCRIPTION_PLAN_DETAILS.free,
+      plan_details:          currentPlan,
+      available_plans:       availablePlans,
     },
 
     // Tab 10: Security

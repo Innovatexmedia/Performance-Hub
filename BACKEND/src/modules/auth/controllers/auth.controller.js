@@ -81,6 +81,22 @@ export const switchWorkspace = asyncHandler(async (req, res) => {
 });
 
 /**
+ * createWorkspace — POST /auth/workspaces
+ * Self-serve "add another company" -- see auth.service.js's comment.
+ */
+export const createWorkspace = asyncHandler(async (req, res) => {
+  const ctx = { userId: req.user.sub, tenantId: req.user.tenantId };
+  const result = await authService.createWorkspace(ctx, { name: req.body.name }, req);
+
+  setRefreshTokenCookie(res, result.refreshToken);
+
+  return sendSuccess(res, {
+    user:        result.user,
+    accessToken: result.accessToken,
+  }, 'Workspace created', 201);
+});
+
+/**
  * listMyWorkspaces — GET /auth/my-workspaces
  * Every workspace the currently authenticated user belongs to -- for
  * rendering the workspace switcher dropdown any time, not just at login.

@@ -39,6 +39,7 @@ import {
 
 import { authenticate }  from '../../shared/middlewares/auth.middleware.js';
 import { resolveTenant } from '../../shared/middlewares/tenant.middleware.js';
+import { requireModule } from '../../shared/middlewares/module.middleware.js';
 import { requireRole }   from '../../shared/middlewares/role.middleware.js';
 
 const router = Router();
@@ -46,6 +47,7 @@ const router = Router();
 // Apply auth + tenant resolution to ALL automation routes
 router.use(authenticate);
 router.use(resolveTenant);
+router.use(requireModule('automations')); // plan-gated: 'whatsapp_only' plans don't include this module
 
 // ── Static routes BEFORE /:id — prevents Express treating "kpis" as :id
 router.get('/kpis', controller.getKpis);

@@ -36,6 +36,7 @@ import {
 
 import { authenticate }  from '../../shared/middlewares/auth.middleware.js';
 import { resolveTenant } from '../../shared/middlewares/tenant.middleware.js';
+import { requireModule } from '../../shared/middlewares/module.middleware.js';
 import { requireRole }   from '../../shared/middlewares/role.middleware.js';
 
 const router = Router();
@@ -43,6 +44,7 @@ const router = Router();
 // Auth on ALL campaign routes
 router.use(authenticate);
 router.use(resolveTenant);
+router.use(requireModule('campaigns')); // plan-gated: 'whatsapp_only' plans don't include this module
 
 // ── Static routes BEFORE /:id — prevents Express treating "kpis"/"chart"/"export" as :id
 router.get('/kpis',   controller.getKpis);

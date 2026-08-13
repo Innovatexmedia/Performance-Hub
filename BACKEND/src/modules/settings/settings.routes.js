@@ -61,6 +61,7 @@ router.use(resolveTenant);
 router.get('/qualification-questions', controller.getQualificationQuestions);
 router.get('/pipeline-stages/board',   controller.getPipelineStagesPublic);
 router.get('/branding/public',         controller.getBrandingPublic);
+router.get('/plan/public',             controller.getPlanPublic);
 
 // ── Full settings page — GET all tabs at once ─────────────────────────────────
 router.get('/', requireRole('tenant_admin'), controller.getAllSettings);

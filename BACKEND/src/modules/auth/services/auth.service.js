@@ -524,6 +524,101 @@ export const switchWorkspace = async ({ selectionToken, tenantId }, req) => {
 };
 
 /**
+ * createWorkspace — self-serve "add another company" for an agency-style
+ * user managing multiple, fully separate client workspaces from one login.
+ * Mirrors superAdmin.service.js's createTenant (same real Tenant +
+ * Membership transaction), adapted for an already-existing, already-
+ * logged-in user instead of provisioning a brand new one:
+ *   - Gated to tenant_owner/tenant_admin at the route layer (requireRole).
+ *   - The requester becomes tenant_owner of the NEW workspace regardless
+ *     of their role in the CURRENT one -- they're the one creating it.
+ *   - Capped by tenant.maxWorkspaces (denormalized from the tenant's real
+ *     Plan document -- see Tenant.js's pre-save hook), counting this
+ *     user's total active memberships across every tenant (not just ones
+ *     they own) -- ties workspace count to billing plan as intended, even
+ *     though no real payment processor is wired up yet (see Settings >
+ *     Billing's placeholder note).
+ *   - New Tenant starts on the platform's current default plan and
+ *     completely empty -- no
+ *     leads/deals/campaigns/etc. carry over; only isolation, by design.
+ *   - Returns a fresh token pair already scoped to the new workspace, same
+ *     shape as switchWorkspace, so the frontend can drop the user straight
+ *     into it without a second round-trip.
+ */
+export const createWorkspace = async (ctx, { name }, req) => {
+  const meta = getClientMeta(req);
+
+  const trimmedName = (name || '').trim();
+  if (!trimmedName) throw new AppError('Workspace name is required', 400);
+  if (trimmedName.length > 100) throw new AppError('Workspace name must be 100 characters or fewer', 400);
+
+  const [membershipCount, currentTenant, user] = await Promise.all([
+    Membership.countDocuments({ userId: ctx.userId, status: MEMBERSHIP_STATUS.ACTIVE }),
+    Tenant.findById(ctx.tenantId).select('maxWorkspaces'),
+    userRepo.findById(ctx.userId),
+  ]);
+  if (!user) throw new AppError('User not found', 404);
+
+  // Reads the denormalized field directly -- no more static PLAN_LIMITS
+  // lookup, since maxWorkspaces now comes from whatever real Plan
+  // document the tenant is actually on (see Tenant.js's pre-save hook).
+  const limit = currentTenant?.maxWorkspaces ?? 1;
+  if (membershipCount >= limit) {
+    throw new AppError(
+      `Your plan allows up to ${limit} workspace${limit === 1 ? '' : 's'}. Upgrade your plan to add more.`,
+      403,
+    );
+  }
+
+  const session = await mongoose.startSession();
+  let tenant;
+  try {
+    await session.withTransaction(async () => {
+      tenant = (await Tenant.create([{
+        name: trimmedName,
+        ownerName: user.fullName || `${user.firstName} ${user.lastName}`.trim(),
+        ownerEmail: user.email,
+        // No planId set -- the tenant's own pre-save hook resolves this to
+        // the platform's current default plan automatically.
+      }], { session }))[0];
+
+      tenant.ownerUserId = user._id;
+      tenant.currentUserCount = 1;
+      await tenant.save({ session });
+
+      await Membership.create([{
+        userId: user._id,
+        tenantId: tenant._id,
+        role: ROLES.TENANT_OWNER,
+        status: MEMBERSHIP_STATUS.ACTIVE,
+        invitedBy: user._id, // self -- created it, not invited into it
+        joinedAt: new Date(),
+      }], { session });
+    });
+  } finally {
+    await session.endSession();
+  }
+
+  const scopedUser = { _id: user._id, tenantId: tenant._id, role: ROLES.TENANT_OWNER };
+  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(scopedUser, meta);
+
+  await createAuditLog({
+    userId: user._id,
+    tenantId: tenant._id,
+    email: user.email,
+    event: AUDIT_EVENTS.WORKSPACE_CREATED,
+    success: true,
+    ...meta,
+  });
+
+  return {
+    user: { ...user.getPublicProfile(), tenantId: String(tenant._id), role: ROLES.TENANT_OWNER },
+    accessToken,
+    refreshToken,
+  };
+};
+
+/**
  * listMyWorkspaces — all ACTIVE memberships for the currently authenticated
  * user, for rendering the workspace switcher dropdown at any time (not
  * just at login).

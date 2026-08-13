@@ -32,12 +32,14 @@ import { validateReportQuery, validateExportQuery } from './report.validator.js'
 
 import { authenticate }  from '../../shared/middlewares/auth.middleware.js';
 import { resolveTenant } from '../../shared/middlewares/tenant.middleware.js';
+import { requireModule } from '../../shared/middlewares/module.middleware.js';
 
 const router = Router();
 
 // Auth + tenant resolution on all report routes.
 router.use(authenticate);
 router.use(resolveTenant);
+router.use(requireModule('reports')); // plan-gated: 'whatsapp_only' plans don't include this module
 
 // ── Export — static path, declared before nothing conflicts but kept first
 //    for clarity alongside the other static tab routes. ─────────────────────

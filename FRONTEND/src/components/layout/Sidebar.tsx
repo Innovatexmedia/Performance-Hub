@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import { visibleNav } from './nav';
 import { useAuthStore } from '@/store/authStore';
+import { usePlanTrack } from '@/hooks/usePlanTrack';
 import { cn } from '@/components/ui';
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
@@ -11,8 +12,9 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
 
 export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const user = useAuthStore((s) => s.user);
+  const planTrack = usePlanTrack();
   if (!user) return null;
-  const items = visibleNav(user.role);
+  const items = visibleNav(user.role, planTrack);
   const groups = ['Revenue', 'Growth', 'Admin'];
 
   return (

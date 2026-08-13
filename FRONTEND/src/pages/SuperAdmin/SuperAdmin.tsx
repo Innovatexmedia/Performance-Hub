@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Plus, ShieldCheck, Building2, Users, Server } from 'lucide-react';
 import { superAdminApi } from '@/lib/superAdminApi';
+import { plansApi } from '@/lib/plansApi';
 import { PageHeader, Card, CardHeader, Button, Badge, Tabs, Table, Th, Td, Tr, Modal, Field, Input, Select } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { formatCurrency, timeAgo } from '@/utils/formatters';
@@ -10,6 +11,7 @@ import type {
   PlatformDashboard, PlatformTenant, PlatformUser, IntegrationHealthRow,
   ActivityLogEntry, GlobalTemplate, CreateTenantInput,
 } from '@/types/superAdmin';
+import type { Plan } from '@/types/plan';
 
 const TABS = [
   { id: 'tenants', label: 'Tenants' }, { id: 'users', label: 'All Users' },
@@ -56,21 +58,28 @@ export function SuperAdmin() {
 
 function TenantsTab() {
   const [tenants, setTenants] = useState<PlatformTenant[]>([]);
+  const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [show, setShow] = useState(false);
   const [edit, setEdit] = useState<PlatformTenant | null>(null);
+  const [editPlanId, setEditPlanId] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState<CreateTenantInput>({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', plan: 'free' });
+  const [form, setForm] = useState<CreateTenantInput>({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', planId: '' });
 
   const load = () => {
     setLoading(true);
-    superAdminApi.listTenants({ limit: 100 })
-      .then((r) => setTenants(r.tenants))
+    Promise.all([
+      superAdminApi.listTenants({ limit: 100 }),
+      plansApi.list(true), // includeInactive -- a tenant already on a since-deactivated plan should still show its real name, not blank
+    ])
+      .then(([tenantsRes, plansRes]) => { setTenants(tenantsRes.tenants); setPlans(plansRes); })
       .catch(() => toast.error('Could not load tenants'))
       .finally(() => setLoading(false));
   };
   useEffect(() => { load(); }, []);
+
+  const planName = (t: PlatformTenant) => plans.find((p) => p.id === t.planId)?.name || t.plan;
 
   const handleCreate = async () => {
     setSaving(true);
@@ -78,7 +87,7 @@ function TenantsTab() {
       await superAdminApi.createTenant(form);
       toast.success('Tenant created');
       setShow(false);
-      setForm({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', plan: 'free' });
+      setForm({ workspaceName: '', ownerFirstName: '', ownerLastName: '', ownerEmail: '', ownerPassword: '', planId: '' });
       load();
     } catch (err) {
       toast.error('Could not create tenant', err instanceof ApiError ? err.message : 'Please try again.');
@@ -87,11 +96,18 @@ function TenantsTab() {
     }
   };
 
+  const openEdit = (t: PlatformTenant) => {
+    setEdit(t);
+    setEditPlanId(t.planId || '');
+  };
+
   const handleSaveEdit = async () => {
     if (!edit) return;
     setSaving(true);
     try {
-      await superAdminApi.updateTenant(edit.id, { name: edit.name, plan: edit.plan, mrr: edit.mrr, maxUsers: edit.maxUsers });
+      const patch: Parameters<typeof superAdminApi.updateTenant>[1] = { name: edit.name, mrr: edit.mrr, maxUsers: edit.maxUsers };
+      if (editPlanId && editPlanId !== edit.planId) patch.planId = editPlanId;
+      await superAdminApi.updateTenant(edit.id, patch);
       toast.success('Tenant updated');
       setEdit(null);
       load();
@@ -133,13 +149,13 @@ function TenantsTab() {
               {tenants.map((t) => (
                 <Tr key={t.id}>
                   <Td><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-md bg-brand-600 text-xs font-bold text-white">{t.name[0]}</span><div><p className="font-medium">{t.name}</p><p className="text-xs text-ink-400">{t.ownerEmail}</p></div></div></Td>
-                  <Td><Badge tone="violet">{t.plan}</Badge></Td>
+                  <Td><Badge tone="violet">{planName(t)}</Badge></Td>
                   <Td><Badge tone={t.subscriptionStatus === 'active' ? 'green' : t.subscriptionStatus === 'suspended' ? 'red' : 'gray'}>{t.subscriptionStatus}</Badge></Td>
                   <Td>{t.currentUserCount} / {t.maxUsers}</Td>
                   <Td className="font-medium">{formatCurrency(t.mrr)}</Td>
                   <Td>
                     <div className="flex gap-1.5">
-                      <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEdit(t)}>Edit</Button>
+                      <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => openEdit(t)}>Edit</Button>
                       <Button variant="ghost" className="px-2.5 py-1 text-xs text-amber-600" disabled={busyId === t.id} onClick={() => void handleToggleSuspend(t)}>
                         {busyId === t.id ? '…' : t.subscriptionStatus === 'suspended' ? 'Reactivate' : 'Suspend'}
                       </Button>
@@ -165,7 +181,7 @@ function TenantsTab() {
             <Field label="Owner password" hint="At least 8 characters, with an uppercase letter, lowercase letter, and a number.">
               <Input type="password" value={form.ownerPassword} onChange={(e) => setForm({ ...form, ownerPassword: e.target.value })} />
             </Field>
-            <Field label="Plan"><Select value={form.plan} onChange={(e) => setForm({ ...form, plan: e.target.value as CreateTenantInput['plan'] })}>{['free', 'starter', 'growth', 'scale', 'enterprise'].map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+            <Field label="Plan"><Select value={form.planId} onChange={(e) => setForm({ ...form, planId: e.target.value })}><option value="">Platform default</option>{plans.filter((p) => p.isActive).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full'})</option>)}</Select></Field>
           </div>
         </Modal>
       )}
@@ -176,7 +192,7 @@ function TenantsTab() {
           <div className="space-y-4">
             <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
             <div className="grid grid-cols-2 gap-3">
-              <Field label="Plan"><Select value={edit.plan} onChange={(e) => setEdit({ ...edit, plan: e.target.value as PlatformTenant['plan'] })}>{['free', 'starter', 'growth', 'scale', 'enterprise'].map((p) => <option key={p} value={p}>{p}</option>)}</Select></Field>
+              <Field label="Plan"><Select value={editPlanId} onChange={(e) => setEditPlanId(e.target.value)}>{plans.filter((p) => p.isActive || p.id === edit.planId).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full'}){!p.isActive ? ' — inactive' : ''}</option>)}</Select></Field>
               <Field label="Max users"><Input type="number" value={edit.maxUsers} onChange={(e) => setEdit({ ...edit, maxUsers: Number(e.target.value) })} /></Field>
             </div>
             <Field label="MRR (USD)"><Input type="number" value={edit.mrr} onChange={(e) => setEdit({ ...edit, mrr: Number(e.target.value) })} /></Field>

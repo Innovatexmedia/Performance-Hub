@@ -54,6 +54,15 @@ export const settingsApi = {
   getBrandingPublic: () =>
     apiClient.get<{ accent_color: string }>('/settings/branding/public'),
 
+  /**
+   * getPlanPublic -- same narrow/ungated pattern, so every logged-in
+   * role can know their plan's track to render the sidebar correctly
+   * (hide full-only modules for whatsapp_only tenants). See
+   * hooks/usePlanTrack.ts for what consumes this.
+   */
+  getPlanPublic: () =>
+    apiClient.get<{ track: string; planName: string; limits: { maxUsers: number; maxLeads: number; maxCampaigns: number; maxWorkspaces: number } }>('/settings/plan/public'),
+
   updateQualification: (questions: string[]) =>
     apiClient.patch<QualificationSettings>('/settings/qualification', { questions }),
 

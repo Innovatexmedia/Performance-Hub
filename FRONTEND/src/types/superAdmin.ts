@@ -13,7 +13,10 @@ export interface PlatformDashboard {
   tenantsByStatus: Record<string, number>;
 }
 
-export type TenantPlan = 'free' | 'starter' | 'growth' | 'scale' | 'enterprise';
+/** No longer a fixed set -- plan keys are dynamic now (Super Admin can
+ * add/remove plans). Kept as `string` rather than deleted so existing
+ * call sites reading `.plan` for display don't all need a type change. */
+export type TenantPlan = string;
 export type TenantSubscriptionStatus = 'trial' | 'active' | 'inactive' | 'suspended' | 'cancelled';
 
 export interface PlatformTenant {
@@ -23,11 +26,14 @@ export interface PlatformTenant {
   ownerName: string;
   ownerEmail: string;
   plan: TenantPlan;
+  planId: string | null;
+  planTrack: 'full' | 'whatsapp_only';
   subscriptionStatus: TenantSubscriptionStatus;
   mrr: number;
   maxUsers: number;
   maxLeads: number;
   maxCampaigns: number;
+  maxWorkspaces: number;
   currentUserCount: number;
   currentLeadCount: number;
   createdAt: string;
@@ -54,7 +60,7 @@ export interface CreateTenantInput {
   ownerLastName: string;
   ownerEmail: string;
   ownerPassword: string;
-  plan?: TenantPlan;
+  planId?: string;
 }
 
 export interface PlatformUser {

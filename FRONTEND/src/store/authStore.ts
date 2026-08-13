@@ -62,6 +62,22 @@ interface AuthState {
 
   /** Mid-session workspace switch (Topbar dropdown) -- user is already authenticated, no selectionToken needed. */
   switchWorkspace: (tenantId: string) => Promise<AuthUser>;
+  createWorkspace: (name: string) => Promise<AuthUser>;
+
+  /** Sets the session directly from tokens already issued elsewhere (e.g.
+   * AcceptInvitation's own accept-invitation call) -- no extra network
+   * round-trip needed, this just adopts the given user/token as the
+   * active session, same end state as login. */
+  setSessionFromTokens: (user: AuthUser, accessToken: string) => void;
+
+  /** Replaces `user` with an already-updated object (e.g. after Profile's
+   * own PATCH /auth/profile call returns the fresh user) -- no extra
+   * fetch, just adopts what the caller already has. */
+  updateUser: (user: AuthUser) => void;
+
+  /** Revokes every session for this account (all devices/tabs), including
+   * the current one, then clears local auth state exactly like logout. */
+  logoutAll: () => Promise<void>;
 
   /** Refreshes the workspaces list for the Topbar switcher -- safe to call any time while authenticated. */
   loadWorkspaces: () => Promise<void>;
@@ -175,6 +191,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  createWorkspace: async (name) => {
+    try {
+      const { user, accessToken } = await authApi.createWorkspace(name);
+      // Same reasoning as switchWorkspace -- this lands the user directly
+      // in the brand-new tenant's context, so the realtime socket needs
+      // to move rooms exactly the same way.
+      disconnectSocket();
+      set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocketAndListen();
+      void get().loadWorkspaces(); // picks up the newly-created one for the switcher list
+      return user;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not create workspace. Please try again.';
+      set({ error: message });
+      throw err;
+    }
+  },
+
   loadWorkspaces: async () => {
     set({ workspacesLoading: true });
     try {
@@ -191,6 +225,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await authApi.logout();
     } catch {
       // Best-effort -- clear local session regardless of network/server errors.
+    }
+    disconnectSocket();
+    set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
+  },
+
+  setSessionFromTokens: (user, accessToken) => {
+    set({ user, accessToken, status: 'authenticated', error: null });
+    connectSocketAndListen();
+  },
+
+  updateUser: (user) => set({ user }),
+
+  logoutAll: async () => {
+    try {
+      await authApi.logoutAll();
+    } catch {
+      // Best-effort, same as logout() -- clear local session regardless.
     }
     disconnectSocket();
     set({ user: null, accessToken: null, status: 'unauthenticated', error: null });

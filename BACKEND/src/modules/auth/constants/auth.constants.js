@@ -88,6 +88,7 @@ export const AUDIT_EVENTS = Object.freeze({
   INVITATION_ACCEPTED:  "invitation_accepted",
   ROLE_CHANGED:         "role_changed",
   WORKSPACE_SWITCHED:   "workspace_switched",
+  WORKSPACE_CREATED:    "workspace_created",
   SESSION_REVOKED:      "session_revoked",
   USER_ACTIVATED:       "user_activated",
   USER_DEACTIVATED:     "user_deactivated",
