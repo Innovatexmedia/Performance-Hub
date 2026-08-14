@@ -99,9 +99,13 @@ function renderString(text, values, missing) {
 }
 
 function variablesFromTemplateData(data = {}) {
-  const headerText = data.header?.type === HEADER_TYPE.TEXT ? data.header?.text : '';
-  const buttonValues = Array.isArray(data.buttons) ? data.buttons.map((b) => b.value) : [];
-  return collectVariables(headerText, data.body, data.footer, ...buttonValues);
+  // BODY ONLY. Meta counts body parameters against the body text alone, so
+  // including header/footer/button placeholders here inflated the parameter
+  // array and produced a guaranteed error 132000 on every send. Dynamic
+  // header and button parameters need their own Meta components, which
+  // MetaProvider.sendTemplate() does not build yet -- validateTemplateParams()
+  // in templateParams.js rejects such templates with a clear message instead.
+  return collectVariables(data.body);
 }
 
 /** Content validation; returns an array of { field, message } errors. */
@@ -249,7 +253,14 @@ function mapMetaComponents(components = []) {
       };
     } else if (type === 'BODY') {
       result.body = c.text || '';
-      result.variables = c.example?.body_text?.[0] || [];
+      // `variables` is a list of FIELD NAMES to resolve per recipient, not
+      // values. Meta's example.body_text[0] is sample text from the approval
+      // form ("Ravi", "Acme Ltd") -- storing that here previously meant every
+      // contact in a campaign received Meta's placeholder examples verbatim.
+      // Named placeholders ({{name}}) are their own field name; numbered ones
+      // ({{1}}) have none, so they stay positional and are resolved through
+      // whatever the tenant configures. See templateParams.js.
+      result.variables = collectVariables(c.text || '').filter((v) => !/^\d+$/.test(v));
     } else if (type === 'FOOTER') {
       result.footer = c.text || '';
     } else if (type === 'BUTTONS') {

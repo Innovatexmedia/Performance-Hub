@@ -40,6 +40,7 @@ import { CONVERSATION_STATUS } from './conversations/conversation.model.js';
 import { messageRepository } from './messages/message.repository.js';
 import { MESSAGE_DIRECTION, MESSAGE_STATUS, MESSAGE_TYPE } from './messages/message.model.js';
 import { resolveProvider } from './providers/provider.factory.js';
+import { buildBodyParams, renderBody, validateTemplateParams } from './templateParams.js';
 
 import { templatesRepository } from './submodules/templates/templates.repository.js';
 import { APPROVAL_STATUS } from './submodules/templates/templates.constants.js';
@@ -113,21 +114,15 @@ async function getOrCreateConversation(ctx, lead, phone) {
   return conversation;
 }
 
-function renderPreview(template, bodyParams) {
-  // Best-effort human-readable preview for the Inbox thread/delivery log --
-  // NOT sent to Meta as-is (the real template.body/params go via the
-  // provider's structured `template` payload). Just fills {{1}}, {{2}}...
-  // positionally for display.
-  let text = template.body || '';
-  bodyParams.forEach((val, i) => {
-    text = text.split(`{{${i + 1}}}`).join(String(val));
-  });
-  return text;
-}
-
 async function sendToOneRecipient(ctx, { cfg, entity, template, lead }) {
   const phone = lead.whatsapp_number || lead.phone;
-  const bodyParams = template.variables || [];
+
+  // Parameters are derived from THIS lead against the approved body text --
+  // see templateParams.js. Previously this was `template.variables`, a
+  // static array that was both the wrong length (it included header/button
+  // placeholders) and the wrong content (variable names, or Meta's example
+  // values, sent verbatim to every recipient).
+  const bodyParams = buildBodyParams(template, lead);
 
   if (lead.opt_out_status) {
     return { outcome: 'skipped_opt_out' };
@@ -137,7 +132,7 @@ async function sendToOneRecipient(ctx, { cfg, entity, template, lead }) {
   }
 
   const conversation = await getOrCreateConversation(ctx, lead, phone);
-  const previewText = renderPreview(template, bodyParams);
+  const previewText = renderBody(template, lead);
   const provider = await resolveProvider(ctx);
 
   let transport;
@@ -259,6 +254,17 @@ export const campaignSenderService = {
       if (!template || template.approvalStatus !== APPROVAL_STATUS.PROVIDER_APPROVED) {
         console.log(`[CAMPAIGN_SEND] ${kind} ${id} template not usable (found=${!!template}, approvalStatus=${template?.approvalStatus}) -- marking FAILED`);
         await this._markFailed(cfg, ctx, entity, 'Template is no longer provider-approved');
+        return;
+      }
+
+      // Pre-flight: a parameter-count mismatch is fatal and identical for
+      // every recipient (Meta error 132000). Catching it here costs one
+      // check; catching it in the loop costs one failed send per contact,
+      // plus a delivery-log row and a socket emit for each.
+      const paramCheck = validateTemplateParams(template);
+      if (!paramCheck.ok) {
+        console.log(`[CAMPAIGN_SEND] ${kind} ${id} template parameter check failed -- ${paramCheck.reason}`);
+        await this._markFailed(cfg, ctx, entity, `Template configuration error: ${paramCheck.reason}`);
         return;
       }
 
