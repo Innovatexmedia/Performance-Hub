@@ -27,6 +27,8 @@ import LoginAudit from '../auth/models/LoginAudit.js';
 import { Integration } from '../integrations/integration.model.js';
 import { GenericTemplate } from '../templates/template.model.js';
 import PlanModel from '../plans/plan.model.js';
+import AccountModel from '../plans/account.model.js';
+import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import * as userRepo from '../auth/repositories/user.repository.js';
 import { ROLES } from '../auth/constants/roles.js';
 import { USER_STATUS, SUBSCRIPTION_STATUS } from '../auth/constants/auth.constants.js';
@@ -37,8 +39,14 @@ export const getPlatformDashboard = async () => {
     Tenant.countDocuments({ deletedAt: null }),
     Tenant.countDocuments({ deletedAt: null, subscriptionStatus: SUBSCRIPTION_STATUS.ACTIVE }),
     User.countDocuments({ status: { $ne: USER_STATUS.DELETED } }),
-    Tenant.aggregate([
-      { $match: { deletedAt: null, subscriptionStatus: SUBSCRIPTION_STATUS.ACTIVE } },
+    // MRR moved to Account (see plans/account.model.js) -- aggregating
+    // Tenant.mrr here would always return ~0 now, since nothing writes
+    // to that field anymore. razorpaySubscriptionStatus is Account's
+    // real "is this actually being paid for" signal, not the
+    // trial/active/inactive subscriptionStatus (a brand-new trial
+    // account is 'active' in that sense but pays nothing).
+    AccountModel.aggregate([
+      { $match: { razorpaySubscriptionStatus: 'active' } },
       { $group: { _id: null, total: { $sum: '$mrr' } } },
     ]),
   ]);
@@ -76,10 +84,23 @@ export const listTenants = async (query, options) => {
   if (query.status) filter.subscriptionStatus = query.status;
 
   const { page, limit, skip } = normalizePaging(options || {});
-  const [tenants, total] = await Promise.all([
+  const [tenantDocs, total] = await Promise.all([
     Tenant.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit),
     Tenant.countDocuments(filter),
   ]);
+
+  // MRR moved to Account (see plans/account.model.js) -- Tenant.mrr is a
+  // stale leftover field nothing writes to anymore. One query for every
+  // distinct account these tenants reference, instead of N+1 lookups.
+  const accountIds = [...new Set(tenantDocs.filter((t) => t.accountId).map((t) => String(t.accountId)))];
+  const accounts = accountIds.length ? await AccountModel.find({ _id: { $in: accountIds } }).select('mrr') : [];
+  const mrrByAccountId = new Map(accounts.map((a) => [String(a._id), a.mrr]));
+
+  const tenants = tenantDocs.map((t) => {
+    const json = t.toJSON();
+    if (t.accountId) json.mrr = mrrByAccountId.get(String(t.accountId)) ?? 0;
+    return json;
+  });
 
   return { tenants, pagination: paginationMeta({ page, limit, total }) };
 };
@@ -88,13 +109,17 @@ export const getTenantDetail = async (tenantId) => {
   const tenant = await Tenant.findOne({ _id: tenantId, deletedAt: null });
   if (!tenant) throw AppError.notFound('Tenant not found');
 
-  const [userCount, memberships] = await Promise.all([
+  const [userCount, memberships, account] = await Promise.all([
     User.countDocuments({ tenantId, status: { $ne: USER_STATUS.DELETED } }),
     Membership.find({ tenantId, status: MEMBERSHIP_STATUS.ACTIVE }).populate('userId', 'firstName lastName email role'),
+    tenant.accountId ? AccountModel.findById(tenant.accountId).select('mrr') : null,
   ]);
 
+  const tenantJson = tenant.toJSON();
+  if (account) tenantJson.mrr = account.mrr;
+
   return {
-    tenant,
+    tenant: tenantJson,
     userCount,
     members: memberships.map((m) => ({
       id: m.userId?._id,
@@ -143,7 +168,10 @@ export const createTenant = async (data, actorUserId) => {
         name: workspaceName,
         ownerName: `${ownerFirstName} ${ownerLastName}`.trim(),
         ownerEmail: ownerEmail.toLowerCase().trim(),
-        planId: resolvedPlanId,
+        // accountId set below, once we have the new owner's user._id --
+        // deliberately NOT setting planId here anymore (see Tenant.js's
+        // HOOK 2): the account is the real source of truth now, tenant
+        // just syncs from it once accountId is set a few lines down.
       }], { session }))[0];
 
       user = (await User.create([{
@@ -156,7 +184,18 @@ export const createTenant = async (data, actorUserId) => {
         status: USER_STATUS.ACTIVE,
       }], { session }))[0];
 
+      // A Super-Admin-created tenant always gets a fresh Account --
+      // there's a brand-new owner user being created right alongside it,
+      // so there's no existing account to reuse (unlike self-serve
+      // createWorkspace, which deliberately reuses the requester's
+      // existing one). Seeded with whatever plan Super Admin picked.
+      const account = (await AccountModel.create([{
+        ownerUserId: user._id,
+        planId: resolvedPlanId,
+      }], { session }))[0];
+
       tenant.ownerUserId = user._id;
+      tenant.accountId = account._id;
       tenant.currentUserCount = 1;
       await tenant.save({ session });
 
@@ -193,37 +232,54 @@ export const createTenant = async (data, actorUserId) => {
  * intent the original allowedFields list already had) still go through
  * the plain $set path below, since those don't need any hook logic.
  */
+/**
+ * updateTenant — general tenant edit from Super Admin.
+ *
+ * `planId` and `mrr` are handled specially now: billing lives on the
+ * tenant's ACCOUNT (see plans/account.model.js), not the tenant itself
+ * anymore -- one subscription covers every workspace an owner has, so
+ * changing plan/MRR here goes through the account and propagates to
+ * every sibling tenant that account covers, not just this one.
+ *
+ * name and DIRECT limit overrides (maxUsers etc., for one-off
+ * enterprise-style exceptions outside the normal plan tiers) still go
+ * through the plain $set path below, applied to just this tenant -- same
+ * intent the original allowedFields list already had. Note these are
+ * NOT sticky: the next time this tenant's account plan changes,
+ * syncTenantsFromAccount will overwrite them back to the plan's real
+ * numbers, same as before.
+ */
 export const updateTenant = async (tenantId, data) => {
-  let tenant = null;
+  let tenant = await Tenant.findOne({ _id: tenantId, deletedAt: null });
+  if (!tenant) throw AppError.notFound('Tenant not found');
 
-  if (data.planId !== undefined) {
-    tenant = await Tenant.findOne({ _id: tenantId, deletedAt: null });
-    if (!tenant) throw AppError.notFound('Tenant not found');
-    await tenant.upgradePlan(data.planId);
+  if (data.planId !== undefined || data.mrr !== undefined) {
+    if (!tenant.accountId) throw AppError.badRequest('This tenant is not linked to a billing account yet -- contact support.');
+    const account = await AccountModel.findById(tenant.accountId);
+    if (!account) throw AppError.notFound('Billing account not found');
+
+    if (data.planId !== undefined) {
+      await account.upgradePlan(data.planId);
+    }
+    if (data.mrr !== undefined) {
+      account.mrr = data.mrr;
+    }
+    await account.save();
+    await syncTenantsFromAccount(account._id); // every sibling tenant this account covers, not just this one
+    tenant = await Tenant.findById(tenantId); // re-read post-sync
   }
 
-  const allowedFields = ['name', 'maxUsers', 'maxLeads', 'maxCampaigns', 'maxWorkspaces', 'mrr'];
+  const allowedFields = ['name', 'maxUsers', 'maxLeads', 'maxCampaigns', 'maxWorkspaces'];
   const update = {};
   for (const field of allowedFields) {
     if (data[field] !== undefined) update[field] = data[field];
   }
 
-  if (tenant) {
-    // planId branch already loaded the document -- apply the rest onto
-    // the SAME document and save once, so both changes persist together.
+  if (Object.keys(update).length > 0) {
     Object.assign(tenant, update);
     await tenant.save();
-    return tenant;
   }
 
-  if (Object.keys(update).length === 0) throw AppError.badRequest('No valid fields to update');
-
-  tenant = await Tenant.findOneAndUpdate(
-    { _id: tenantId, deletedAt: null },
-    { $set: update },
-    { new: true, runValidators: true }
-  );
-  if (!tenant) throw AppError.notFound('Tenant not found');
   return tenant;
 };
 

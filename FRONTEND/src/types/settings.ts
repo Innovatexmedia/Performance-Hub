@@ -72,6 +72,15 @@ export interface BillingSettings {
   plan: string;
   plan_track: 'full' | 'whatsapp_only';
   subscription_status: string;
+  /** Razorpay's own lifecycle status (see subscription.service.js) --
+   * 'none' for a tenant that's never had a paid subscription (e.g. still
+   * on trial), vs 'halted'/'cancelled'/'expired' for one that genuinely
+   * lapsed. Distinct from `subscription_status` above (our own simpler
+   * trial/active/inactive concept) specifically so the UI can tell
+   * "brand new, never paid" apart from "payment actually failed" --
+   * conflating the two was exactly what caused a normal trial workspace
+   * to show a false "payment failed" warning. */
+  razorpay_subscription_status?: string;
   trial_ends_at: string | null;
   trial_days_remaining: number;
   mrr: number;
@@ -79,6 +88,11 @@ export interface BillingSettings {
   max_leads: number;
   max_campaigns: number;
   max_workspaces: number;
+  /** How many workspaces currently share this account's subscription --
+   * see BACKEND/src/modules/plans/account.model.js. Billing is
+   * account-level now: one subscription can cover multiple companies up
+   * to max_workspaces, this is how many actually exist right now. */
+  current_workspace_count: number;
   current_user_count: number;
   current_lead_count: number;
   current_campaign_count: number;

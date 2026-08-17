@@ -92,6 +92,14 @@ export const errorHandler = (err, req, res, next) => {
       message:    error.message,
       statusCode: error.statusCode,
       stack:      err.stack,
+      // Some SDKs (e.g. Razorpay's Node client) reject with a plain
+      // object shaped like { statusCode, error: { code, description } }
+      // instead of a real Error -- message/stack above are undefined for
+      // those, which is why they used to log as a useless
+      // "{ message: undefined, statusCode: 400, stack: undefined }".
+      // Dumping the raw original error alongside makes whatever shape it
+      // actually has visible, regardless of which library threw it.
+      raw: err && err.message === undefined ? err : undefined,
     });
   } else if (!error.isOperational) {
     // Production: log unexpected errors (don't expose to client)

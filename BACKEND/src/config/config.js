@@ -58,6 +58,16 @@ const config = {
   PLAN_MAX_USERS_SCALE:      parseInt(process.env.PLAN_MAX_USERS_SCALE ?? '50', 10),
   PLAN_MAX_USERS_ENTERPRISE: parseInt(process.env.PLAN_MAX_USERS_ENTERPRISE ?? '999', 10),
 
+  // Razorpay -- real recurring subscriptions for paid plans. Both keys are
+  // required for the subscribe/verify flow to work at all; RAZORPAY_KEY_ID
+  // is also sent to the frontend (public, safe) to open Checkout.
+  // RAZORPAY_WEBHOOK_SECRET is separate from the API key secret -- set
+  // when configuring the webhook URL in the Razorpay dashboard, used only
+  // to verify inbound webhook payloads (subscription.charged/halted/etc).
+  RAZORPAY_KEY_ID:          process.env.RAZORPAY_KEY_ID || null,
+  RAZORPAY_KEY_SECRET:      process.env.RAZORPAY_KEY_SECRET || null,
+  RAZORPAY_WEBHOOK_SECRET:  process.env.RAZORPAY_WEBHOOK_SECRET || null,
+
   // Real Google Ads API access. The developer token and manager account
   // are platform-level (InnovateX applies for ONE developer token,
   // representing the whole product -- Google's real, documented model

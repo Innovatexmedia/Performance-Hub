@@ -3,16 +3,20 @@ import { Save, Plus, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useSettings } from '@/hooks/useSettings';
 import { settingsApi } from '@/lib/settingsApi';
+import { openRazorpaySubscriptionCheckout } from '@/lib/razorpayCheckout';
+import { usePlanStore } from '@/store/planStore';
 import { applyAccentColor } from '@/utils/theme';
+import { formatCurrency } from '@/utils/formatters';
 import { settingsPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
-import { PageHeader, Card, Button, Tabs, Field, Input, Toggle, Badge } from '@/components/ui';
+import { PageHeader, Card, Button, Tabs, Field, Input, Toggle, Badge, cn } from '@/components/ui';
 import type {
   AllSettings, CompanySettings, BrandingSettings, LeadFieldsSettings, PipelineStageDisplay,
   QualificationSettings, ScoringRulesSettings,
   NotificationSettings, ConsentSettings, SecuritySettings, ScoringRule,
 } from '@/types/settings';
+import type { Plan } from '@/types/plan';
 
 const TABS = [
   { id: 'company', label: 'Company' }, { id: 'branding', label: 'Branding' },
@@ -64,7 +68,7 @@ export function Settings() {
             {tab === 'scoring' && <ScoringTab data={settings.scoring_rules} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'notifications' && <NotificationsTab data={settings.notifications} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'consent' && <ConsentTab data={settings.consent} canEdit={canEdit} onSaved={refetch} />}
-            {tab === 'billing' && <BillingTab data={settings.billing} />}
+            {tab === 'billing' && <BillingTab data={settings.billing} canEdit={canEdit} onSaved={refetch} />}
             {tab === 'security' && <SecurityTab data={settings.security} canEdit={canEdit} onSaved={refetch} />}
           </div>
         </div>
@@ -386,24 +390,134 @@ function ConsentTab({ data, canEdit, onSaved }: { data: ConsentSettings; canEdit
   );
 }
 
-function BillingTab({ data }: { data: AllSettings['billing'] }) {
+function BillingTab({ data, canEdit, onSaved }: { data: AllSettings['billing']; canEdit: boolean; onSaved: () => void }) {
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
+
+  const switchPlan = async (plan: Plan) => {
+    // Free plans (e.g. downgrading back to a $0 tier) switch instantly --
+    // no payment to collect. Paid plans go through real Razorpay Checkout;
+    // the backend rejects a direct switch for these (see settings.service.js),
+    // so this branch has to exist -- it's not just a nicer UX path.
+    if (plan.price <= 0) {
+      setSwitchingId(plan.id);
+      try {
+        await settingsApi.updateBillingPlan(plan.id);
+        toast.success('Plan updated');
+        onSaved();
+        void usePlanStore.getState().refresh(); // Sidebar reflects the new track immediately, not just after a reload
+      } catch (err) {
+        toast.error('Could not switch plan', err instanceof ApiError ? err.message : 'Please try again.');
+      } finally {
+        setSwitchingId(null);
+      }
+      return;
+    }
+
+    setSwitchingId(plan.id);
+    try {
+      const checkout = await settingsApi.createSubscriptionCheckout(plan.id);
+      const opened = openRazorpaySubscriptionCheckout({
+        keyId: checkout.keyId,
+        subscriptionId: checkout.subscriptionId,
+        planName: checkout.planName,
+        onSuccess: async (response) => {
+          try {
+            await settingsApi.verifySubscriptionPayment(response);
+            toast.success('Payment confirmed', `You're now on ${checkout.planName}`);
+            onSaved();
+            void usePlanStore.getState().refresh(); // Sidebar reflects the new track immediately, not just after a reload
+          } catch (err) {
+            toast.error('Payment received but could not be confirmed', err instanceof ApiError ? err.message : 'Contact support with your payment ID.');
+          } finally {
+            setSwitchingId(null);
+          }
+        },
+        onDismiss: () => setSwitchingId(null),
+      });
+      if (!opened) {
+        toast.error('Could not open checkout', 'Payment provider failed to load — check your connection and try again.');
+        setSwitchingId(null);
+      }
+    } catch (err) {
+      toast.error('Could not start checkout', err instanceof ApiError ? err.message : 'Please try again.');
+      setSwitchingId(null);
+    }
+  };
+
+  const fullPlans = data.available_plans?.filter((p) => p.track === 'full') || [];
+  const waPlans = data.available_plans?.filter((p) => p.track === 'whatsapp_only') || [];
+
   return (
     <Card className="p-6">
-      <CardHeaderInline title="Billing" subtitle="Placeholder — managed by InnovateX platform" />
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <p className="text-sm text-ink-500">Current plan</p>
+          <p className="text-xl font-semibold text-ink-900">
+            {data.plan_details?.name || data.plan || '—'}
+            <span className="ml-2 text-sm font-normal text-ink-500">— {data.plan_track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full access'}</span>
+          </p>
+        </div>
+        <Badge tone={data.subscription_status === 'active' ? 'green' : 'amber'}>{data.subscription_status}</Badge>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Plan" value={data.plan_details?.name || data.plan || '—'} />
-        <Stat label="Status" value={data.subscription_status} />
-        <Stat label="MRR" value={`$${data.mrr}`} />
         <Stat label="Users" value={`${data.current_user_count} / ${data.max_users}`} />
         <Stat label="Leads" value={`${data.current_lead_count} / ${data.max_leads}`} />
         <Stat label="Campaigns" value={`${data.current_campaign_count} / ${data.max_campaigns}`} />
       </div>
+      {data.max_workspaces > 1 && (
+        <p className="mt-3 text-xs text-ink-500">
+          This subscription covers <strong className="text-ink-700">{data.current_workspace_count} of {data.max_workspaces}</strong> workspaces — every company you manage shares this same plan and billing.
+        </p>
+      )}
       {!data.plan_details && (
         <p className="mt-3 text-xs text-amber-600">This workspace isn't linked to a billing plan yet — contact support if this persists after a page reload.</p>
       )}
       {data.trial_ends_at && <p className="mt-3 text-xs text-ink-500">Trial ends in {data.trial_days_remaining} days</p>}
-      <Button variant="secondary" className="mt-4" onClick={() => toast.info('Billing portal', 'This is a placeholder — no live payment processor is connected in this build.')}>Manage billing</Button>
+      {['halted', 'cancelled', 'expired'].includes(data.razorpay_subscription_status || '') && (
+        <p className="mt-3 text-xs text-red-600">Your subscription isn't active — paid features may be locked until payment is resolved.</p>
+      )}
+
+      {canEdit && (
+        <>
+          <PlanGroup title="Full access" subtitle="Every module, including pipeline, calls, reports and automations." plans={fullPlans} currentPlanId={data.plan_details?.id} switchingId={switchingId} onSwitch={switchPlan} />
+          <PlanGroup title="WhatsApp Panel only" subtitle="Leads, WhatsApp and pipeline. No calls, reports or automations." plans={waPlans} currentPlanId={data.plan_details?.id} switchingId={switchingId} onSwitch={switchPlan} />
+        </>
+      )}
     </Card>
+  );
+}
+
+function PlanGroup({ title, subtitle, plans, currentPlanId, switchingId, onSwitch }: {
+  title: string; subtitle: string; plans: Plan[]; currentPlanId?: string;
+  switchingId: string | null; onSwitch: (plan: Plan) => void;
+}) {
+  if (plans.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <p className="text-sm font-semibold text-ink-900">{title}</p>
+      <p className="mb-3 text-xs text-ink-500">{subtitle}</p>
+      <div className="grid gap-3 sm:grid-cols-3">
+        {plans.map((p) => {
+          const isCurrent = p.id === currentPlanId;
+          return (
+            <div key={p.id} className={cn('relative rounded-xl border p-4', isCurrent ? 'border-2 border-brand-400' : 'border-ink-100')}>
+              {isCurrent && <span className="absolute -top-2.5 left-3 rounded-md bg-brand-50 px-2.5 py-0.5 text-[11px] font-medium text-brand-700">Current plan</span>}
+              <p className="mt-1 font-medium text-ink-900">{p.name}</p>
+              <p className="mb-3 text-xs text-ink-500">{formatCurrency(p.price, p.currency)}/mo · {p.limits.maxUsers} users</p>
+              <Button
+                variant="secondary"
+                className="w-full justify-center text-xs"
+                disabled={isCurrent || switchingId === p.id}
+                onClick={() => onSwitch(p)}
+              >
+                {isCurrent ? 'Active' : switchingId === p.id ? 'Processing…' : p.price > 0 ? 'Subscribe' : 'Switch to this'}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

@@ -41,8 +41,7 @@ import config from '../../../config/config.js';
 import {
   SUBSCRIPTION_STATUS,
 } from '../constants/auth.constants.js';
-import Plan from '../../plans/plan.model.js';
-import { getDefaultPlan } from '../../plans/plan.service.js';
+import Account from '../../plans/account.model.js';
 
 const { Schema } = mongoose;
 
@@ -181,6 +180,15 @@ const tenantSchema = new Schema(
       type:    String,
       default: SUBSCRIPTION_PLANS.FREE,
     },
+    /** The Account this workspace's billing/subscription actually lives
+     * on -- see plans/account.model.js. planId/planTrack/maxUsers/etc.
+     * below are DENORMALIZED COPIES of that Account's real state, synced
+     * whenever the account is created/changes (see plan.service.js's
+     * syncTenantsFromAccount) -- NOT independently managed per-tenant
+     * anymore. Kept nullable for backward-compat with tenants that
+     * existed before this field did; backfillAccounts() fixes those up
+     * on boot, same pattern as backfillTenantPlans did for planId itself. */
+    accountId: { type: Schema.Types.ObjectId, ref: 'Account', default: null },
     planId: { type: Schema.Types.ObjectId, ref: 'Plan', default: null },
     /** Denormalized from planId's track, purely so requireModule()
      * middleware can check it with zero extra DB query per request (same
@@ -198,6 +206,27 @@ const tenantSchema = new Schema(
     trialEndsAt:           { type: Date,   default: null },
     razorpayCustomerId:    { type: String, default: null },
     mrr:                   { type: Number, default: 0, min: 0 },
+
+    // ── Razorpay Subscription (real recurring billing) ────────────────────────
+    // razorpaySubscriptionStatus mirrors Razorpay's own subscription
+    // lifecycle exactly (their literal status strings) -- kept separate
+    // from `subscriptionStatus` above (our own trial/active/inactive
+    // concept) rather than overloading one field, since Razorpay's
+    // states (authenticated/pending/halted/etc.) don't map 1:1 onto ours.
+    // 'none' = never subscribed to a paid plan (still on a free/default
+    // plan, or hasn't started checkout).
+    razorpaySubscriptionId: { type: String, default: null },
+    razorpaySubscriptionStatus: {
+      type: String,
+      enum: ['none', 'created', 'authenticated', 'active', 'pending', 'halted', 'cancelled', 'completed', 'expired'],
+      default: 'none',
+    },
+    /** The plan a tenant is CHECKING OUT for, before payment is confirmed
+     * -- separate from planId (which only changes once payment actually
+     * succeeds). Lets createSubscriptionCheckout know what to apply once
+     * verifySubscriptionPayment / the webhook confirms it. */
+    pendingPlanId:      { type: Schema.Types.ObjectId, ref: 'Plan', default: null },
+    currentPeriodEnd:   { type: Date, default: null },
 
     // ── Workspace Access ──────────────────────────────────────────────────────
     isActive: { type: Boolean, default: true },
@@ -360,28 +389,36 @@ tenantSchema.pre('validate', async function () {
  * limits a super_admin may have hand-set on maxUsers etc. directly after
  * creation, same guarantee the original comment here promised.
  */
+/**
+ * HOOK 2 — Sync denormalized limits/track from this tenant's Account
+ *
+ * Billing lives on Account now (see plans/account.model.js), not
+ * independently per-Tenant -- one subscription covers every workspace an
+ * owner has. This hook just copies the account's current numbers onto
+ * the tenant whenever the tenant is first created or its accountId
+ * changes, so every capacity check (canCreateUser/canCreateLead/
+ * canCreateCampaign) and the module-access gate (requireModule) can keep
+ * reading tenant.maxUsers etc. synchronously, with zero extra DB query
+ * per request -- unchanged from before, just sourced one level up now.
+ *
+ * When an Account's plan itself changes (checkout verify, webhook),
+ * plan.service.js's syncTenantsFromAccount re-saves EVERY tenant under
+ * that account so this hook re-fires for each of them too -- a single
+ * subscription change propagates to every workspace it covers.
+ */
 tenantSchema.pre('save', async function () {
   const session = this.$session();
-  const planIdWasMissing = !this.planId;
-  if (planIdWasMissing) {
-    // Applies regardless of isNew -- a pre-existing tenant from before the
-    // Plan system existed also has planId: null and needs this exact same
-    // fallback, not just brand-new ones. See plan.service.js's
-    // backfillTenantPlans, which relies on this firing on a plain .save()
-    // of an already-existing document.
-    const defaultPlan = await getDefaultPlan(session);
-    if (defaultPlan) this.planId = defaultPlan._id;
-  }
-  if (this.isNew || this.isModified('planId') || planIdWasMissing) {
-    if (this.planId) {
-      const plan = await Plan.findById(this.planId).session(session);
-      if (plan) {
-        this.plan          = plan.key;
-        this.planTrack     = plan.track;
-        this.maxUsers      = plan.limits.maxUsers;
-        this.maxLeads      = plan.limits.maxLeads;
-        this.maxCampaigns  = plan.limits.maxCampaigns;
-        this.maxWorkspaces = plan.limits.maxWorkspaces;
+  if (this.isNew || this.isModified('accountId')) {
+    if (this.accountId) {
+      const account = await Account.findById(this.accountId).session(session);
+      if (account) {
+        this.plan          = account.plan;
+        this.planId        = account.planId;
+        this.planTrack     = account.planTrack;
+        this.maxUsers      = account.maxUsers;
+        this.maxLeads      = account.maxLeads;
+        this.maxCampaigns  = account.maxCampaigns;
+        this.maxWorkspaces = account.maxWorkspaces;
       }
     }
   }
@@ -473,28 +510,12 @@ tenantSchema.methods.softDelete = function (deletedByUserId) {
 };
 
 /**
- * upgradePlan — changes plan and updates resource limits.
- * Call .save() after this to persist -- the pre-save hook above does the
- * actual field sync from the resolved Plan document once planId changes.
- * Usage counts are preserved — upgrading doesn't reset currentUserCount etc.
- *
- * @param {string} planKeyOrId — a Plan's `key` (e.g. "mid_full") or its
- *   Mongo _id, either works.
+ * upgradePlan — MOVED to Account (see plans/account.model.js). Billing
+ * lives at the account level now, not per-tenant -- one subscription
+ * covers every workspace an owner has. Call account.upgradePlan()
+ * followed by plan.service.js's syncTenantsFromAccount() instead, which
+ * propagates the change to every sibling tenant, not just one.
  */
-tenantSchema.methods.upgradePlan = async function (planKeyOrId) {
-  const session = this.$session();
-  const isObjectId = mongoose.isValidObjectId(planKeyOrId);
-  const plan = isObjectId
-    ? await Plan.findById(planKeyOrId).session(session)
-    : await Plan.findOne({ key: planKeyOrId }).session(session);
-  if (!plan) throw new Error(`Invalid plan: ${planKeyOrId}`);
-  if (!plan.isActive) throw new Error(`Plan "${plan.name}" is no longer available -- choose a different plan`);
-
-  this.planId                = plan._id;
-  this.subscriptionStatus    = SUBSCRIPTION_STATUS.ACTIVE;
-  this.subscriptionStartDate = new Date();
-  return this;
-};
 
 // =============================================================================
 // STATIC METHODS

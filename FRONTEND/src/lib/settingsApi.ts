@@ -63,6 +63,27 @@ export const settingsApi = {
   getPlanPublic: () =>
     apiClient.get<{ track: string; planName: string; limits: { maxUsers: number; maxLeads: number; maxCampaigns: number; maxWorkspaces: number } }>('/settings/plan/public'),
 
+  /**
+   * updateBillingPlan -- self-service plan switch, tenant_admin+. Replaces
+   * the old Super-Admin-only path (superAdminApi.updateTenant with
+   * planId) for the common case; Super Admin keeps override ability for
+   * support/edge cases via that same endpoint.
+   */
+  updateBillingPlan: (planId: string) =>
+    apiClient.patch<BillingSettings>('/settings/billing/plan', { planId }),
+
+  /** Starts a real Razorpay subscription for a paid plan. Does NOT
+   * change the tenant's plan yet -- returns what's needed to open
+   * Razorpay Checkout; the plan only actually switches once
+   * verifySubscriptionPayment confirms real payment. */
+  createSubscriptionCheckout: (planId: string) =>
+    apiClient.post<{ subscriptionId: string; keyId: string; planName: string; amount: number; currency: string }>('/settings/billing/subscribe', { planId }),
+
+  /** Called right after Razorpay Checkout's client-side success handler
+   * fires -- verifies the payment server-side, then applies the switch. */
+  verifySubscriptionPayment: (payload: { razorpay_payment_id: string; razorpay_subscription_id: string; razorpay_signature: string }) =>
+    apiClient.post<{ success: boolean; plan: string }>('/settings/billing/subscribe/verify', payload),
+
   updateQualification: (questions: string[]) =>
     apiClient.patch<QualificationSettings>('/settings/qualification', { questions }),
 

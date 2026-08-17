@@ -85,7 +85,7 @@ const planSchema = new Schema({
   /** Monthly price in `currency`, display-only until a real payment
    * processor exists. `null` means "contact sales" (no listed price). */
   price:    { type: Number, default: 0, min: 0 },
-  currency: { type: String, default: 'USD' },
+  currency: { type: String, default: 'INR' },
 
   limits: { type: planLimitsSchema, required: true },
 
@@ -102,6 +102,17 @@ const planSchema = new Schema({
   isDefault: { type: Boolean, default: false },
 
   sortOrder: { type: Number, default: 0 },
+
+  /** Razorpay's own Plan ID, created lazily the first time a tenant
+   * subscribes to this plan (see subscription.service.js). Razorpay
+   * Plans are immutable once created (price/period can't change), so
+   * this is created once and reused -- NOT regenerated on price edits.
+   * Editing `price` after this is set only changes what's DISPLAYED and
+   * what future NEW Razorpay Plans would use if this were ever cleared;
+   * it does not retroactively change what existing subscribers on the
+   * already-created Razorpay Plan are being charged. Same "no surprise
+   * change for existing subscribers" principle as isActive already has. */
+  razorpayPlanId: { type: String, default: null },
 }, {
   timestamps: true,
   toJSON: {

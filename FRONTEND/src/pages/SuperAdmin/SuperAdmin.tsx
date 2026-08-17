@@ -11,10 +11,11 @@ import type {
   PlatformDashboard, PlatformTenant, PlatformUser, IntegrationHealthRow,
   ActivityLogEntry, GlobalTemplate, CreateTenantInput,
 } from '@/types/superAdmin';
-import type { Plan } from '@/types/plan';
+import type { Plan, CreatePlanInput } from '@/types/plan';
 
 const TABS = [
   { id: 'tenants', label: 'Tenants' }, { id: 'users', label: 'All Users' },
+  { id: 'plans', label: 'Plans' },
   { id: 'health', label: 'Integration Health' }, { id: 'activity', label: 'Global Activity' },
   { id: 'templates', label: 'Global Templates' },
 ];
@@ -41,7 +42,7 @@ export function SuperAdmin() {
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label="Tenants" value={dashboard?.totalTenants ?? '—'} icon={<Building2 size={18} />} accent="#6366f1" />
         <KpiCard label="Total users" value={dashboard?.totalUsers ?? '—'} icon={<Users size={18} />} accent="#8b5cf6" />
-        <KpiCard label="Platform MRR" value={dashboard ? formatCurrency(dashboard.mrr) : '—'} icon={<Server size={18} />} accent="#10b981" />
+        <KpiCard label="Platform MRR" value={dashboard ? formatCurrency(dashboard.mrr, 'INR') : '—'} icon={<Server size={18} />} accent="#10b981" />
         <KpiCard label="Active tenants" value={dashboard?.activeTenants ?? '—'} icon={<ShieldCheck size={18} />} accent="#f59e0b" />
       </div>
 
@@ -49,6 +50,7 @@ export function SuperAdmin() {
 
       {tab === 'tenants' && <TenantsTab />}
       {tab === 'users' && <UsersTab />}
+      {tab === 'plans' && <PlansTab />}
       {tab === 'health' && <HealthTab />}
       {tab === 'activity' && <ActivityTab />}
       {tab === 'templates' && <TemplatesTab />}
@@ -152,7 +154,7 @@ function TenantsTab() {
                   <Td><Badge tone="violet">{planName(t)}</Badge></Td>
                   <Td><Badge tone={t.subscriptionStatus === 'active' ? 'green' : t.subscriptionStatus === 'suspended' ? 'red' : 'gray'}>{t.subscriptionStatus}</Badge></Td>
                   <Td>{t.currentUserCount} / {t.maxUsers}</Td>
-                  <Td className="font-medium">{formatCurrency(t.mrr)}</Td>
+                  <Td className="font-medium">{formatCurrency(t.mrr, 'INR')}</Td>
                   <Td>
                     <div className="flex gap-1.5">
                       <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => openEdit(t)}>Edit</Button>
@@ -195,11 +197,155 @@ function TenantsTab() {
               <Field label="Plan"><Select value={editPlanId} onChange={(e) => setEditPlanId(e.target.value)}>{plans.filter((p) => p.isActive || p.id === edit.planId).map((p) => <option key={p.id} value={p.id}>{p.name} ({p.track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full'}){!p.isActive ? ' — inactive' : ''}</option>)}</Select></Field>
               <Field label="Max users"><Input type="number" value={edit.maxUsers} onChange={(e) => setEdit({ ...edit, maxUsers: Number(e.target.value) })} /></Field>
             </div>
-            <Field label="MRR (USD)"><Input type="number" value={edit.mrr} onChange={(e) => setEdit({ ...edit, mrr: Number(e.target.value) })} /></Field>
+            <Field label="MRR (INR)"><Input type="number" value={edit.mrr} onChange={(e) => setEdit({ ...edit, mrr: Number(e.target.value) })} /></Field>
           </div>
         </Modal>
       )}
     </>
+  );
+}
+
+/**
+ * PlansTab -- lets Super Admin edit price/limits on the 6 default plans,
+ * toggle active/default, and create new ones. Backend (plan.service.js)
+ * deliberately does NOT allow editing track/tier/key after creation --
+ * a plan silently switching track out from under tenants already on it
+ * would change their module access with zero warning -- so those three
+ * fields are read-only here once a plan exists, matching the API.
+ */
+function PlansTab() {
+  const [plans, setPlans] = useState<Plan[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [edit, setEdit] = useState<Plan | null>(null);
+  const [show, setShow] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState<CreatePlanInput>({
+    key: '', name: '', track: 'full', tier: 'starter', price: 0,
+    limits: { maxUsers: 5, maxLeads: 1000, maxCampaigns: 10, maxWorkspaces: 1 },
+  });
+
+  const load = () => {
+    setLoading(true);
+    plansApi.list(true)
+      .then(setPlans)
+      .catch(() => toast.error('Could not load plans'))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); }, []);
+
+  const handleCreate = async () => {
+    setSaving(true);
+    try {
+      await plansApi.create(form);
+      toast.success('Plan created');
+      setShow(false);
+      setForm({ key: '', name: '', track: 'full', tier: 'starter', price: 0, limits: { maxUsers: 5, maxLeads: 1000, maxCampaigns: 10, maxWorkspaces: 1 } });
+      load();
+    } catch (err) {
+      toast.error('Could not create plan', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSaveEdit = async () => {
+    if (!edit) return;
+    setSaving(true);
+    try {
+      await plansApi.update(edit.id, {
+        name: edit.name, price: edit.price, limits: edit.limits,
+        isActive: edit.isActive, isDefault: edit.isDefault,
+      });
+      toast.success('Plan updated');
+      setEdit(null);
+      load();
+    } catch (err) {
+      toast.error('Could not update plan', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <Card>
+        <CardHeader
+          title="Billing Plans"
+          subtitle="Price and limits apply immediately to every tenant on the plan — existing subscriptions aren't affected until their next billing cycle re-syncs."
+          action={<Button onClick={() => setShow(true)}><Plus size={16} /> New plan</Button>}
+        />
+        {loading ? (
+          <p className="p-6 text-sm text-ink-400">Loading…</p>
+        ) : (
+          <Table>
+            <thead><Tr><Th>Name</Th><Th>Track</Th><Th>Price</Th><Th>Limits</Th><Th>Status</Th><Th /></Tr></thead>
+            <tbody>
+              {plans.map((p) => (
+                <Tr key={p.id}>
+                  <Td className="font-medium">{p.name}{p.isDefault && <Badge tone="blue" className="ml-2">Default</Badge>}</Td>
+                  <Td>{p.track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full'}</Td>
+                  <Td>{formatCurrency(p.price, p.currency)}/mo</Td>
+                  <Td className="text-xs text-ink-500">{p.limits.maxUsers} users · {p.limits.maxLeads} leads · {p.limits.maxCampaigns} campaigns · {p.limits.maxWorkspaces} workspaces</Td>
+                  <Td><Badge tone={p.isActive ? 'green' : 'gray'}>{p.isActive ? 'Active' : 'Inactive'}</Badge></Td>
+                  <Td><Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEdit(p)}>Edit</Button></Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        )}
+      </Card>
+
+      {show && (
+        <Modal open onClose={() => setShow(false)} title="New plan" footer={<><Button variant="secondary" onClick={() => setShow(false)}>Cancel</Button><Button onClick={() => void handleCreate()} disabled={saving}>{saving ? 'Creating…' : 'Create'}</Button></>}>
+          <div className="space-y-4">
+            <Field label="Key (unique, lowercase, no spaces)"><Input value={form.key} onChange={(e) => setForm({ ...form, key: e.target.value })} placeholder="e.g. premium_full_v2" /></Field>
+            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Track">
+                <Select value={form.track} onChange={(e) => setForm({ ...form, track: e.target.value as CreatePlanInput['track'] })}>
+                  <option value="full">Full access</option>
+                  <option value="whatsapp_only">WhatsApp Panel only</option>
+                </Select>
+              </Field>
+              <Field label="Tier">
+                <Select value={form.tier} onChange={(e) => setForm({ ...form, tier: e.target.value as CreatePlanInput['tier'] })}>
+                  <option value="starter">Starter</option>
+                  <option value="mid">Mid</option>
+                  <option value="premium">Premium</option>
+                </Select>
+              </Field>
+            </div>
+            <Field label="Price (₹/mo)"><Input type="number" value={form.price} onChange={(e) => setForm({ ...form, price: Number(e.target.value) })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Max users"><Input type="number" value={form.limits.maxUsers} onChange={(e) => setForm({ ...form, limits: { ...form.limits, maxUsers: Number(e.target.value) } })} /></Field>
+              <Field label="Max leads"><Input type="number" value={form.limits.maxLeads} onChange={(e) => setForm({ ...form, limits: { ...form.limits, maxLeads: Number(e.target.value) } })} /></Field>
+              <Field label="Max campaigns"><Input type="number" value={form.limits.maxCampaigns} onChange={(e) => setForm({ ...form, limits: { ...form.limits, maxCampaigns: Number(e.target.value) } })} /></Field>
+              <Field label="Max workspaces"><Input type="number" value={form.limits.maxWorkspaces} onChange={(e) => setForm({ ...form, limits: { ...form.limits, maxWorkspaces: Number(e.target.value) } })} /></Field>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {edit && (
+        <Modal open onClose={() => setEdit(null)} title={`Edit ${edit.name}`} footer={<><Button variant="secondary" onClick={() => setEdit(null)}>Cancel</Button><Button onClick={() => void handleSaveEdit()} disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button></>}>
+          <div className="space-y-4">
+            <p className="text-xs text-ink-400">Track ({edit.track === 'whatsapp_only' ? 'WhatsApp Panel only' : 'Full access'}) and tier ({edit.tier}) can't be changed after creation — create a new plan instead if a tenant needs to move between tracks.</p>
+            <Field label="Name"><Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} /></Field>
+            <Field label="Price (₹/mo)"><Input type="number" value={edit.price} onChange={(e) => setEdit({ ...edit, price: Number(e.target.value) })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Max users"><Input type="number" value={edit.limits.maxUsers} onChange={(e) => setEdit({ ...edit, limits: { ...edit.limits, maxUsers: Number(e.target.value) } })} /></Field>
+              <Field label="Max leads"><Input type="number" value={edit.limits.maxLeads} onChange={(e) => setEdit({ ...edit, limits: { ...edit.limits, maxLeads: Number(e.target.value) } })} /></Field>
+              <Field label="Max campaigns"><Input type="number" value={edit.limits.maxCampaigns} onChange={(e) => setEdit({ ...edit, limits: { ...edit.limits, maxCampaigns: Number(e.target.value) } })} /></Field>
+              <Field label="Max workspaces"><Input type="number" value={edit.limits.maxWorkspaces} onChange={(e) => setEdit({ ...edit, limits: { ...edit.limits, maxWorkspaces: Number(e.target.value) } })} /></Field>
+            </div>
+            <div className="flex items-center gap-6">
+              <label className="flex items-center gap-2 text-sm text-ink-700"><input type="checkbox" checked={edit.isActive} onChange={(e) => setEdit({ ...edit, isActive: e.target.checked })} className="rounded border-ink-300" /> Active</label>
+              <label className="flex items-center gap-2 text-sm text-ink-700"><input type="checkbox" checked={edit.isDefault} onChange={(e) => setEdit({ ...edit, isDefault: e.target.checked })} className="rounded border-ink-300" /> Default plan for new tenants</label>
+            </div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 

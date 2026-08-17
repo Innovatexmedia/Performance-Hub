@@ -183,3 +183,29 @@ export const validateSecurity = [
 
   handleValidation,
 ];
+/** validateUpdateBillingPlan — PATCH /api/settings/billing/plan */
+export const validateUpdateBillingPlan = [
+  body('planId')
+    .notEmpty().withMessage('planId is required')
+    .isMongoId().withMessage('planId must be a valid plan ID'),
+
+  handleValidation,
+];
+
+/** validateSubscribeCheckout — POST /api/settings/billing/subscribe */
+export const validateSubscribeCheckout = [
+  body('planId')
+    .notEmpty().withMessage('planId is required')
+    .isMongoId().withMessage('planId must be a valid plan ID'),
+
+  handleValidation,
+];
+
+/** validateVerifyPayment — POST /api/settings/billing/subscribe/verify */
+export const validateVerifyPayment = [
+  body('razorpay_payment_id').notEmpty().withMessage('razorpay_payment_id is required'),
+  body('razorpay_subscription_id').notEmpty().withMessage('razorpay_subscription_id is required'),
+  body('razorpay_signature').notEmpty().withMessage('razorpay_signature is required'),
+
+  handleValidation,
+];

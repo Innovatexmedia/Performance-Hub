@@ -6,6 +6,7 @@
  */
 
 import * as settingsService from './settings.service.js';
+import * as subscriptionService from '../plans/subscription.service.js';
 import { sendSuccess }      from '../../utils/apiResponse.js';
 import asyncHandler         from '../../utils/asyncHandler.js';
 
@@ -48,6 +49,39 @@ export const getBrandingPublic = asyncHandler(async (req, res) => {
 export const getPlanPublic = asyncHandler(async (req, res) => {
   const data = await settingsService.getPlanPublic(req.user.tenantId);
   return sendSuccess(res, data, 'Plan fetched successfully');
+});
+
+/**
+ * updateBillingPlan — PATCH /api/settings/billing/plan
+ * Self-service plan switch -- tenant_admin+ only (see settings.routes.js),
+ * no Super Admin round-trip required. See settings.service.js's comment
+ * on why this replaces the old Super-Admin-only path.
+ */
+export const updateBillingPlan = asyncHandler(async (req, res) => {
+  const data = await settingsService.updateBillingPlan(req.user.tenantId, req.body.planId, req.user);
+  return sendSuccess(res, data, 'Plan updated successfully');
+});
+
+/**
+ * createSubscriptionCheckout — POST /api/settings/billing/subscribe
+ * Starts a real Razorpay subscription for a paid plan. Returns what the
+ * frontend needs to open Razorpay Checkout -- does NOT change the
+ * tenant's plan yet (see subscription.service.js).
+ */
+export const createSubscriptionCheckout = asyncHandler(async (req, res) => {
+  const data = await subscriptionService.createSubscriptionCheckout(req.user.tenantId, req.body.planId, req.user);
+  return sendSuccess(res, data, 'Checkout created');
+});
+
+/**
+ * verifySubscriptionPayment — POST /api/settings/billing/subscribe/verify
+ * Called right after Razorpay Checkout's success callback fires on the
+ * client. Verifies the payment signature server-side before applying
+ * the plan switch -- see subscription.service.js.
+ */
+export const verifySubscriptionPayment = asyncHandler(async (req, res) => {
+  const data = await subscriptionService.verifySubscriptionPayment(req.user.tenantId, req.body, req.user);
+  return sendSuccess(res, data, 'Payment verified');
 });
 
 /**

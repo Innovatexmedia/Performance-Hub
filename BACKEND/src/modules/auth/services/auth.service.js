@@ -10,6 +10,7 @@ import { verifyRefreshToken, signWorkspaceSelectionToken, verifyWorkspaceSelecti
 import AppError                           from '../../../utils/AppError.js';
 import LoginAudit                         from '../models/LoginAudit.js';
 import Tenant                             from '../models/Tenant.js';
+import { getOrCreateAccountForUser } from '../../plans/plan.service.js';
 import Membership, { MEMBERSHIP_STATUS }  from '../models/Membership.js';
 import {
   AUDIT_EVENTS,
@@ -243,7 +244,13 @@ async function _registerTenantOwner(
       status: USER_STATUS.ACTIVE,
     });
 
+    // Every tenant needs an owning Account for billing (see
+    // plans/account.model.js) -- a fresh signup always gets a brand-new
+    // one, since this is necessarily their first-ever workspace.
+    const account = await getOrCreateAccountForUser(user._id);
+
     tenant.ownerUserId = user._id;
+    tenant.accountId = account._id;
     tenant.currentUserCount = 1;
 
     await tenant.save();
@@ -552,18 +559,26 @@ export const createWorkspace = async (ctx, { name }, req) => {
   if (!trimmedName) throw new AppError('Workspace name is required', 400);
   if (trimmedName.length > 100) throw new AppError('Workspace name must be 100 characters or fewer', 400);
 
-  const [membershipCount, currentTenant, user] = await Promise.all([
-    Membership.countDocuments({ userId: ctx.userId, status: MEMBERSHIP_STATUS.ACTIVE }),
-    Tenant.findById(ctx.tenantId).select('maxWorkspaces'),
-    userRepo.findById(ctx.userId),
-  ]);
+  const user = await userRepo.findById(ctx.userId);
   if (!user) throw new AppError('User not found', 404);
 
-  // Reads the denormalized field directly -- no more static PLAN_LIMITS
-  // lookup, since maxWorkspaces now comes from whatever real Plan
-  // document the tenant is actually on (see Tenant.js's pre-save hook).
-  const limit = currentTenant?.maxWorkspaces ?? 1;
-  if (membershipCount >= limit) {
+  // getOrCreateAccountForUser reuses the SAME account this user already
+  // has (found via any of their existing tenants) -- this is the whole
+  // point of account-level billing: an additional company shares the
+  // owner's existing subscription, it doesn't get a fresh trial/plan of
+  // its own. See plan.service.js's comment on why lookup is by
+  // ownerUserId, not by the current tenant specifically.
+  const account = await getOrCreateAccountForUser(user._id);
+
+  // Workspace-count limit is now scoped to the ACCOUNT (how many
+  // tenants already share this subscription), not counted via
+  // Membership rows -- a user who's merely been invited as owner into
+  // someone ELSE's unrelated account shouldn't have that count against
+  // THIS account's limit, which counting all their memberships globally
+  // would have incorrectly done.
+  const tenantCount = await Tenant.countDocuments({ accountId: account._id });
+  const limit = account.maxWorkspaces ?? 1;
+  if (tenantCount >= limit) {
     throw new AppError(
       `Your plan allows up to ${limit} workspace${limit === 1 ? '' : 's'}. Upgrade your plan to add more.`,
       403,
@@ -578,8 +593,7 @@ export const createWorkspace = async (ctx, { name }, req) => {
         name: trimmedName,
         ownerName: user.fullName || `${user.firstName} ${user.lastName}`.trim(),
         ownerEmail: user.email,
-        // No planId set -- the tenant's own pre-save hook resolves this to
-        // the platform's current default plan automatically.
+        accountId: account._id, // pre-save hook syncs plan/limits from this account, not an independent default
       }], { session }))[0];
 
       tenant.ownerUserId = user._id;

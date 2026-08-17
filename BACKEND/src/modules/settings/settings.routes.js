@@ -41,6 +41,9 @@ import {
   validateNotifications,
   validateConsent,
   validateSecurity,
+  validateUpdateBillingPlan,
+  validateSubscribeCheckout,
+  validateVerifyPayment,
 } from './settings.validator.js';
 
 import { authenticate }  from '../../shared/middlewares/auth.middleware.js';
@@ -94,6 +97,9 @@ router.patch('/consent',        requireRole('tenant_admin'), validateConsent,   
 
 // ── Tab 9: Billing (read-only — updated by payment webhooks) ─────────────────
 router.get('/billing',          requireRole('tenant_admin'), controller.getBilling);
+router.patch('/billing/plan',   requireRole('tenant_admin'), validateUpdateBillingPlan, controller.updateBillingPlan);
+router.post('/billing/subscribe',        requireRole('tenant_admin'), validateSubscribeCheckout, controller.createSubscriptionCheckout);
+router.post('/billing/subscribe/verify', requireRole('tenant_admin'), validateVerifyPayment, controller.verifySubscriptionPayment);
 
 // ── Tab 10: Security ──────────────────────────────────────────────────────────
 router.patch('/security',       requireRole('tenant_admin'), validateSecurity,      controller.updateSecurity);

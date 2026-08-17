@@ -36,6 +36,8 @@
 
 import Tenant from '../auth/models/Tenant.js';
 import Plan from '../plans/plan.model.js';
+import Account from '../plans/account.model.js';
+import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 import {
   DEFAULT_QUALIFICATION_QUESTIONS,
@@ -54,6 +56,28 @@ const buildCtx = (reqUser) => ({
   userId:   reqUser.sub,
   role:     reqUser.role,
 });
+
+/**
+ * getAccountForTenant — billing state (subscriptionStatus, trialEndsAt,
+ * mrr, razorpaySubscriptionStatus) now lives on Account, not Tenant --
+ * see plans/account.model.js. Tenant keeps denormalized COPIES of
+ * plan/planTrack/maxUsers etc. (still safe to read directly off tenant
+ * for those), but the subscription-lifecycle fields specifically only
+ * exist on the real Account now, so the Billing tab and updateBillingPlan
+ * both need this lookup.
+ */
+const getAccountForTenant = async (tenant) => {
+  if (!tenant.accountId) return null;
+  return Account.findById(tenant.accountId);
+};
+
+/** trialDaysRemaining -- Account doesn't have Tenant's old virtual for
+ * this, computed inline instead since only these two spots need it. */
+const trialDaysRemaining = (account) => {
+  if (!account?.trialEndsAt || account.subscriptionStatus !== 'trial') return 0;
+  const diff = account.trialEndsAt.getTime() - Date.now();
+  return Math.max(0, Math.ceil(diff / 86_400_000));
+};
 
 /**
  * getTenant — loads the tenant by ID, throws if not found.
@@ -172,14 +196,89 @@ export const getPlanPublic = async (tenantId) => {
 };
 
 /**
+ * updateBillingPlan — self-service plan switch.
+ *
+ * Previously this was Super Admin-only (via superAdmin.service.js's
+ * updateTenant). That made sense as a stopgap while there was no real
+ * payment gate to protect, but it's backwards from how billing should
+ * work: a tenant owner should be able to see and pick their own plan
+ * directly, the same way every real SaaS billing page works -- not have
+ * it manually assigned by a platform admin every time.
+ *
+ * No payment collected here yet (see Razorpay integration, still
+ * pending) -- this just switches which Plan a tenant is on and re-syncs
+ * denormalized limits/track via Tenant.js's upgradePlan()/pre-save hook,
+ * same mechanism Super Admin's path already used. Once Razorpay is wired
+ * in, this is the natural place to gate on "payment succeeded" before
+ * calling upgradePlan() -- the plan-switching logic itself doesn't change.
+ */
+export const updateBillingPlan = async (tenantId, planId, reqUser) => {
+  const ctx    = buildCtx(reqUser);
+  const tenant = await getTenant(tenantId);
+
+  if (!planId) throw AppError.badRequest('planId is required');
+  if (!tenant.accountId) throw AppError.badRequest('This workspace is not linked to a billing account yet -- contact support.');
+
+  const targetPlan = await Plan.findById(planId);
+  if (!targetPlan) throw AppError.notFound('Plan not found');
+  if (!targetPlan.isActive) throw AppError.badRequest(`"${targetPlan.name}" is no longer available -- choose a different plan`);
+  if (targetPlan.price > 0) {
+    // Paid plans go through the real Razorpay checkout/verify flow (see
+    // subscription.service.js) so a switch can never happen without an
+    // actual payment. This direct path stays open ONLY for $0 plans --
+    // e.g. downgrading back to a free tier needs no payment at all.
+    throw AppError.badRequest(`"${targetPlan.name}" requires payment -- use the checkout flow, not a direct switch.`);
+  }
+
+  const account = await getAccountForTenant(tenant);
+  if (!account) throw AppError.notFound('Billing account not found');
+
+  await account.upgradePlan(targetPlan._id);
+  await account.save();
+  // Propagates to EVERY tenant this account covers, not just the one
+  // this request happened to come from -- the whole point of
+  // account-level billing.
+  await syncTenantsFromAccount(account._id);
+
+  const refreshedTenant = await getTenant(tenantId); // re-read post-sync so the response reflects the new denormalized numbers
+  const [currentPlan, availablePlans, accountWorkspaceCount] = await Promise.all([
+    Plan.findById(account.planId),
+    Plan.find({ isActive: true }).sort({ sortOrder: 1, price: 1 }),
+    Tenant.countDocuments({ accountId: account._id }),
+  ]);
+
+  return {
+    plan:                  refreshedTenant.plan,
+    plan_track:            refreshedTenant.planTrack,
+    subscription_status:   account.subscriptionStatus,
+    razorpay_subscription_status: account.razorpaySubscriptionStatus,
+    trial_ends_at:         account.trialEndsAt || null,
+    trial_days_remaining:  trialDaysRemaining(account),
+    mrr:                   account.mrr || 0,
+    max_users:             refreshedTenant.maxUsers,
+    max_leads:             refreshedTenant.maxLeads,
+    max_campaigns:         refreshedTenant.maxCampaigns,
+    max_workspaces:        refreshedTenant.maxWorkspaces,
+    current_workspace_count: accountWorkspaceCount,
+    current_user_count:    refreshedTenant.currentUserCount,
+    current_lead_count:    refreshedTenant.currentLeadCount,
+    current_campaign_count:refreshedTenant.currentCampaignCount,
+    plan_details:          currentPlan,
+    available_plans:       availablePlans,
+  };
+};
+
+/**
  * getAllSettings — returns all 10 tabs of settings data.
  * Called on Settings page load — one request, all tabs.
  */
 export const getAllSettings = async (tenantId) => {
   const tenant = await getTenant(tenantId);
-  const [currentPlan, availablePlans] = await Promise.all([
+  const [currentPlan, availablePlans, account, accountWorkspaceCount] = await Promise.all([
     tenant.planId ? Plan.findById(tenant.planId) : null,
     Plan.find({ isActive: true }).sort({ sortOrder: 1, price: 1 }),
+    getAccountForTenant(tenant),
+    tenant.accountId ? Tenant.countDocuments({ accountId: tenant.accountId }) : 1,
   ]);
 
   return {
@@ -244,14 +343,16 @@ export const getAllSettings = async (tenantId) => {
     billing: {
       plan:                  tenant.plan,
       plan_track:            tenant.planTrack,
-      subscription_status:   tenant.subscriptionStatus,
-      trial_ends_at:         tenant.trialEndsAt || null,
-      trial_days_remaining:  tenant.trialDaysRemaining || 0,
-      mrr:                   tenant.mrr || 0,
+      subscription_status:   account?.subscriptionStatus || 'trial',
+      razorpay_subscription_status: account?.razorpaySubscriptionStatus || 'none',
+      trial_ends_at:         account?.trialEndsAt || null,
+      trial_days_remaining:  trialDaysRemaining(account),
+      mrr:                   account?.mrr || 0,
       max_users:             tenant.maxUsers,
       max_leads:             tenant.maxLeads,
       max_campaigns:         tenant.maxCampaigns,
       max_workspaces:        tenant.maxWorkspaces,
+      current_workspace_count: accountWorkspaceCount,
       current_user_count:    tenant.currentUserCount,
       current_lead_count:    tenant.currentLeadCount,
       current_campaign_count:tenant.currentCampaignCount,
