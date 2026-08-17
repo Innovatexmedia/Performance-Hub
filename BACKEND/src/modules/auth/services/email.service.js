@@ -34,48 +34,64 @@ const CLIENT_URL = () => process.env.CLIENT_URL || 'http://localhost:3000';
  * Falls back to logging the email to console if SENDGRID_API_KEY isn't
  * configured -- a genuine, safe dev fallback, not the permanent behavior.
  */
+/** Shared console-simulation output -- used both when no key is configured and as the real fallback when SendGrid itself fails. */
+const simulateEmail = ({ to, subject, html }, reason) => {
+  console.log('\n================================================');
+  console.log(`📧 EMAIL SIMULATION${reason ? ` (${reason})` : ''}`);
+  console.log('================================================');
+  console.log('To:', to);
+  console.log('Subject:', subject);
+  console.log('Content:\n', html);
+  console.log('================================================\n');
+  return { success: true, simulated: true };
+};
+
 const sendMail = async ({ to, subject, html }) => {
   if (!config.SENDGRID_API_KEY) {
-    console.log('\n================================================');
-    console.log('📧 EMAIL SIMULATION (SENDGRID_API_KEY not set)');
-    console.log('================================================');
-    console.log('To:', to);
-    console.log('Subject:', subject);
-    console.log('Content:\n', html);
-    console.log('================================================\n');
-    return { success: true, simulated: true };
+    return simulateEmail({ to, subject, html }, 'SENDGRID_API_KEY not set');
   }
 
-  let response;
+  // Real fallback: explicitly requested -- any SendGrid failure (revoked/
+  // invalid key, unverified sender, network issue, rate limit, anything)
+  // falls back to the same console simulation instead of throwing, so a
+  // bad key doesn't break real flows like team invites. The real reason
+  // is still logged clearly server-side, not silently hidden -- just no
+  // longer surfaced as a thrown error to the caller.
   try {
-    response = await fetch('https://api.sendgrid.com/v3/mail/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${config.SENDGRID_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        personalizations: [{ to: [{ email: to }] }],
-        from: FROM(),
-        subject,
-        content: [{ type: 'text/html', value: html }],
-      }),
-    });
-  } catch (networkError) {
-    throw new Error(`Could not reach SendGrid's API — ${networkError.message}`);
-  }
-
-  // SendGrid returns 202 (not 200) on a genuine success, with an empty body.
-  if (response.status !== 202) {
-    const errJson = await response.json().catch(() => ({}));
-    const message = errJson?.errors?.[0]?.message || `HTTP ${response.status}`;
-    if (response.status === 403) {
-      throw new Error(`SendGrid rejected this email (403) — ${message}. This usually means the from address (${config.EMAIL_FROM_ADDRESS}) is not a verified sender in your SendGrid account yet.`);
+    let response;
+    try {
+      response = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${config.SENDGRID_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: to }] }],
+          from: FROM(),
+          subject,
+          content: [{ type: 'text/html', value: html }],
+        }),
+      });
+    } catch (networkError) {
+      throw new Error(`Could not reach SendGrid's API — ${networkError.message}`);
     }
-    throw new Error(`SendGrid send failed — ${message}`);
-  }
 
-  return { success: true, simulated: false };
+    // SendGrid returns 202 (not 200) on a genuine success, with an empty body.
+    if (response.status !== 202) {
+      const errJson = await response.json().catch(() => ({}));
+      const message = errJson?.errors?.[0]?.message || `HTTP ${response.status}`;
+      if (response.status === 403) {
+        throw new Error(`SendGrid rejected this email (403) — ${message}. This usually means the from address (${config.EMAIL_FROM_ADDRESS}) is not a verified sender in your SendGrid account yet.`);
+      }
+      throw new Error(`SendGrid send failed — ${message}`);
+    }
+
+    return { success: true, simulated: false };
+  } catch (err) {
+    console.error(`[email] real SendGrid send failed, falling back to simulation — ${err.message}`);
+    return simulateEmail({ to, subject, html }, `SendGrid error: ${err.message}`);
+  }
 };
 
 
