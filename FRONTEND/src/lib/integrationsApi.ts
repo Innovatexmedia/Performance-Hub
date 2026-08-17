@@ -53,4 +53,12 @@ export const integrationsApi = {
    */
   startGoogleAdsCampaignsAuth: () =>
     apiClient.get<{ authUrl: string }>('/integrations/google-ads/oauth/authorize').then((r) => r.authUrl),
+
+  /**
+   * startShopifyAuth -- real OAuth authorize call, real shop-specific
+   * consent URL. Unlike Google Ads, Shopify's authorization URL depends
+   * on the actual store domain, so it's required here.
+   */
+  startShopifyAuth: (shopDomain: string) =>
+    apiClient.get<{ authUrl: string }>(`/shopify/oauth/authorize?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.authUrl),
 };

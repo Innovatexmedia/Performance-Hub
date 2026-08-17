@@ -35,11 +35,9 @@ import superAdminRoutes from './modules/superAdmin/superAdmin.routes.js';
 import nurtureRoutes from './modules/nurture/nurture.routes.js';
 import templateRoutes from './modules/templates/template.routes.js';
 import integrationRoutes from './modules/integrations/integration.routes.js';
-
-import tenantProfileRoutes from './modules/tenant/tenantProfile.routes.js';
-import planRoutes from './modules/plans/plan.routes.js';
-import razorpayWebhookRoutes from './modules/plans/razorpayWebhook.routes.js';
 import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js';
+import shopifyWebhookRoutes from './modules/shopify/shopifyWebhook.routes.js';
+import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
 // analytics, settings) are composed entirely inside whatsappRouter --
@@ -154,19 +152,14 @@ app.use('/api/reports',    reportRoutes);
 app.use('/api/automations', automationRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/super-admin', superAdminRoutes);
-app.use('/api/tenant', tenantProfileRoutes);
-app.use('/api/plans', planRoutes);
-// Mounted at its own unauthenticated path -- Razorpay's own server calls
-// this, not a logged-in user (same precedent as the Cal.com and Meta
-// webhooks above). Signature-verified inside the handler instead of
-// sitting behind `authenticate`.
-app.use('/api/webhooks/razorpay', razorpayWebhookRoutes);
 app.use('/api/nurture', nurtureRoutes);
 app.use('/api/templates', templateRoutes);
 // Mounted BEFORE integrationRoutes and at a more specific sub-path so
 // Express's route matching hits this first -- otherwise integration.routes.js's
 // generic GET /:id pattern would treat "google-ads" as an integration ID.
 app.use('/api/integrations/google-ads/oauth', googleAdsOAuthRoutes);
+app.use('/api/shopify/webhook', shopifyWebhookRoutes);
+app.use('/api/shopify/oauth', shopifyOAuthRoutes);
 app.use('/api/integrations', integrationRoutes);
 
 // NOTE: the WhatsApp submodules (contacts, templates, template-approval,

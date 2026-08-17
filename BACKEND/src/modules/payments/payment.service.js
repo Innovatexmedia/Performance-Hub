@@ -38,6 +38,8 @@ import { activityService }   from '../leads/activities/activity.service.js';
 import Notification          from '../leads/notifications/notification.model.js';
 import { createTrackingEvent }    from '../attribution/attribution.service.js';
 import { TRACKING_EVENT_TYPE }    from '../attribution/attribution.constants.js';
+import { NurtureEnrollment } from '../whatsapp/submodules/nurtures/nurtures.model.js';
+import { ENROLLMENT_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
 
 // =============================================================================
 // PRIVATE HELPERS — identical pattern to booking.service.js / call.service.js
@@ -300,6 +302,19 @@ export const markPaid = async (id, tenantId, reqUser) => {
         },
         { new: true }
       );
+
+      // Real pause-on-conversion -- a lead who just genuinely converted
+      // (paid) shouldn't keep receiving nurture/re-engagement messages
+      // meant for prospects still being worked. Best-effort.
+      await NurtureEnrollment.updateMany(
+        { tenantId: String(tenantId), leadId, status: ENROLLMENT_STATUS.ACTIVE },
+        {
+          $set: { status: ENROLLMENT_STATUS.PAUSED, pauseReason: 'CONVERTED', nextExecutionAt: null },
+          $push: { auditLog: { action: 'PAUSE', performedAt: new Date(), note: 'Lead converted (payment marked paid)' } },
+        },
+      ).catch((err) => {
+        console.error('[nurture] failed to pause enrollments on conversion for lead', String(leadId), err);
+      });
     }
   }
 

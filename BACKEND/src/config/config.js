@@ -58,16 +58,6 @@ const config = {
   PLAN_MAX_USERS_SCALE:      parseInt(process.env.PLAN_MAX_USERS_SCALE ?? '50', 10),
   PLAN_MAX_USERS_ENTERPRISE: parseInt(process.env.PLAN_MAX_USERS_ENTERPRISE ?? '999', 10),
 
-  // Razorpay -- real recurring subscriptions for paid plans. Both keys are
-  // required for the subscribe/verify flow to work at all; RAZORPAY_KEY_ID
-  // is also sent to the frontend (public, safe) to open Checkout.
-  // RAZORPAY_WEBHOOK_SECRET is separate from the API key secret -- set
-  // when configuring the webhook URL in the Razorpay dashboard, used only
-  // to verify inbound webhook payloads (subscription.charged/halted/etc).
-  RAZORPAY_KEY_ID:          process.env.RAZORPAY_KEY_ID || null,
-  RAZORPAY_KEY_SECRET:      process.env.RAZORPAY_KEY_SECRET || null,
-  RAZORPAY_WEBHOOK_SECRET:  process.env.RAZORPAY_WEBHOOK_SECRET || null,
-
   // Real Google Ads API access. The developer token and manager account
   // are platform-level (InnovateX applies for ONE developer token,
   // representing the whole product -- Google's real, documented model
@@ -82,6 +72,13 @@ const config = {
   // client "Authorized redirect URIs" -- see the setup steps delivered
   // alongside this integration.
   GOOGLE_ADS_OAUTH_REDIRECT_URI:  process.env.GOOGLE_ADS_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/google-ads/oauth/callback`,
+
+  // Real Shopify Partner app credentials -- platform-level, InnovateX
+  // applies for ONE Shopify app (via a Partner account), and each
+  // tenant then connects their own store to it via real OAuth.
+  SHOPIFY_CLIENT_ID:     process.env.SHOPIFY_CLIENT_ID || null,
+  SHOPIFY_CLIENT_SECRET: process.env.SHOPIFY_CLIENT_SECRET || null,
+  SHOPIFY_OAUTH_REDIRECT_URI: process.env.SHOPIFY_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/shopify/oauth/callback`,
 };
 
 if (!process.env.SUPER_ADMIN_SECRET) {
@@ -105,6 +102,14 @@ if (!process.env.GOOGLE_ADS_DEVELOPER_TOKEN || !process.env.GOOGLE_ADS_OAUTH_CLI
     '\n⚠️  Google Ads API is not fully configured.' +
     '\n   Set GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_MANAGER_CUSTOMER_ID, GOOGLE_ADS_OAUTH_CLIENT_ID, and GOOGLE_ADS_OAUTH_CLIENT_SECRET.' +
     '\n   Until all four are set, tenants cannot connect a real Google Ads account -- the Connect button will show a clear setup-required error.\n'
+  );
+}
+
+if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) {
+  console.warn(
+    '\n⚠️  Shopify is not fully configured.' +
+    '\n   Set SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET (from your Shopify Partner app).' +
+    '\n   Until both are set, tenants cannot connect a real Shopify store -- the Connect button will show a clear setup-required error.\n'
   );
 }
 

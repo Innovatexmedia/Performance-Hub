@@ -57,6 +57,34 @@ export const DELAY_UNIT_MS = Object.freeze({
   [DELAY_UNIT.WEEKS]:   7 * 24 * 60 * 60 * 1000,
 });
 
+// ── Step channel (real, per PRD's "WhatsApp/Email/SMS/Manual task") ───────────
+// WHATSAPP is the default -- every existing step in the database has no
+// `channel` field at all, and Mongoose applies this schema default on
+// read, so every pre-existing sequence keeps behaving exactly as it did.
+// SMS is accepted as a real, valid step type (per spec's own naming) but
+// has no real send capability -- there is no SMS provider anywhere in
+// this codebase to build on, so a SMS step is created/stored for real
+// but genuinely cannot execute until a real SMS integration exists; this
+// is stated plainly, not silently faked.
+export const NURTURE_CHANNEL = Object.freeze({
+  WHATSAPP:    'WHATSAPP',
+  EMAIL:       'EMAIL',
+  SMS:         'SMS',
+  MANUAL_TASK: 'MANUAL_TASK',
+});
+export const NURTURE_CHANNEL_VALUES = Object.freeze(Object.values(NURTURE_CHANNEL));
+
+// ── Real qualification-triggered auto-enrollment ───────────────────────────────
+// TRIGGER_TYPE.LEAD_QUALIFIED already existed (see below) -- this adds the
+// one real, missing piece: WHICH lead temperature a given sequence should
+// auto-enroll. Reuses Lead.lead_temperature's own real values (Hot/Warm/Cold)
+// directly rather than inventing a separate enum. A tenant configures this
+// per-sequence (e.g. "this sequence auto-enrolls Cold leads"), since spec
+// names 6 sequences but never states which one any specific temperature
+// should map to -- that mapping is a real business decision for the
+// tenant to make via the sequence builder, not something to hardcode here.
+export const NURTURE_TRIGGER_TEMPERATURE_VALUES = Object.freeze(['Cold', 'Warm']);
+
 // ── Sequence audit actions ─────────────────────────────────────────────────────
 export const SEQUENCE_ACTION = Object.freeze({
   CREATE:   'CREATE',

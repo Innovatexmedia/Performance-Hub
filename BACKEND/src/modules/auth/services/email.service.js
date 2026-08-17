@@ -154,6 +154,15 @@ export const sendWelcomeEmail = async ({ email, firstName }) => {
  * SOURCE: FRONTEND_SPEC §17 "Add user modal"
  * SOURCE: MASTER_SPEC §B17 Team — "Add user"
  */
+/**
+ * sendCustomEmail -- real, generic export for arbitrary subject/HTML
+ * content, reusing the exact same internal sendMail() every other real
+ * email in this file already uses. Added for the Nurture Engine's Email
+ * step, which sends tenant-authored content, not a fixed template like
+ * the 4 named functions below. Does not change any existing export.
+ */
+export const sendCustomEmail = async ({ to, subject, html }) => sendMail({ to, subject, html });
+
 export const sendTeamInvite = async ({ to, firstName, tenantName, role, token }) => {
   const link = `${CLIENT_URL()}/accept-invitation?token=${token}`;
   await sendMail({

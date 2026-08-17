@@ -39,6 +39,8 @@ import { whatsappSettingsService } from '../whatsapp/submodules/whatsappSettings
 import { adTrackingSettingsService } from '../attribution/adTrackingSettings.service.js';
 import { googleAdsSettingsService } from '../attribution/googleAdsSettings.service.js';
 import { calcomSettingsService } from '../bookings/calcomSettings.service.js';
+import ShopifySettings from '../shopify/shopifySettings.model.js';
+import { shopifySettingsService } from '../shopify/shopifySettings.service.js';
 import config from '../../config/config.js';
 
 // =============================================================================
@@ -57,6 +59,7 @@ const GOOGLE_ADS_KEY = 'google_ads';
 const GOOGLE_ADS_CAMPAIGNS_KEY = 'google_ads_campaigns';
 const CALCOM_KEY = 'calcom';
 const SENDGRID_KEY = 'sendgrid';
+const SHOPIFY_KEY = 'shopify';
 const TWILIO_WA_KEY = 'twilio_wa';
 const INTERAKT_KEY = 'interakt';
 
@@ -127,7 +130,7 @@ const overlayRealWhatsAppStatus = async (tenantId, userId, doc) => {
  * platform-level, not per-tenant (currently: SendGrid, used for every
  * workspace's password resets/invites/verification emails from one
  * shared account -- see src/config/config.js). No database lookup
- * needed here, unlike every per-tenant integration below -- this is
+ * needed here, unlike every per-tenant integration above -- this is
  * real, live server configuration, the same thing config.js's own
  * startup warning already checks.
  */
@@ -146,7 +149,21 @@ const overlayRealPlatformStatus = (doc) => {
 };
 
 const overlayRealAdTrackingStatus = async (tenantId, userId, doc) => {
-  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY)) return doc;
+  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY && doc.key !== SHOPIFY_KEY)) return doc;
+
+  if (doc.key === SHOPIFY_KEY) {
+    const settings = await ShopifySettings.findOne({ tenantId });
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings?.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings?.lastSyncedAt || null;
+    overlaid.config = {
+      shopDomain: settings?.shopDomain || '',
+      shopName: settings?.shopName || '',
+      lastSyncError: settings?.lastSyncError || null,
+      webhooksRegistered: settings ? Object.values(settings.webhookIds?.toObject ? settings.webhookIds.toObject() : settings.webhookIds || {}).filter(Boolean).length : 0,
+    };
+    return overlaid;
+  }
 
   if (doc.key === CALCOM_KEY) {
     const settings = await calcomSettingsService.getSettings({ tenantId, userId });
@@ -372,6 +389,16 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     throw AppError.badRequest(
       'SendGrid is configured at the platform level by your system administrator (via a server environment variable), not per workspace — there\u2019s nothing to connect or disconnect here. This card just shows whether it\u2019s genuinely set up.',
     );
+  }
+
+  if (existing.key === SHOPIFY_KEY) {
+    const settings = await ShopifySettings.findOne({ tenantId });
+    if (settings?.connected) {
+      await shopifySettingsService.disconnect({ tenantId, userId });
+    } else {
+      throw AppError.badRequest('Connect your real Shopify store first — this uses Shopify\u2019s real OAuth consent flow, requiring your shop domain and explicit approval.');
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
   if (existing.key === CALCOM_KEY) {

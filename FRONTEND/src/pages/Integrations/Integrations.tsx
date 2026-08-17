@@ -35,6 +35,9 @@ export function Integrations() {
     const connected = params.get('google_ads_connected');
     const customerIds = params.get('customer_ids');
     const oauthError = params.get('google_ads_error');
+    const shopifyConnected = params.get('shopify_connected');
+    const shopName = params.get('shop_name');
+    const shopifyError = params.get('shopify_error');
 
     if (connected && customerIds) {
       setGoogleAdsAccountPicker(customerIds.split(',').filter(Boolean));
@@ -42,7 +45,13 @@ export function Integrations() {
       toast.error('Google authorization failed', decodeURIComponent(oauthError));
     }
 
-    if (connected || oauthError) {
+    if (shopifyConnected) {
+      toast.success('Shopify connected', shopName ? `Connected to ${decodeURIComponent(shopName)}. Click Sync to pull real data.` : 'Real store connected.');
+    } else if (shopifyError) {
+      toast.error('Shopify authorization failed', decodeURIComponent(shopifyError));
+    }
+
+    if (connected || oauthError || shopifyConnected || shopifyError) {
       // Clean the URL so a refresh doesn't re-trigger this.
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -72,6 +81,7 @@ export function Integrations() {
   const [metaAdsForm, setMetaAdsForm] = useState({ pixelId: '', accessToken: '', testEventCode: '' });
   const [googleAdsForm, setGoogleAdsForm] = useState({ measurementId: '', apiSecret: '' });
   const [calcomForm, setCalcomForm] = useState({ apiKey: '' });
+  const [shopifyForm, setShopifyForm] = useState({ shopDomain: '' });
   const [logsFor, setLogsFor] = useState<Integration | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -91,7 +101,7 @@ export function Integrations() {
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom') && i.status === 'disconnected') {
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'shopify') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -126,6 +136,13 @@ export function Integrations() {
     if (i.key === 'calcom') {
       setCalcomForm({ apiKey: '' });
       return;
+    }
+    if (i.key === 'shopify') {
+      setShopifyForm({ shopDomain: typeof i.config.shopDomain === 'string' ? i.config.shopDomain : '' });
+      return;
+    }
+    if (i.key === 'sendgrid') {
+      return; // no form -- purely read-only real platform status, see JSX below
     }
     if (i.key === 'meta_cloud') {
       setWaForm({
@@ -177,6 +194,16 @@ export function Integrations() {
     if (!config) return;
     setSaving(true);
     try {
+      if (config.key === 'shopify') {
+        if (!shopifyForm.shopDomain.trim()) {
+          toast.error('Enter your Shopify store domain first');
+          setSaving(false);
+          return;
+        }
+        const authUrl = await integrationsApi.startShopifyAuth(shopifyForm.shopDomain.trim());
+        window.location.href = authUrl; // real Shopify consent screen -- full navigation
+        return;
+      }
       if (config.key === 'meta_cloud') {
         await updateConfig(config.id, {
           phoneNumberId: waForm.phoneNumberId,
@@ -286,7 +313,7 @@ export function Integrations() {
       {config && (
         <Modal
           open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={config.key === 'google_ads_campaigns'
+          footer={(config.key === 'google_ads_campaigns' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
             ? <Button variant="secondary" onClick={() => setConfig(null)}>Close</Button>
             : <><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
         >
@@ -341,6 +368,38 @@ export function Integrations() {
               {config.config.hasWebhook === false && !!config.config.hasApiKey && (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                   Connected, but the real webhook setup failed — new bookings won't sync automatically yet. Click Sync manually, or check that your server's API_BASE_URL is publicly reachable and reconnect.
+                </div>
+              )}
+            </div>
+          ) : config.key === 'shopify' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">You'll be redirected to your real Shopify store to approve access. New customers, checkouts, and orders will then sync automatically, with automatic WhatsApp cart-recovery and order-confirmation messages.</p>
+              {config.status === 'connected' ? (
+                <>
+                  <div className="rounded-lg border border-ink-100 p-3 text-xs"><p className="text-ink-400">Connected store</p><p className="font-medium text-ink-900">{String(config.config.shopName || config.config.shopDomain || '')}</p></div>
+                  {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"><strong>Real webhook issue:</strong> {config.config.lastSyncError}</div>
+                  )}
+                </>
+              ) : (
+                <Field label="Shop domain" hint="e.g. your-store.myshopify.com">
+                  <Input value={shopifyForm.shopDomain} onChange={(e) => setShopifyForm({ shopDomain: e.target.value })} placeholder="your-store.myshopify.com" />
+                </Field>
+              )}
+            </div>
+          ) : config.key === 'sendgrid' ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-xs text-ink-500">SendGrid is platform-level — configured once by whoever runs this server, shared across every workspace for password resets, team invites, and email verification. There's nothing to enter here.</p>
+              {config.status === 'connected' ? (
+                <>
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                    <p className="text-xs text-emerald-700">Real email delivery is active</p>
+                  </div>
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Sending as</p><p className="font-medium text-ink-900">{String(config.config.fromName || '')} &lt;{String(config.config.fromAddress || '')}&gt;</p></div>
+                </>
+              ) : (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  Not configured yet — emails are currently only logged to the server console, not actually sent. An administrator needs to set <code>SENDGRID_API_KEY</code> on the server.
                 </div>
               )}
             </div>

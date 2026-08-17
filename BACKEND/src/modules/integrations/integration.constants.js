@@ -38,6 +38,7 @@ export const INTEGRATION_CATEGORY = Object.freeze({
   EMAIL:     'Email',
   CALLS:     'Calls',
   CRM_ADS:   'CRM/Ads',
+  ECOMMERCE: 'Ecommerce',
 });
 export const INTEGRATION_CATEGORY_VALUES = Object.freeze(Object.values(INTEGRATION_CATEGORY));
 
@@ -96,9 +97,12 @@ export const INTEGRATION_CATALOG = Object.freeze([
 
   // CRM/Ads (2) - "coming soon"
   { key: 'salesforce', name: 'Salesforce', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Sync leads and deals with Salesforce CRM.', logo_color: '#00A1E0', available: false },
-  { key: 'google_ads',  name: 'Google Analytics 4 (GA4)', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real-time conversion tracking via GA4 Measurement Protocol — separate from Google Ads Campaigns below.', logo_color: '#E37400', available: true },
+  { key: 'google_ads',  name: 'Google Ads', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real-time conversion tracking via GA4 Measurement Protocol.', logo_color: '#4285F4', available: true },
   { key: 'meta_ads',    name: 'Meta Ads',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Server-side conversion tracking via Meta Conversions API.', logo_color: '#0866FF', available: true },
   { key: 'google_ads_campaigns', name: 'Google Ads Campaigns', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real campaign, spend, and conversion sync via the official Google Ads API.', logo_color: '#34A853', available: true },
+
+  // Ecommerce (1) — new category
+  { key: 'shopify', name: 'Shopify', category: INTEGRATION_CATEGORY.ECOMMERCE, description: 'Real customer/order sync, plus automatic WhatsApp cart recovery and order confirmations.', logo_color: '#95BF47', available: true },
 ]);
 
 // Pagination / search defaults

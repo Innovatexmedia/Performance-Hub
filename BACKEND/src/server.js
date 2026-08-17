@@ -17,7 +17,7 @@ import app       from './app.js';
 import config    from '../src/config/config.js';
 import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
-import { ensureSeeded as ensurePlansSeeded, backfillTenantPlans, migratePlansToInr, backfillAccounts } from './modules/plans/plan.service.js';
+import { startNurtureScheduler } from './modules/whatsapp/submodules/nurtures/nurtureScheduler.js';
 import dns from 'dns';
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 
@@ -28,32 +28,9 @@ const startServer = async () => {
     // Connect to MongoDB
     await connectDB();
 
-    // Idempotent -- only inserts the 6 default plans if they don't already
-    // exist (by key), so this is safe to run on every boot. See
-    // plan.service.js's DEFAULT_PLANS for what gets seeded.
-    await ensurePlansSeeded();
-
-    // One-time fix for the 6 default plans if they were seeded into this
-    // DB before the USD -> INR pricing switch. Safe on every boot -- only
-    // touches plans still on 'USD' (see plan.service.js for why that's a
-    // reliable signal), never touches a price a Super Admin has since
-    // deliberately edited.
-    await migratePlansToInr();
-
-    // Backfills planId for any tenant that existed before the Plan system
-    // did (e.g. this deployment's pre-existing workspaces) -- without
-    // this, those tenants' plan_details stays null forever and crashes
-    // Settings > Billing. Also idempotent/safe on every boot -- only
-    // touches tenants where planId is still null.
-    await backfillTenantPlans();
-
-    // Groups every tenant that existed before account-level billing did
-    // (accountId: null) into one shared Account per owner, seeded from
-    // whichever of their tenants was created first. Must run AFTER
-    // backfillTenantPlans so every tenant has a real planId to seed its
-    // new account from. Idempotent/safe on every boot -- only touches
-    // tenants where accountId is still null.
-    await backfillAccounts();
+    // Real nurture step scheduler -- needs a real DB connection first,
+    // since every tick queries NurtureEnrollment.
+    startNurtureScheduler();
 
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 InnovateX Revenue OS API`);

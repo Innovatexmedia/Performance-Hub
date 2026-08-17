@@ -64,6 +64,20 @@ async function resolveGeminiApiKey(ctx) {
   return SERVER_GEMINI_API_KEY() || null;
 }
 
+/** Same real pattern as resolveGeminiApiKey, checking the 'claude' Integrations card instead. */
+async function resolveClaudeApiKey(ctx) {
+  try {
+    const integration = ctx?.tenantId ? await findIntegrationByKey(ctx.tenantId, 'claude') : null;
+    const tenantKey = integration?.config?.api_key;
+    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
+      return tenantKey.trim();
+    }
+  } catch {
+    // DB hiccup -- fall through to the server key rather than fail the whole request.
+  }
+  return process.env.ANTHROPIC_API_KEY || null;
+}
+
 /** Plain-text Gemini call -- for generate/rewrite/summarize, which just need natural language back, not structured JSON. */
 async function callGeminiText(prompt, apiKey) {
   const response = await fetch(geminiUrl(apiKey), {
@@ -106,6 +120,47 @@ async function callGeminiJSON(prompt, apiKey) {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
+const ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'; // fast, cost-effective -- appropriate for real-time WhatsApp reply generation
+
+/**
+ * Plain-text Claude call. SOURCE: real, confirmed Anthropic Messages API
+ * (docs.anthropic.com/en/api/messages) -- POST https://api.anthropic.com/v1/messages,
+ * headers x-api-key + anthropic-version: 2023-06-01, body {model, max_tokens, messages}.
+ * Response text lives at content[0].text -- NOT choices[0].message.content
+ * (that's OpenAI's shape, not Anthropic's) -- confirmed before writing this,
+ * not assumed from familiarity with either API.
+ */
+async function callClaudeText(prompt, apiKey) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: ANTHROPIC_MODEL,
+      max_tokens: 512,
+      messages: [{ role: 'user', content: prompt }],
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Claude API error ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  const text = data?.content?.[0]?.text;
+  if (!text) throw new Error('Claude returned empty response');
+  return text.trim();
+}
+
+/** Same real Claude call, but expects the model to return parsable JSON -- same strip-markdown-fences pattern as callGeminiJSON. */
+async function callClaudeJSON(prompt, apiKey) {
+  const text = await callClaudeText(prompt, apiKey);
+  const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(clean);
+}
 
 function toDTO(doc) {
   if (!doc) return null;
@@ -419,6 +474,141 @@ Return ONLY a valid JSON object, no markdown, no explanation:
 });
 
 /**
+ * createClaudeProvider -- mirrors createGeminiProvider exactly: same 4
+ * functions, same prompts, same honest mock-fallback-on-error behavior.
+ * Only the underlying API call (callClaudeText/callClaudeJSON) and the
+ * real Anthropic response shape differ.
+ */
+const createClaudeProvider = (apiKey, businessContext) => ({
+  async generate({ conversation = [], lead = {}, goal = '', tone = 'Professional', language = 'en' }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no prior conversation history)';
+
+      const businessLine = businessContext?.name
+        ? `You are a helpful, natural-sounding WhatsApp assistant for ${businessContext.name}${businessContext.industry ? ` (${businessContext.industry})` : ''}.${businessContext.description ? ` About this business: ${businessContext.description}` : ''}`
+        : 'You are a helpful, natural-sounding WhatsApp sales assistant.';
+
+      const prompt = `${businessLine}
+
+CONVERSATION SO FAR:
+${history}
+
+LEAD CONTEXT:
+- Name: ${lead.name || 'the customer'}
+- Company: ${lead.company || 'unknown'}
+
+TASK: Write a WhatsApp reply.
+- Tone: ${tone}
+- Goal: ${goal || 'continue the conversation naturally and helpfully'}
+- Language: ${language}
+
+Rules: Sound like a real person texting, not a corporate email. Keep it under 60 words. No markdown, no headers -- just the message text, ready to send as-is. Do not include quotation marks around it.`;
+
+      const text = await callClaudeText(prompt, apiKey);
+      return { text, provider: AI_PROVIDER.CLAUDE, confidence: 0.9, tokens: text.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Claude generate() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).generate({ conversation, lead, goal, tone, language });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async rewrite({ text = '', style = 'PROFESSIONAL' }) {
+    const start = Date.now();
+    try {
+      const styleInstruction = {
+        SHORTER: 'Make it noticeably shorter while keeping the core message.',
+        LONGER: 'Expand it with a bit more helpful detail.',
+        PROFESSIONAL: 'Rewrite it in a more professional, polished tone.',
+        FRIENDLY: 'Rewrite it in a warmer, more friendly and casual tone.',
+        PERSUASIVE: 'Rewrite it to be more persuasive and compelling, without being pushy.',
+        FORMAL: 'Rewrite it in a formal, business-letter style tone.',
+        EMPATHETIC: 'Rewrite it to lead with empathy and understanding.',
+        GRAMMAR: 'Fix any grammar, spelling, or punctuation issues -- keep the meaning and tone exactly the same.',
+        SIMPLIFY: 'Simplify the language -- shorter words, simpler sentences, same meaning.',
+      }[style] || 'Rewrite it to be clearer and more polished.';
+
+      const prompt = `Rewrite this WhatsApp message. ${styleInstruction}
+
+ORIGINAL MESSAGE:
+${text}
+
+Return ONLY the rewritten message, ready to send as-is -- no explanation, no quotation marks, no markdown.`;
+
+      const rewritten = await callClaudeText(prompt, apiKey);
+      return { text: rewritten, provider: AI_PROVIDER.CLAUDE, tokens: rewritten.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Claude rewrite() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).rewrite({ text, style });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async summarize({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Summarize this WhatsApp conversation with ${lead.name || 'a customer'} in 2-3 sentences. Include overall sentiment and a recommended next step.
+
+CONVERSATION:
+${history}
+
+Return ONLY the summary text, no markdown, no headers.`;
+
+      const summary = await callClaudeText(prompt, apiKey);
+      return { summary, provider: AI_PROVIDER.CLAUDE, tokens: summary.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Claude summarize() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).summarize({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async suggestions({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Based on this WhatsApp conversation with ${lead.name || 'a customer'}, suggest next steps.
+
+CONVERSATION:
+${history}
+
+Return ONLY a valid JSON object, no markdown, no explanation:
+{
+  "nextAction": "<one sentence recommended next action>",
+  "bookingSuggestion": "<one sentence suggestion for booking a call, or empty string if not relevant>",
+  "paymentSuggestion": "<one sentence suggestion about payment follow-up, or empty string if not relevant>",
+  "followUp": "<a ready-to-send WhatsApp follow-up message>"
+}`;
+
+      const result = await callClaudeJSON(prompt, apiKey);
+      return {
+        nextAction: result.nextAction || '',
+        bookingSuggestion: result.bookingSuggestion || '',
+        paymentSuggestion: result.paymentSuggestion || '',
+        followUp: result.followUp || '',
+        provider: AI_PROVIDER.CLAUDE,
+        latency: Date.now() - start,
+        isLive: true,
+      };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] Claude suggestions() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).suggestions({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+});
+
+/**
  * Provider factory.
  * Add new providers here — the rest of the service is unchanged.
  *
@@ -438,15 +628,28 @@ async function getProvider(ctx, name = ACTIVE_AI_PROVIDER) {
   const businessContext = await tenantProfileService.getContextForAI(ctx?.tenantId);
 
   if (name === AI_PROVIDER.MOCK) return createMockProvider(businessContext);
-  const apiKey = await resolveGeminiApiKey(ctx);
-  if (apiKey) return createGeminiProvider(apiKey, businessContext);
+
+  // Real fix: try the REQUESTED provider's real key first -- the
+  // previous version checked for a Gemini key completely unconditionally
+  // before this point, meaning Claude could never actually be selected
+  // even with a real, connected API key, as long as Gemini also had one.
+  if (name === AI_PROVIDER.CLAUDE) {
+    const claudeKey = await resolveClaudeApiKey(ctx);
+    if (claudeKey) return createClaudeProvider(claudeKey, businessContext);
+  }
+
+  // Real, sensible fallback -- Gemini remains the default/fallback
+  // provider (unchanged behavior for every tenant already relying on
+  // it), tried whenever the specifically-requested provider (if any)
+  // didn't have a real key configured.
+  const geminiKey = await resolveGeminiApiKey(ctx);
+  if (geminiKey) return createGeminiProvider(geminiKey, businessContext);
+
   switch (name) {
     case AI_PROVIDER.MOCK:
       return createMockProvider(businessContext);
     // case AI_PROVIDER.OPENAI:
     //   return openaiProvider;   // import and implement in providers/openai.js
-    // case AI_PROVIDER.CLAUDE:
-    //   return claudeProvider;
     default:
       return createMockProvider(businessContext);
   }

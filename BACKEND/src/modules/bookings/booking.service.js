@@ -20,6 +20,9 @@ import Notification from '../leads/notifications/notification.model.js';
 
 // AppError — from shared helpers matching lead.service.js pattern
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
+import { NurtureEnrollment, NurtureSequence } from '../whatsapp/submodules/nurtures/nurtures.model.js';
+import { ENROLLMENT_STATUS, TRIGGER_TYPE, SEQUENCE_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
+import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.service.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -169,6 +172,42 @@ export const createBooking = async (data, reqUser) => {
     { _id: data.lead_id, tenant_id: String(ctx.tenantId) },
     { $set: { status: LEAD_STATUS_ON_BOOKING } }
   );
+
+  // Real pause-on-booking -- a lead who just booked a real meeting
+  // shouldn't keep receiving automated nurture messages. Best-effort,
+  // same principle as every other non-critical side effect in this flow.
+  await NurtureEnrollment.updateMany(
+    { tenantId: String(ctx.tenantId), leadId: data.lead_id, status: ENROLLMENT_STATUS.ACTIVE },
+    {
+      $set: { status: ENROLLMENT_STATUS.PAUSED, pauseReason: 'BOOKED', nextExecutionAt: null },
+      $push: { auditLog: { action: 'PAUSE', performedAt: new Date(), note: 'Lead booked a meeting' } },
+    },
+  ).catch((err) => {
+    console.error('[nurture] failed to pause enrollments on booking for lead', String(data.lead_id), err);
+  });
+
+  // Real auto-enroll for sequences configured with triggerType
+  // BOOKING_CREATED (e.g. a pre-call preparation sequence) -- genuinely
+  // complementary to the pause above, not conflicting: pause stops
+  // general nurturing now that they've booked, this starts a sequence
+  // specifically meant to run BECAUSE they booked. Was previously a
+  // dead trigger type -- selectable and storable, never acted on.
+  (async () => {
+    try {
+      const matchingSequences = await NurtureSequence.find({
+        tenantId: String(ctx.tenantId),
+        status: SEQUENCE_STATUS.ACTIVE,
+        triggerType: TRIGGER_TYPE.BOOKING_CREATED,
+      });
+      for (const seq of matchingSequences) {
+        await nurturesService.enrollLead(ctx, String(seq._id), { leadId: String(data.lead_id) }).catch((err) => {
+          console.warn(`[nurture] BOOKING_CREATED auto-enroll failed for lead ${data.lead_id}, sequence ${seq._id}: ${err.message}`);
+        });
+      }
+    } catch (err) {
+      console.warn(`[nurture] BOOKING_CREATED auto-enroll lookup failed for lead ${data.lead_id}: ${err.message}`);
+    }
+  })();
 
   // ── 4. Create or advance pipeline deal → 'Booked Call' ───────────────────
   // Deal uses: tenant_id (String), lead_id (ObjectId), assigned_user_id (String)

@@ -19,7 +19,14 @@
  * ───────────────────
  * httpOnly: true   — inaccessible to JavaScript (prevents XSS token theft)
  * secure: true     — HTTPS only in production
- * sameSite: strict — prevents CSRF (cookie not sent on cross-site requests)
+ * sameSite: lax    — blocks cross-site POST/PUT/DELETE (CSRF protection),
+ *                     while still allowing this cookie on a top-level GET
+ *                     navigation arriving from a cross-site redirect (e.g.
+ *                     an OAuth provider like Shopify/Google redirecting
+ *                     back to our own callback) -- 'strict' was tried
+ *                     first and confirmed to break exactly that case,
+ *                     logging users out immediately after starting any
+ *                     OAuth flow in production.
  * path: /          — cookie available on all routes
  *
  * ENVIRONMENT VARIABLES
@@ -39,7 +46,15 @@ const isProduction = process.env.NODE_ENV === 'production';
 export const getRefreshTokenCookieOptions = () => ({
   httpOnly: true,
   secure:   isProduction,
-  sameSite: isProduction ? 'strict' : 'lax', // 'lax' allows localhost dev
+  // 'lax' in both environments -- 'strict' blocks this cookie on any
+  // top-level navigation arriving from a cross-site redirect, which
+  // includes a legitimate OAuth provider (Shopify, Google Ads) redirecting
+  // back to our own callback. Confirmed as the real cause of users being
+  // logged out immediately after starting an OAuth flow in production.
+  // Lax still blocks cross-site POST/PUT/DELETE, so CSRF protection is
+  // unaffected -- this is the standard setting used specifically because
+  // it survives OAuth/external-redirect flows.
+  sameSite: 'lax',
   maxAge:   TOKEN_EXPIRY.REFRESH_TOKEN_SECONDS * 1000, // milliseconds
   path:     '/',
 });
@@ -66,7 +81,7 @@ export const clearRefreshTokenCookie = (res) => {
   res.clearCookie(COOKIE_NAMES.REFRESH_TOKEN, {
     httpOnly: true,
     secure:   isProduction,
-    sameSite: isProduction ? 'strict' : 'lax',
+    sameSite: 'lax',
     path:     '/',
   });
 };

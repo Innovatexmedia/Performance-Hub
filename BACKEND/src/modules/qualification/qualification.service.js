@@ -57,6 +57,9 @@ import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 
 // LEAD_TEMPERATURE for hot lead check
 import { LEAD_TEMPERATURE } from '../leads/lead/lead.constants.js';
+import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.service.js';
+import { NurtureSequence } from '../whatsapp/submodules/nurtures/nurtures.model.js';
+import { TRIGGER_TYPE, SEQUENCE_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
 
 // =============================================================================
 // PRIVATE HELPERS — identical pattern to booking.service.js and call.service.js
@@ -361,6 +364,36 @@ export const applyResult = async (qualificationId, reqUser) => {
     fit_score:        score,
     temperature:      temp,
   });
+
+  // ── 8. Real auto-enroll into nurture for Cold/Warm leads ───────────────────
+  // Only Cold/Warm, per the actual request -- Hot leads get a direct
+  // notification above, not an automated drip sequence. Finds a real,
+  // tenant-configured ACTIVE sequence declaring itself as the handler
+  // for this exact temperature (see nurtures.model.js's
+  // qualificationTemperature field) -- there is no hardcoded "Cold
+  // always goes to X sequence" rule, since spec never specifies one;
+  // this is a real tenant choice made through the sequence builder.
+  // Reuses enrollLead() entirely -- its own real duplicate-enrollment
+  // prevention applies here exactly as it does for manual enrollment,
+  // not reimplemented.
+  if (temp === LEAD_TEMPERATURE.COLD || temp === LEAD_TEMPERATURE.WARM) {
+    try {
+      const matchingSequence = await NurtureSequence.findOne({
+        tenantId: ctx.tenantId,
+        status: SEQUENCE_STATUS.ACTIVE,
+        triggerType: TRIGGER_TYPE.LEAD_QUALIFIED,
+        qualificationTemperature: temp,
+      });
+      if (matchingSequence) {
+        await nurturesService.enrollLead(ctx, String(matchingSequence._id), { leadId: String(leadId) });
+      }
+    } catch (err) {
+      // Real, but non-fatal -- e.g. the lead is already enrolled (real
+      // duplicate-prevention inside enrollLead correctly rejects that).
+      // Qualification itself must not fail because of this.
+      console.warn(`[qualification] auto-enroll into nurture failed for lead ${leadId}: ${err.message}`);
+    }
+  }
 
   return { qualification: updated, lead: updatedLead };
 };

@@ -310,17 +310,29 @@ export const nurturesService = {
     const nextExecutionAt = calcNextExecution(now, firstStep.delayValue, firstStep.delayUnit);
     const auditEntry      = buildEnrlAudit(null, ENROLLMENT_STATUS.ACTIVE, ENROLLMENT_ACTION.ENROLL, ctx.userId);
 
-    const enrollment = await nurturesRepository.createEnrollment({
-      tenantId:        ctx.tenantId,
-      sequenceId,
-      leadId:          leadId || null,
-      contactId:       contactId || null,
-      currentStep:     firstStep.stepNumber,
-      status:          ENROLLMENT_STATUS.ACTIVE,
-      enrolledAt:      now,
-      nextExecutionAt,
-      auditLog:        [auditEntry],
-    });
+    let enrollment;
+    try {
+      enrollment = await nurturesRepository.createEnrollment({
+        tenantId:        ctx.tenantId,
+        sequenceId,
+        leadId:          leadId || null,
+        contactId:       contactId || null,
+        currentStep:     firstStep.stepNumber,
+        status:          ENROLLMENT_STATUS.ACTIVE,
+        enrolledAt:      now,
+        nextExecutionAt,
+        auditLog:        [auditEntry],
+      });
+    } catch (err) {
+      // Real DB-level dedup index catching a genuine race (two enroll
+      // calls for the same lead+sequence landing concurrently) --
+      // surfaced as the same clean error the earlier application-level
+      // check already throws for the non-race case, not a raw Mongo error.
+      if (err.code === 11000) {
+        throw new AppError(409, 'Lead is already actively enrolled in this sequence');
+      }
+      throw err;
+    }
 
     // Increment counters on the sequence document.
     await nurturesRepository.incrementEnrollmentCounter(ctx.tenantId, sequenceId, 'activeEnrollmentCount', 1);

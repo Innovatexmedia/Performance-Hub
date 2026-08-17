@@ -21,6 +21,8 @@ import { conversationRepository } from '../conversations/conversation.repository
 // Delivery Logs tab stayed empty regardless of how many messages were sent.
 import { deliveryLogsService } from '../submodules/deliveryLogs/deliveryLogs.service.js';
 import { getProvider, resolveProvider } from '../providers/provider.factory.js';
+import { NurtureEnrollment } from '../submodules/nurtures/nurtures.model.js';
+import { ENROLLMENT_STATUS } from '../submodules/nurtures/nurtures.constants.js';
 import {
   MESSAGE_DIRECTION,
   MESSAGE_STATUS,
@@ -163,6 +165,20 @@ async function recordInboundMessage(ctx, conversation, { content, type, transpor
       lead_id: conversation.lead_id,
       metadata: { conversation_id: String(conversation._id), message_id: String(message._id) },
     }).catch(() => {});
+
+    // Real reply-based pause -- a genuine reply from the lead pauses
+    // every one of their active nurture enrollments, not just one.
+    // Best-effort: a failure here must never block recording the actual
+    // inbound message, same principle as the tracking-event call above.
+    await NurtureEnrollment.updateMany(
+      { tenantId: ctx.tenantId, leadId: conversation.lead_id, status: ENROLLMENT_STATUS.ACTIVE },
+      {
+        $set: { status: ENROLLMENT_STATUS.PAUSED, pauseReason: 'REPLY_DETECTED', nextExecutionAt: null },
+        $push: { auditLog: { action: 'PAUSE', performedAt: new Date(), note: 'Lead replied via WhatsApp' } },
+      },
+    ).catch((err) => {
+      console.error('[nurture] failed to pause enrollments on reply for lead', String(conversation.lead_id), err);
+    });
   }
 
   emitToTenant(ctx.tenantId, 'whatsapp:message', {

@@ -16,6 +16,9 @@ import { countPaymentsByLead }   from '../../payments/payment.service.js';
 // Booking integration — countBookingsByLead only, no circular dependency.
 // booking.service.js imports Lead directly (leadModel), NOT leadService.
 import { createTrackingEvent }         from '../../attribution/attribution.service.js';
+import { nurturesService } from '../../whatsapp/submodules/nurtures/nurtures.service.js';
+import { NurtureSequence } from '../../whatsapp/submodules/nurtures/nurtures.model.js';
+import { TRIGGER_TYPE, SEQUENCE_STATUS } from '../../whatsapp/submodules/nurtures/nurtures.constants.js';
 import { TRACKING_EVENT_TYPE }          from '../../attribution/attribution.constants.js';
 import { countBookingsByLead }        from '../../bookings/booking.service.js';
 import { countQualificationsByLead } from '../../qualification/qualification.service.js';
@@ -84,6 +87,30 @@ export const leadService = {
       medium:     lead.medium || null,
       campaign:   lead.campaign || null,
     }).catch(() => {});
+
+    // Real auto-enroll for sequences configured with triggerType
+    // LEAD_CREATED. Was previously a genuinely dead option -- selectable
+    // and storable in the sequence builder, but nothing anywhere ever
+    // acted on it. Best-effort: a failure here must never fail lead
+    // creation itself.
+    (async () => {
+      try {
+        const matchingSequences = await NurtureSequence.find({
+          tenantId: ctx.tenantId,
+          status: SEQUENCE_STATUS.ACTIVE,
+          triggerType: TRIGGER_TYPE.LEAD_CREATED,
+        });
+        for (const seq of matchingSequences) {
+          await nurturesService.enrollLead(ctx, String(seq._id), { leadId: String(lead._id) }).catch((err) => {
+            // Real, non-fatal -- e.g. already enrolled (real
+            // duplicate-prevention inside enrollLead correctly rejects that).
+            console.warn(`[nurture] LEAD_CREATED auto-enroll failed for lead ${lead._id}, sequence ${seq._id}: ${err.message}`);
+          });
+        }
+      } catch (err) {
+        console.warn(`[nurture] LEAD_CREATED auto-enroll lookup failed for lead ${lead._id}: ${err.message}`);
+      }
+    })();
 
     leadEvents.created({
       tenantId: ctx.tenantId,
