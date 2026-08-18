@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  MessageSquarePlus, Tag, UserPlus, StickyNote, Search, PanelRightClose, PanelRightOpen,
+  Tag, UserPlus, StickyNote, Search, PanelRightClose, PanelRightOpen,
   Megaphone, Link2, KanbanSquare, CreditCard, UserCog, Clock, Wallet, Phone,
 } from 'lucide-react';
 import { Avatar, Badge, StatusBadge, Button, Select, cn } from '@/components/ui';
@@ -15,22 +15,8 @@ import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
 import { useAuthStore } from '@/store/authStore';
 import { hasRoleOrPermission } from '@/lib/permissions';
 import { ApiError } from '@/lib/apiClient';
-import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { CONVERSATION_STATUS_VALUES } from '@/types/whatsapp';
 import type { ConversationStatus } from '@/types/whatsapp';
-
-// Canned replies for the "Simulate inbound" dev tool -- rotates instead of
-// repeating one fixed string, so clicking it more than once produces a
-// realistic-looking back-and-forth instead of the same bubble stacked
-// several times in a row.
-const SIMULATED_INBOUND_REPLIES = [
-  'Thanks for reaching out! Tell me more.',
-  'Sounds good, what are the next steps?',
-  'Can you share more details on pricing?',
-  'Got it, let me check and get back to you.',
-  'That works for me — can we schedule a call?',
-  "Thanks, I'll review this and reply soon.",
-];
 
 // Deterministic per-contact avatar color -- the same person resolves to the
 // same color everywhere their avatar appears (conversation list, chat
@@ -47,13 +33,6 @@ function avatarColor(key: string): string {
 
 export function Inbox() {
   const { members, nameById } = useTeamMembers();
-  // "Simulate inbound" fakes a customer reply -- only safe to show while
-  // the tenant is actually on Simulation Mode. If they've connected a
-  // real provider (Meta, Twilio, etc.), this button would silently inject
-  // a fake message into a real conversation with no way to tell it apart
-  // from an actual reply -- hiding it once real data is flowing.
-  const { settings: whatsappSettings } = useWhatsAppSettings();
-  const isSimulationMode = whatsappSettings?.provider === 'SIMULATION';
   const location = useLocation();
   const requestedConversationId = (location.state as { conversationId?: string } | null)?.conversationId ?? null;
 
@@ -82,7 +61,7 @@ export function Inbox() {
   const canAssign = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'assign_conversations');
   const {
     details, notes, loading: detailLoading, refetch: refetchDetails,
-    sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag,
+    sendMessage, assign, changeStatus, addNote, addTag, removeTag,
     loadOlder, loadingOlder,
   } = useConversationDetails(activeId);
 
@@ -198,21 +177,6 @@ export function Inbox() {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }
   }, [messages]);
-
-  const handleSimulateInbound = async () => {
-    try {
-      // Last inbound message content, so the next simulated reply avoids
-      // repeating it verbatim -- picks a different canned line whenever
-      // more than one option exists.
-      const lastInbound = [...messages].reverse().find((m) => m.direction === 'inbound')?.content;
-      const options = SIMULATED_INBOUND_REPLIES.filter((r) => r !== lastInbound);
-      const pool = options.length > 0 ? options : SIMULATED_INBOUND_REPLIES;
-      const text = pool[Math.floor(Math.random() * pool.length)];
-      await simulateInbound(text);
-    } catch (err) {
-      toast.error('Could not simulate message', err instanceof ApiError ? err.message : 'Please try again.');
-    }
-  };
 
   const handleAddTag = async () => {
     if (!tagInput.trim()) return;
@@ -356,9 +320,6 @@ export function Inbox() {
             </div>
 
             <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-2">
-              {isSimulationMode && (
-                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => void handleSimulateInbound()}><MessageSquarePlus size={14} /> Simulate inbound</Button>
-              )}
               <div className="ml-auto flex items-center gap-1">
                 <input value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void handleAddTag()} placeholder="add tag" className="w-24 rounded-md border border-ink-200 px-2 py-1 text-xs outline-none" />
                 <button onClick={() => void handleAddTag()} className="rounded-md p-1.5 text-ink-500 hover:bg-ink-100"><Tag size={14} /></button>
@@ -470,4 +431,4 @@ function Detail({ icon, label, value }: { icon?: React.ReactNode; label: string;
       <span className="truncate font-medium text-ink-800">{value}</span>
     </div>
   );
-} 
+}

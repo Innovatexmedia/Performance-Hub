@@ -62,6 +62,7 @@ interface AuthState {
 
   /** Mid-session workspace switch (Topbar dropdown) -- user is already authenticated, no selectionToken needed. */
   switchWorkspace: (tenantId: string) => Promise<AuthUser>;
+  createWorkspace: (name: string) => Promise<AuthUser>;
 
   /** Refreshes the workspaces list for the Topbar switcher -- safe to call any time while authenticated. */
   loadWorkspaces: () => Promise<void>;
@@ -179,6 +180,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       return user;
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Could not switch workspace. Please try again.';
+      set({ error: message });
+      throw err;
+    }
+  },
+
+  createWorkspace: async (name) => {
+    try {
+      const { user, accessToken } = await authApi.createWorkspace(name);
+      // Same reasoning as switchWorkspace -- this lands the user directly
+      // in the brand-new tenant's context, so the realtime socket needs
+      // to move rooms exactly the same way.
+      disconnectSocket();
+      set({ user, accessToken, status: 'authenticated', error: null });
+      connectSocketAndListen();
+      void get().loadWorkspaces(); // picks up the newly-created one for the switcher list
+      return user;
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not create workspace. Please try again.';
       set({ error: message });
       throw err;
     }

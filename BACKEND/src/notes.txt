@@ -1,0 +1,9 @@
+Existing subscription
+        ↓
+Cancel / modify existing subscription
+        ↓
+Create or update new subscription
+        ↓
+Verify payment
+        ↓   
+Activate new plan

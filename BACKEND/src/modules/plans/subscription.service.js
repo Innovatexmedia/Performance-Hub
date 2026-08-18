@@ -34,6 +34,7 @@ import Plan from './plan.model.js';
 import { getDefaultPlan, syncTenantsFromAccount } from './plan.service.js';
 import { getRazorpayClient, isRazorpayConfigured, verifyPaymentSignature } from '../../config/razorpay.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
+import { SUBSCRIPTION_STATUS } from '../auth/constants/auth.constants.js';
 
 const asRazorpayError = (err, fallback = 'Payment provider error') => {
   const description = err?.error?.description || err?.description;
@@ -101,6 +102,26 @@ export const createSubscriptionCheckout = async (tenantId, planId, reqUser) => {
   }
 
   const razorpay = getRazorpayClient();
+
+  // Cancel any existing ACTIVE subscription before starting a new one --
+  // without this, switching plans while already subscribed leaves the
+  // OLD Razorpay subscription running (still billing) at the same time
+  // as the new one, since account.razorpaySubscriptionId was previously
+  // just overwritten with no cleanup. cancel_at_cycle_end: false stops
+  // it immediately rather than letting one more cycle bill on the plan
+  // the customer is actively leaving.
+  if (account.razorpaySubscriptionId && account.razorpaySubscriptionStatus === 'active') {
+    try {
+      await razorpay.subscriptions.cancel(account.razorpaySubscriptionId, false);
+    } catch (err) {
+      // Already cancelled/expired on Razorpay's side (e.g. via a webhook
+      // we haven't processed yet) is fine to ignore -- anything else
+      // should stop the new checkout rather than risk two concurrent
+      // subscriptions both charging this account.
+      const alreadyGone = err?.error?.description && /already|cancel/i.test(err.error.description);
+      if (!alreadyGone) throw asRazorpayError(err, 'Could not cancel the existing subscription before switching plans');
+    }
+  }
 
   // TEMP DIAGNOSTIC -- remove once the account-level billing migration is
   // fully confirmed stable.
@@ -194,10 +215,22 @@ export const verifySubscriptionPayment = async (tenantId, payload, reqUser) => {
   return { success: true, plan: account.plan };
 };
 
+/**
+ * lockToDefaultPlan — the actual "lock" action. Reassigns the ACCOUNT
+ * back to the platform default plan, then propagates that to every
+ * tenant it covers. Called ONLY when a subscription that was genuinely
+ * ACTIVE lapses (halted/cancelled/expired) -- see the caller's check
+ * below. Explicitly overrides subscriptionStatus AFTER upgradePlan()
+ * (which unconditionally sets it to 'active', correct for a genuine
+ * paid activation, wrong here) -- otherwise a locked-back-to-default
+ * account would misleadingly show "active" in the UI at the same time
+ * razorpaySubscriptionStatus correctly says cancelled/halted/expired.
+ */
 const lockToDefaultPlan = async (account) => {
   const defaultPlan = await getDefaultPlan();
   if (defaultPlan) {
     await account.upgradePlan(defaultPlan._id);
+    account.subscriptionStatus = SUBSCRIPTION_STATUS.INACTIVE;
   }
 };
 
@@ -231,11 +264,25 @@ export const handleWebhookEvent = async (event) => {
     case 'subscription.halted':
     case 'subscription.cancelled':
     case 'subscription.expired': {
+      // Only actually LOCK the account (reassign every tenant back to
+      // the default plan) if a real, previously-ACTIVE subscription
+      // just lapsed -- a subscription that never successfully activated
+      // in the first place (e.g. the very first payment failed at the
+      // bank) has nothing to "lock back" from: the account's plan was
+      // never changed away from whatever it already was, so downgrading
+      // it here would incorrectly punish every workspace under this
+      // account for a checkout attempt that never actually unlocked
+      // anything to begin with.
+      const wasActive = account.razorpaySubscriptionStatus === 'active';
       account.razorpaySubscriptionStatus = event.event.split('.')[1];
       account.pendingPlanId = null;
-      await lockToDefaultPlan(account);
+      if (wasActive) {
+        await lockToDefaultPlan(account);
+      }
       await account.save();
-      await syncTenantsFromAccount(account._id);
+      if (wasActive) {
+        await syncTenantsFromAccount(account._id);
+      }
       break;
     }
     default:

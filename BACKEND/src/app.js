@@ -41,6 +41,8 @@ import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js
 import shopifyWebhookRoutes from './modules/shopify/shopifyWebhook.routes.js';
 import sendgridWebhookRoutes from './modules/email/sendgridWebhook.routes.js';
 import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
+import planRoutes from './modules/plans/plan.routes.js';
+import razorpayWebhookRoutes from './modules/plans/razorpayWebhook.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
 // analytics, settings) are composed entirely inside whatsappRouter --
@@ -166,6 +168,12 @@ app.use('/api/integrations/google-ads/oauth', googleAdsOAuthRoutes);
 app.use('/api/shopify/webhook', shopifyWebhookRoutes);
 app.use('/api/shopify/oauth', shopifyOAuthRoutes);
 app.use('/api/integrations', integrationRoutes);
+app.use('/api/plans', planRoutes);
+// Mounted at its own unauthenticated path -- Razorpay's own server calls
+// this, not a logged-in user (same precedent as the Cal.com/Shopify
+// webhooks above). Signature-verified inside the handler instead of
+// sitting behind `authenticate`.
+app.use('/api/webhooks/razorpay', razorpayWebhookRoutes);
 
 // NOTE: the WhatsApp submodules (contacts, templates, template-approval,
 // campaigns, broadcasts, nurtures, ai, automation-rules, delivery-logs,

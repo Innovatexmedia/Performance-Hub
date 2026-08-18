@@ -128,7 +128,14 @@ export const syncTenantsFromAccount = async (accountId, session = null) => {
   if (!account) return;
 
   await Tenant.updateMany(
-    { accountId: account._id },
+    {
+      accountId: account._id,
+      // Excludes tenants a Super Admin has manually suspended -- that's
+      // a platform-level enforcement action independent of billing, and
+      // this sync propagating the account's real subscriptionStatus
+      // (e.g. 'active') onto every tenant should NOT silently undo it.
+      subscriptionStatus: { $ne: 'suspended' },
+    },
     { $set: {
       plan: account.plan,
       planId: account.planId,
@@ -137,6 +144,12 @@ export const syncTenantsFromAccount = async (accountId, session = null) => {
       maxLeads: account.maxLeads,
       maxCampaigns: account.maxCampaigns,
       maxWorkspaces: account.maxWorkspaces,
+      // Propagated so Tenant.isAccessible() (which checks
+      // tenant.subscriptionStatus, not Account's) actually reflects
+      // reality -- previously an account could go 'inactive' while
+      // every tenant it covers still read 'active'/'trial' and stayed
+      // fully accessible, a real split-brain between the two.
+      subscriptionStatus: account.subscriptionStatus,
     } },
     { session },
   );
