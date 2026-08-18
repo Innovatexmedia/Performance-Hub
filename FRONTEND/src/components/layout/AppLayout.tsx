@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
 import { useAuthStore } from '@/store/authStore';
 import { cn } from '@/components/ui';
+import { recordRoute } from '@/pages/WhatsApp/workspace/lastRoute';
 
 export function AppLayout() {
   // Starts open on desktop-width viewports (matches today's look exactly),
@@ -16,6 +17,14 @@ export function AppLayout() {
   const status = useAuthStore((s) => s.status);
   const user = useAuthStore((s) => s.user);
   const location = useLocation();
+
+  // Tracks the last non-WhatsApp route so the WhatsApp workspace's exit
+  // flow can return the user to wherever they actually came from (see
+  // pages/WhatsApp/workspace/lastRoute.ts) instead of always going to
+  // /dashboard.
+  useEffect(() => {
+    recordRoute(location.pathname, location.search);
+  }, [location.pathname, location.search]);
 
   // 'idle'/'loading' = initialize() (see App.tsx) is still trying a silent
   // refresh via the httpOnly cookie -- wait rather than bounce to /login,

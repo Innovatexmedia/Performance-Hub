@@ -17,7 +17,7 @@ import type { BusinessType } from '@/lib/tenantProfileApi';
 import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
 import { useDb, useSettings, userName } from '@/store/hooks';
 import {
-  PageHeader, Card, CardHeader, Tabs, Table, Th, Td, Tr, Badge, StatusBadge, Button,
+  Card, CardHeader, Table, Th, Td, Tr, Badge, StatusBadge, Button,
   Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
   IconInput, SecretField, StatusStrip,
 } from '@/components/ui';
@@ -54,7 +54,7 @@ import { useConsent, useConsentStats } from '@/hooks/useConsent';
 import type { Consent, ConsentStatus, ConsentSource, CreateConsentInput } from '@/types/whatsappConsent';
 import { CONSENT_STATUS_VALUES, CONSENT_SOURCE_VALUES } from '@/types/whatsappConsent';
 
-const TABS = [
+export const TABS = [
   { id: 'inbox', label: 'Inbox' },
   { id: 'contacts', label: 'Contacts / Leads' },
   { id: 'groups', label: 'Groups' },
@@ -79,7 +79,7 @@ const PROVIDERS: WhatsAppProvider[] = ['Native Meta Cloud API', 'WATI', 'Interak
 
 // Consistent icon language for each tab's section header (image-2 style: a
 // tinted circle icon to the left of the title). Sizes match CardHeader's 16px.
-const TAB_ICONS: Record<string, React.ReactNode> = {
+export const TAB_ICONS: Record<string, React.ReactNode> = {
   inbox: <InboxIcon size={16} />,
   contacts: <Users size={16} />,
   groups: <Layers size={16} />,
@@ -96,8 +96,15 @@ const TAB_ICONS: Record<string, React.ReactNode> = {
   settings: <SettingsIcon size={16} />,
 };
 
-export function WhatsAppPanel() {
-  const [tab, setTab] = useState('inbox');
+/**
+ * Pure content renderer for the WhatsApp module -- the workspace shell
+ * (header, vertical nav, exit flow) lives in ./workspace/WhatsAppWorkspace,
+ * which owns the active tab and passes it down here. This component still
+ * owns every tab's actual logic/data/handlers; only the outer chrome
+ * (the old PageHeader + horizontal Tabs bar) moved out, in favor of the
+ * workspace's vertical navigation using the same TABS/TAB_ICONS above.
+ */
+export function WhatsAppPanel({ tab, onApprovalBadgeChange }: { tab: string; onApprovalBadgeChange?: (count: number) => void }) {
   const currentUser = useAuthStore((s) => s.user);
   const canApproveTemplates = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
@@ -142,22 +149,21 @@ export function WhatsAppPanel() {
     },
   });
 
-  const tabsWithBadges = TABS.map((t) =>
-    t.id === 'approval' && approvalBadgeCount > 0
-      ? { ...t, count: approvalBadgeCount, tone: 'red' as const }
-      : t,
-  );
+  // Reports the badge count up to the workspace's vertical nav (which
+  // renders the same red badge the old horizontal Tabs bar used to show
+  // on "Template Approval") instead of computing it a second time there.
+  useEffect(() => {
+    onApprovalBadgeChange?.(approvalBadgeCount);
+  }, [approvalBadgeCount, onApprovalBadgeChange]);
+
+  // Inbox owns its own full-height three-pane layout and internal
+  // scrolling (see Inbox.tsx), so it renders edge-to-edge with no extra
+  // padding/scroll container. Every other tab keeps the padded, natively
+  // page-scrolling layout it already had.
+  if (tab === 'inbox') return <Inbox />;
 
   return (
-    <div>
-      <PageHeader
-        title="WhatsApp Operating Panel"
-        description="Native InnovateX panel + multi-provider simulation — inbox, templates, campaigns & analytics."
-        breadcrumb={['Revenue', 'WhatsApp Panel']}
-      />
-      <div className="mb-4"><Tabs tabs={tabsWithBadges} active={tab} onChange={setTab} /></div>
-
-      {tab === 'inbox' && <Inbox />}
+    <div className="h-full overflow-y-auto p-4 lg:p-6">
       {tab === 'contacts' && <ContactsTab />}
       {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}
@@ -906,116 +912,122 @@ function ApprovalTab() {
   if (error) return <Card className="p-4 text-sm text-red-600">{error}</Card>;
 
   return (
-    <Card>
-      <CardHeader icon={TAB_ICONS.approval} title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
-      <div className="divide-y divide-ink-100">
-        {visibleTemplates.length === 0 && (
-          <p className="p-8 text-center text-sm text-ink-400">Nothing here right now — templates appear once someone submits them for review.</p>
-        )}
-        {visibleTemplates.map((t) => (
-          <div key={t.id} className="px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-semibold text-ink-900">{t.name} <span className="ml-1 text-xs font-normal text-ink-400">v{t.version}</span></p>
-                <p className="mt-0.5 text-sm text-ink-500">{t.category} · {t.languageCode}</p>
-              </div>
-              <Badge tone={APPROVAL_STATUS_TONE[t.approvalStatus] ?? 'gray'}>
-                {APPROVAL_STATUS_LABEL[t.approvalStatus] ?? t.approvalStatus}
-              </Badge>
-            </div>
+    <div>
+      <Card>
+        <CardHeader icon={TAB_ICONS.approval} title="Template Approval Workflow" subtitle="Internal review → Provider submission → Meta" />
+      </Card>
 
-            {t.approvalStatus === 'PROVIDER_REJECTED' && (t.providerRejectionReason || t.providerRejectionMessage) && (
-              <p className="mt-2 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-700">
-                Meta rejection{t.providerRejectionReason ? ` (${t.providerRejectionReason})` : ''}: {t.providerRejectionMessage || 'No message provided'}
-              </p>
-            )}
-            {t.approvalComments && (() => {
-              const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
-              const isRejection = lastAction === 'REJECT';
-              const isChangesRequested = lastAction === 'REQUEST_CHANGES' || t.approvalStatus === 'DRAFT';
-              const label = isRejection ? 'Rejection reason' : isChangesRequested ? 'Changes requested' : 'Comment';
-              return (
-                <div className={cn(
-                  'mt-3 rounded-xl border-l-4 px-3.5 py-2.5',
-                  isRejection ? 'border-red-500 bg-red-50' : isChangesRequested ? 'border-amber-500 bg-amber-50' : 'border-ink-300 bg-ink-50',
-                )}>
-                  <p className={cn(
-                    'text-xs font-semibold uppercase tracking-wide',
-                    isRejection ? 'text-red-700' : isChangesRequested ? 'text-amber-700' : 'text-ink-500',
-                  )}>{label}</p>
-                  <p className={cn('mt-0.5 text-sm', isRejection ? 'text-red-800' : isChangesRequested ? 'text-amber-900' : 'text-ink-700')}>{t.approvalComments}</p>
+      {visibleTemplates.length === 0 ? (
+        <div className="mt-4">
+          <EmptyState icon={<ShieldCheck size={22} />} title="Nothing here right now" description="Templates appear once someone submits them for review." />
+        </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          {visibleTemplates.map((t) => (
+            <Card key={t.id} className="flex h-full flex-col p-5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="font-semibold text-ink-900">{t.name} <span className="ml-1 text-xs font-normal text-ink-400">v{t.version}</span></p>
+                  <p className="mt-0.5 text-sm text-ink-500">{t.category} · {t.languageCode}</p>
                 </div>
-              );
-            })()}
-
-
-            {t.transitionHistory.length > 0 ? (
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-400">
-                <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600">{t.transitionHistory[0].fromStatus ?? 'DRAFT'}</span>
-                {t.transitionHistory.map((h, i) => (
-                  <span key={i} className="flex items-center gap-1">
-                    <span>→</span>
-                    <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600" title={h.action}>{h.toStatus}</span>
-                  </span>
-                ))}
+                <Badge tone={APPROVAL_STATUS_TONE[t.approvalStatus] ?? 'gray'}>
+                  {APPROVAL_STATUS_LABEL[t.approvalStatus] ?? t.approvalStatus}
+                </Badge>
               </div>
-            ) : (
-              <p className="mt-3 text-xs text-ink-400">No transitions yet — still in Draft.</p>
-            )}
 
-            <div className="mt-3 flex flex-wrap gap-2">
-              {t.approvalStatus === 'DRAFT' && (
-                <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitForReview(t)}>
-                  <Send size={13} /> Submit for Internal Review
-                </Button>
+              {t.approvalStatus === 'PROVIDER_REJECTED' && (t.providerRejectionReason || t.providerRejectionMessage) && (
+                <p className="mt-3 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-700">
+                  Meta rejection{t.providerRejectionReason ? ` (${t.providerRejectionReason})` : ''}: {t.providerRejectionMessage || 'No message provided'}
+                </p>
               )}
-              {t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW' && (
-                <>
-                  {canApprove && !isSelfSubmission(t) && (
-                    <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
-                      <CheckCircle2 size={13} /> Approve internally
-                    </Button>
-                  )}
-                  {canRequestChangesOrReject && (
-                    <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'requestChanges' })}>
-                      Request changes
-                    </Button>
-                  )}
-                  {canRequestChangesOrReject && (
-                    <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'reject' })}>
-                      <XCircle size={13} /> Reject
-                    </Button>
-                  )}
-                  {canApprove && isSelfSubmission(t) && (
-                    <p className="text-xs text-amber-600">You submitted this yourself — someone else needs to approve it (you can still request changes or reject).</p>
-                  )}
-                  {!canApprove && !canRequestChangesOrReject && (
-                    <p className="text-xs text-ink-400">Awaiting approval from someone with template-approval rights.</p>
-                  )}
-                </>
+              {t.approvalComments && (() => {
+                const lastAction = t.transitionHistory?.[t.transitionHistory.length - 1]?.action;
+                const isRejection = lastAction === 'REJECT';
+                const isChangesRequested = lastAction === 'REQUEST_CHANGES' || t.approvalStatus === 'DRAFT';
+                const label = isRejection ? 'Rejection reason' : isChangesRequested ? 'Changes requested' : 'Comment';
+                return (
+                  <div className={cn(
+                    'mt-3 rounded-xl border-l-4 px-3.5 py-2.5',
+                    isRejection ? 'border-red-500 bg-red-50' : isChangesRequested ? 'border-amber-500 bg-amber-50' : 'border-ink-300 bg-ink-50',
+                  )}>
+                    <p className={cn(
+                      'text-xs font-semibold uppercase tracking-wide',
+                      isRejection ? 'text-red-700' : isChangesRequested ? 'text-amber-700' : 'text-ink-500',
+                    )}>{label}</p>
+                    <p className={cn('mt-0.5 text-sm', isRejection ? 'text-red-800' : isChangesRequested ? 'text-amber-900' : 'text-ink-700')}>{t.approvalComments}</p>
+                  </div>
+                );
+              })()}
+
+              {t.transitionHistory.length > 0 ? (
+                <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[11px] text-ink-400">
+                  <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600">{t.transitionHistory[0].fromStatus ?? 'DRAFT'}</span>
+                  {t.transitionHistory.map((h, i) => (
+                    <span key={i} className="flex items-center gap-1.5">
+                      <span>→</span>
+                      <span className="rounded bg-ink-100 px-1.5 py-0.5 font-medium text-ink-600" title={h.action}>{h.toStatus}</span>
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-ink-400">No transitions yet — still in Draft.</p>
               )}
-              {t.approvalStatus === 'INTERNALLY_APPROVED' && (
-                canApprove ? (
-                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
-                    <Send size={13} /> Submit to provider
+
+              <div className="mt-auto flex flex-wrap gap-2 border-t border-ink-100 pt-4">
+                {t.approvalStatus === 'DRAFT' && (
+                  <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitForReview(t)}>
+                    <Send size={13} /> Submit for Internal Review
                   </Button>
-                ) : (
-                  <p className="text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights.</p>
-                )
-              )}
-              {t.approvalStatus === 'SUBMITTED_TO_PROVIDER' && (
-                <p className="text-xs text-ink-400">Awaiting Meta's review — this updates automatically via webhook.</p>
-              )}
-              {t.approvalStatus === 'PROVIDER_APPROVED' && (
-                <p className="text-xs text-emerald-600">Approved by Meta — usable for sending once activated in the Templates tab.</p>
-              )}
-              {(t.approvalStatus === 'REJECTED' || t.approvalStatus === 'DISABLED') && (
-                <p className="text-xs text-ink-400">This is a terminal state — duplicate the template to start over.</p>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+                )}
+                {t.approvalStatus === 'SUBMITTED_FOR_INTERNAL_REVIEW' && (
+                  <>
+                    {canApprove && !isSelfSubmission(t) && (
+                      <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleApprove(t)}>
+                        <CheckCircle2 size={13} /> Approve internally
+                      </Button>
+                    )}
+                    {canRequestChangesOrReject && (
+                      <Button variant="secondary" className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'requestChanges' })}>
+                        Request changes
+                      </Button>
+                    )}
+                    {canRequestChangesOrReject && (
+                      <Button variant="secondary" className="border-red-200 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50" disabled={busyId === t.id} onClick={() => setPromptTarget({ template: t, kind: 'reject' })}>
+                        <XCircle size={13} /> Reject
+                      </Button>
+                    )}
+                    {canApprove && isSelfSubmission(t) && (
+                      <p className="text-xs text-amber-600">You submitted this yourself — someone else needs to approve it (you can still request changes or reject).</p>
+                    )}
+                    {!canApprove && !canRequestChangesOrReject && (
+                      <p className="text-xs text-ink-400">Awaiting approval from someone with template-approval rights.</p>
+                    )}
+                  </>
+                )}
+                {t.approvalStatus === 'INTERNALLY_APPROVED' && (
+                  canApprove ? (
+                    <Button className="px-3 py-1.5 text-xs" disabled={busyId === t.id} onClick={() => void handleSubmitToProvider(t)}>
+                      <Send size={13} /> Submit to provider
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights.</p>
+                  )
+                )}
+                {t.approvalStatus === 'SUBMITTED_TO_PROVIDER' && (
+                  <p className="text-xs text-ink-400">Awaiting Meta's review — this updates automatically via webhook.</p>
+                )}
+                {t.approvalStatus === 'PROVIDER_APPROVED' && (
+                  <p className="text-xs text-emerald-600">Approved by Meta — usable for sending once activated in the Templates tab.</p>
+                )}
+                {(t.approvalStatus === 'REJECTED' || t.approvalStatus === 'DISABLED') && (
+                  <p className="text-xs text-ink-400">This is a terminal state — duplicate the template to start over.</p>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
       <PromptDialog
         open={!!promptTarget}
         onClose={() => setPromptTarget(null)}
@@ -1026,7 +1038,7 @@ function ApprovalTab() {
         destructive={promptTarget?.kind === 'reject'}
         onConfirm={submitPrompt}
       />
-    </Card>
+    </div>
   );
 }
 

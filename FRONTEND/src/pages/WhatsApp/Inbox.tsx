@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { MessageSquarePlus, Tag, UserPlus, StickyNote, Search } from 'lucide-react';
+import {
+  MessageSquarePlus, Tag, UserPlus, StickyNote, Search, PanelRightClose, PanelRightOpen,
+  Megaphone, Link2, KanbanSquare, CreditCard, UserCog, Clock, Wallet, Phone,
+} from 'lucide-react';
 import { Avatar, Badge, StatusBadge, Button, Select, cn } from '@/components/ui';
 import { Composer } from './Composer';
 import { formatCurrency, timeAgo } from '@/utils/formatters';
@@ -12,11 +15,45 @@ import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
 import { useAuthStore } from '@/store/authStore';
 import { hasRoleOrPermission } from '@/lib/permissions';
 import { ApiError } from '@/lib/apiClient';
+import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { CONVERSATION_STATUS_VALUES } from '@/types/whatsapp';
 import type { ConversationStatus } from '@/types/whatsapp';
 
+// Canned replies for the "Simulate inbound" dev tool -- rotates instead of
+// repeating one fixed string, so clicking it more than once produces a
+// realistic-looking back-and-forth instead of the same bubble stacked
+// several times in a row.
+const SIMULATED_INBOUND_REPLIES = [
+  'Thanks for reaching out! Tell me more.',
+  'Sounds good, what are the next steps?',
+  'Can you share more details on pricing?',
+  'Got it, let me check and get back to you.',
+  'That works for me — can we schedule a call?',
+  "Thanks, I'll review this and reply soon.",
+];
+
+// Deterministic per-contact avatar color -- the same person resolves to the
+// same color everywhere their avatar appears (conversation list, chat
+// header, lead panel) instead of every contact defaulting to the same
+// hardcoded color regardless of who they are. Keyed off phone number
+// (always present, unlike contact_name) so it stays consistent even for
+// leads with no name on file yet.
+const AVATAR_PALETTE = ['#6366f1', '#22c55e', '#f97316', '#ec4899', '#0ea5e9', '#a855f7', '#14b8a6', '#eab308'];
+function avatarColor(key: string): string {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
+}
+
 export function Inbox() {
   const { members, nameById } = useTeamMembers();
+  // "Simulate inbound" fakes a customer reply -- only safe to show while
+  // the tenant is actually on Simulation Mode. If they've connected a
+  // real provider (Meta, Twilio, etc.), this button would silently inject
+  // a fake message into a real conversation with no way to tell it apart
+  // from an actual reply -- hiding it once real data is flowing.
+  const { settings: whatsappSettings } = useWhatsAppSettings();
+  const isSimulationMode = whatsappSettings?.provider === 'SIMULATION';
   const location = useLocation();
   const requestedConversationId = (location.state as { conversationId?: string } | null)?.conversationId ?? null;
 
@@ -26,6 +63,10 @@ export function Inbox() {
   const [tagInput, setTagInput] = useState('');
   const [showNote, setShowNote] = useState(false);
   const [noteText, setNoteText] = useState('');
+  // Right-hand lead/deal context panel is toggleable -- collapsing it lets
+  // the conversation itself use the freed-up width, useful on smaller
+  // laptop screens or when someone just wants to focus on the thread.
+  const [showContext, setShowContext] = useState(true);
 
   const listQuery = useMemo(() => ({
     search: q || undefined,
@@ -160,7 +201,14 @@ export function Inbox() {
 
   const handleSimulateInbound = async () => {
     try {
-      await simulateInbound('Thanks for reaching out! Tell me more.');
+      // Last inbound message content, so the next simulated reply avoids
+      // repeating it verbatim -- picks a different canned line whenever
+      // more than one option exists.
+      const lastInbound = [...messages].reverse().find((m) => m.direction === 'inbound')?.content;
+      const options = SIMULATED_INBOUND_REPLIES.filter((r) => r !== lastInbound);
+      const pool = options.length > 0 ? options : SIMULATED_INBOUND_REPLIES;
+      const text = pool[Math.floor(Math.random() * pool.length)];
+      await simulateInbound(text);
     } catch (err) {
       toast.error('Could not simulate message', err instanceof ApiError ? err.message : 'Please try again.');
     }
@@ -188,9 +236,9 @@ export function Inbox() {
   };
 
   return (
-    <div className="grid grid-cols-12 overflow-hidden rounded-xl border border-ink-200 bg-white">
+    <div className="grid h-full grid-cols-12 overflow-hidden bg-white">
       {/* Conversation list */}
-      <div className="col-span-12 flex flex-col border-r border-ink-200 md:col-span-4 lg:col-span-3">
+      <div className="col-span-12 flex h-full min-h-0 flex-col border-r border-ink-200 md:col-span-4 lg:col-span-3">
         <div className="space-y-2 border-b border-ink-100 p-3">
           <div className="relative">
             <Search size={15} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-400" />
@@ -201,13 +249,13 @@ export function Inbox() {
             {CONVERSATION_STATUS_VALUES.map((s) => <option key={s}>{s}</option>)}
           </Select>
         </div>
-        <div className="max-h-[50vh] overflow-y-auto">
+        <div className="min-h-0 flex-1 overflow-y-auto">
           {listError && <p className="p-4 text-center text-xs text-red-600">{listError}</p>}
           {listLoading && conversations.length === 0 && <p className="p-4 text-center text-xs text-ink-400">Loading…</p>}
           {!listLoading && conversations.length === 0 && !listError && <p className="p-4 text-center text-xs text-ink-400">No conversations found.</p>}
           {conversations.map((c) => (
             <button key={c.id} onClick={() => setActiveId(c.id)} className={cn('flex w-full gap-2.5 border-b border-ink-50 px-3 py-3 text-left hover:bg-ink-50', c.id === activeId && 'bg-brand-50/50')}>
-              <Avatar name={c.contact_name || c.phone} color="#22c55e" size={38} />
+              <Avatar name={c.contact_name || c.phone} color={avatarColor(c.phone)} size={38} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center justify-between gap-1">
                   <p className="truncate text-sm font-semibold text-ink-900">{c.contact_name || c.phone}</p>
@@ -225,14 +273,14 @@ export function Inbox() {
       </div>
 
       {/* Chat thread */}
-      <div className="col-span-12 flex flex-col md:col-span-8 lg:col-span-6">
+      <div className={cn('col-span-12 flex h-full min-h-0 flex-col md:col-span-8', showContext ? 'lg:col-span-6' : 'lg:col-span-9')}>
         {detailLoading && !active ? (
           <div className="flex flex-1 items-center justify-center text-sm text-ink-400">Loading conversation…</div>
         ) : active ? (
           <>
             <div className="flex items-center justify-between border-b border-ink-200 px-4 py-3">
               <div className="flex items-center gap-2.5">
-                <Avatar name={active.contact_name || active.phone} color="#22c55e" size={36} />
+                <Avatar name={active.contact_name || active.phone} color={avatarColor(active.phone)} size={36} />
                 <div>
                   <p className="text-sm font-semibold text-ink-900">{active.contact_name || 'Unknown contact'}</p>
                   <p className="text-xs text-ink-500">{active.phone}</p>
@@ -252,32 +300,65 @@ export function Inbox() {
                     {active.assigned_user_id ? nameById(active.assigned_user_id) : 'Unassigned'}
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={() => setShowContext((v) => !v)}
+                  title={showContext ? 'Hide contact details' : 'Show contact details'}
+                  aria-label={showContext ? 'Hide contact details' : 'Show contact details'}
+                  aria-pressed={showContext}
+                  className="hidden rounded-lg border border-ink-200 p-1.5 text-ink-500 hover:bg-ink-50 hover:text-ink-800 lg:inline-flex"
+                >
+                  {showContext ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+                </button>
               </div>
             </div>
 
-            <div ref={containerRef} onScroll={handleScroll} className="max-h-[50vh] space-y-2 overflow-y-auto bg-ink-50/60 p-4" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)', backgroundSize: '24px 24px' }}>
+            <div ref={containerRef} onScroll={handleScroll} className="min-h-0 flex-1 overflow-y-auto bg-ink-50/60 p-4" style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, #e2e8f0 1px, transparent 0)', backgroundSize: '24px 24px' }}>
               {loadingOlder && (
                 <p className="py-2 text-center text-xs text-ink-400">Loading older messages…</p>
               )}
-              {messages.map((m) => (
-                <div key={m.id} className={cn('flex', m.direction === 'outbound' ? 'justify-end' : 'justify-start')}>
-                  <div className={cn(
-                    'max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-sm',
-                    m.status === 'Blocked by Opt-Out' ? 'rounded-br-sm bg-red-50 text-red-700 ring-1 ring-red-200' :
-                    m.direction === 'outbound' ? 'rounded-br-sm bg-brand-600 text-white' : 'rounded-bl-sm bg-white text-ink-800',
-                  )}>
-                    <p>{m.content}</p>
-                    <p className={cn('mt-0.5 text-[10px]', m.status === 'Blocked by Opt-Out' ? 'text-red-500' : m.direction === 'outbound' ? 'text-brand-200' : 'text-ink-400')}>
-                      {timeAgo(m.created_at)} · {m.status}
-                    </p>
+              {messages.map((m, i) => {
+                // Groups consecutive messages from the same sender the way
+                // a real chat app does: tighter spacing between them, a
+                // "connected" corner where they meet instead of every
+                // bubble looking like a standalone card, and the
+                // timestamp only shown on the LAST message of a run
+                // instead of repeated on every single bubble (which is
+                // what made a run of several same-sender messages read
+                // like a duplicated list rather than a conversation).
+                const prev = messages[i - 1];
+                const next = messages[i + 1];
+                const groupedWithPrev = prev?.direction === m.direction;
+                const groupedWithNext = next?.direction === m.direction;
+                const isOutbound = m.direction === 'outbound';
+                const isBlocked = m.status === 'Blocked by Opt-Out';
+
+                return (
+                  <div key={m.id} className={cn('flex', groupedWithPrev ? 'mt-0.5' : 'mt-3', isOutbound ? 'justify-end' : 'justify-start')}>
+                    <div className={cn(
+                      'max-w-[75%] rounded-2xl px-3.5 py-2 text-sm shadow-sm',
+                      isOutbound
+                        ? cn(groupedWithPrev && 'rounded-tr-md', groupedWithNext ? 'rounded-br-md' : 'rounded-br-sm')
+                        : cn(groupedWithPrev && 'rounded-tl-md', groupedWithNext ? 'rounded-bl-md' : 'rounded-bl-sm'),
+                      isBlocked ? 'bg-red-50 text-red-700 ring-1 ring-red-200' : isOutbound ? 'bg-brand-600 text-white' : 'bg-white text-ink-800',
+                    )}>
+                      <p>{m.content}</p>
+                      {!groupedWithNext && (
+                        <p className={cn('mt-0.5 text-[10px]', isBlocked ? 'text-red-500' : isOutbound ? 'text-brand-200' : 'text-ink-400')}>
+                          {timeAgo(m.created_at)} · {m.status}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {messages.length === 0 && <p className="py-8 text-center text-sm text-ink-400">No messages yet — send the first one below.</p>}
             </div>
 
             <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-2">
-              <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => void handleSimulateInbound()}><MessageSquarePlus size={14} /> Simulate inbound</Button>
+              {isSimulationMode && (
+                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => void handleSimulateInbound()}><MessageSquarePlus size={14} /> Simulate inbound</Button>
+              )}
               <div className="ml-auto flex items-center gap-1">
                 <input value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void handleAddTag()} placeholder="add tag" className="w-24 rounded-md border border-ink-200 px-2 py-1 text-xs outline-none" />
                 <button onClick={() => void handleAddTag()} className="rounded-md p-1.5 text-ink-500 hover:bg-ink-100"><Tag size={14} /></button>
@@ -298,61 +379,95 @@ export function Inbox() {
       </div>
 
       {/* Lead context panel */}
-      <div className="hidden max-h-[75vh] flex-col gap-3 overflow-y-auto border-l border-ink-200 p-4 lg:col-span-3 lg:flex">
-        {active && leadContext ? (
-          <>
-            <div className="text-center">
-              <Avatar name={leadContext.name} color="#6366f1" size={56} />
-              <p className="mt-2 font-semibold text-ink-900">{leadContext.name}</p>
-              <p className="text-xs text-ink-500">{leadContext.company}</p>
-            </div>
-            <div className="flex flex-wrap justify-center gap-1.5">
-              <Badge tone={leadContext.lead_temperature === 'Hot' ? 'red' : leadContext.lead_temperature === 'Warm' ? 'amber' : 'gray'}>{leadContext.lead_temperature}</Badge>
-              <Badge tone="blue">Score {leadContext.qualification_score}</Badge>
-            </div>
-            <Detail label="Source" value={leadContext.source} />
-            <Detail label="UTM" value={`${leadContext.utm_source || '—'} / ${leadContext.utm_medium || '—'}`} />
-            <Detail label="Pipeline stage" value={leadContext.pipeline_stage?.replace(/_/g, ' ') || 'No deal'} />
-            <Detail label="Payment" value={leadContext.payment_status || 'None'} />
-            <Detail label="Owner" value={nameById(active.assigned_user_id)} />
-            <Detail label="Last contacted" value={timeAgo(leadContext.last_contacted_at)} />
-            <Detail label="Deal value" value={formatCurrency(leadContext.value)} />
-            <div>
-              <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-ink-400">Response timer</p>
-              <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm font-medium text-amber-700">⏱ {active.unread_count > 0 ? 'Reply pending' : 'Up to date'}</div>
-            </div>
-            {active.tags.length > 0 && (
-              <div>
-                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-ink-400">Tags</p>
-                <div className="flex flex-wrap gap-1">
-                  {active.tags.map((t, i) => (
-                    <button key={i} onClick={() => void removeTag(t)} title="Remove tag">
-                      <Badge tone="teal">{t} ×</Badge>
-                    </button>
-                  ))}
+      {showContext && (
+        <div className="hidden h-full min-h-0 flex-col overflow-y-auto border-l border-ink-100 lg:col-span-3 lg:flex">
+          {active && leadContext ? (
+            <>
+              {/* Identity header */}
+              <div className="flex flex-col items-center gap-2 border-b border-ink-100 bg-gradient-to-b from-brand-50/60 to-transparent px-5 py-6 text-center">
+                <Avatar name={leadContext.name} color={avatarColor(active.phone)} size={60} />
+                <div>
+                  <p className="font-semibold text-ink-900">{leadContext.name}</p>
+                  {leadContext.company && <p className="text-xs text-ink-500">{leadContext.company}</p>}
+                  {active.phone && (
+                    <p className="mt-0.5 flex items-center justify-center gap-1 text-xs text-ink-400">
+                      <Phone size={11} /> {active.phone}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap justify-center gap-1.5">
+                  <Badge tone={leadContext.lead_temperature === 'Hot' ? 'red' : leadContext.lead_temperature === 'Warm' ? 'amber' : 'gray'}>{leadContext.lead_temperature}</Badge>
+                  <Badge tone="blue">Score {leadContext.qualification_score}</Badge>
                 </div>
               </div>
-            )}
-            {notes.length > 0 && (
-              <div>
-                <p className="mb-1 text-[11px] font-bold uppercase tracking-wide text-ink-400">Internal notes</p>
-                {notes.map((n) => <p key={n.id} className="rounded-lg bg-ink-50 px-2.5 py-1.5 text-xs text-ink-600">{n.body}</p>)}
+
+              <div className="flex-1 divide-y divide-ink-100 px-5">
+                <Section title="Lead">
+                  <Detail icon={<Megaphone size={13} />} label="Source" value={leadContext.source} />
+                  <Detail icon={<Link2 size={13} />} label="UTM" value={`${leadContext.utm_source || '—'} / ${leadContext.utm_medium || '—'}`} />
+                  <Detail icon={<KanbanSquare size={13} />} label="Pipeline stage" value={leadContext.pipeline_stage?.replace(/_/g, ' ') || 'No deal'} />
+                  <Detail icon={<UserCog size={13} />} label="Owner" value={nameById(active.assigned_user_id)} />
+                  <Detail icon={<Clock size={13} />} label="Last contacted" value={timeAgo(leadContext.last_contacted_at)} />
+                </Section>
+
+                <Section title="Deal">
+                  <Detail icon={<CreditCard size={13} />} label="Payment" value={leadContext.payment_status || 'None'} />
+                  <Detail icon={<Wallet size={13} />} label="Deal value" value={formatCurrency(leadContext.value)} />
+                </Section>
+
+                <Section title="Response timer">
+                  <div className={cn(
+                    'flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium',
+                    active.unread_count > 0 ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700',
+                  )}>
+                    <Clock size={14} /> {active.unread_count > 0 ? 'Reply pending' : 'Up to date'}
+                  </div>
+                </Section>
+
+                {active.tags.length > 0 && (
+                  <Section title="Tags">
+                    <div className="flex flex-wrap gap-1.5">
+                      {active.tags.map((t, i) => (
+                        <button key={i} onClick={() => void removeTag(t)} title="Remove tag">
+                          <Badge tone="teal">{t} ×</Badge>
+                        </button>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+
+                {notes.length > 0 && (
+                  <Section title="Internal notes">
+                    <div className="space-y-1.5">
+                      {notes.map((n) => <p key={n.id} className="rounded-lg bg-ink-50 px-2.5 py-1.5 text-xs leading-relaxed text-ink-600">{n.body}</p>)}
+                    </div>
+                  </Section>
+                )}
               </div>
-            )}
-          </>
-        ) : (
-          <div className="flex flex-1 items-center justify-center text-center text-sm text-ink-400"><UserPlus size={20} /></div>
-        )}
-      </div>
+            </>
+          ) : (
+            <div className="flex flex-1 items-center justify-center text-center text-sm text-ink-400"><UserPlus size={20} /></div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function Detail({ label, value }: { label: string; value: string }) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center justify-between border-b border-ink-50 pb-1.5 text-sm">
-      <span className="text-ink-400">{label}</span>
-      <span className="font-medium text-ink-800">{value}</span>
+    <div className="py-4 first:pt-4 last:pb-4">
+      <p className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-400">{title}</p>
+      <div className="space-y-2">{children}</div>
     </div>
   );
 }
+
+function Detail({ icon, label, value }: { icon?: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-sm">
+      <span className="flex items-center gap-1.5 text-ink-400">{icon}{label}</span>
+      <span className="truncate font-medium text-ink-800">{value}</span>
+    </div>
+  );
+} 

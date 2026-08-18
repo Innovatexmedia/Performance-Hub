@@ -8,12 +8,10 @@ export function cn(...parts: (string | false | null | undefined)[]): string {
 
 // ---- Button ----------------------------------------------------------------
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
-export function Button({
-  variant = 'primary',
-  className,
-  children,
-  ...props
-}: { variant?: ButtonVariant } & React.ButtonHTMLAttributes<HTMLButtonElement>) {
+export const Button = React.forwardRef<
+  HTMLButtonElement,
+  { variant?: ButtonVariant } & React.ButtonHTMLAttributes<HTMLButtonElement>
+>(function Button({ variant = 'primary', className, children, ...props }, ref) {
   const map: Record<ButtonVariant, string> = {
     primary: 'btn-primary',
     secondary: 'btn-secondary',
@@ -21,11 +19,11 @@ export function Button({
     danger: 'btn-danger',
   };
   return (
-    <button className={cn(map[variant], className)} {...props}>
+    <button ref={ref} className={cn(map[variant], className)} {...props}>
       {children}
     </button>
   );
-}
+});
 
 // ---- Card ------------------------------------------------------------------
 export function Card({ className, children }: { className?: string; children: React.ReactNode }) {

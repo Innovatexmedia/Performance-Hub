@@ -14,7 +14,7 @@ import { CaptureForm } from '@/pages/Auth/CaptureForm';
 import { PublicBooking } from '@/pages/Public/PublicBooking';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
-import { WhatsAppPanel } from '@/pages/WhatsApp/WhatsAppPanel';
+import { WhatsAppWorkspace } from '@/pages/WhatsApp/workspace/WhatsAppWorkspace';
 import { AIQualification } from '@/pages/AIQualification/AIQualification';
 import { Pipeline } from '@/pages/Pipeline/Pipeline';
 import { Nurture } from '@/pages/Nurture/Nurture';
@@ -75,7 +75,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/leads" element={<Leads />} />
-          <Route path="/whatsapp" element={<WhatsAppPanel />} />
+          <Route path="/whatsapp" element={<WhatsAppWorkspace />} />
           <Route path="/qualification" element={<AIQualification />} />
           <Route path="/pipeline" element={<Pipeline />} />
           <Route path="/nurture" element={<Nurture />} />

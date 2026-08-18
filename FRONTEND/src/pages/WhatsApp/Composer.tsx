@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Send, Sparkles, FileText, Wand2, Clock, ChevronDown } from 'lucide-react';
-import { Button } from '@/components/ui';
+import { cn } from '@/components/ui';
 import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -101,58 +101,95 @@ export function Composer({ conversationId, onSend, messages, leadContext }: {
     }
   };
 
+  const aiThinking = !!aiBusy && AI_ACTIONS.some((a) => a.label === aiBusy);
+  const aiMenuLabel = aiThinking ? 'Thinking…' : 'AI';
+
   return (
-    <div className="border-t border-ink-200 bg-white p-3">
-      {/* Tool row */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <div className="relative">
-          <button onClick={() => { setShowAi((v) => !v); setShowVars(false); }} disabled={!!aiBusy} className="inline-flex items-center gap-1 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700 hover:bg-brand-100 disabled:opacity-60">
-            <Sparkles size={13} className={aiBusy && AI_ACTIONS.some((a) => a.label === aiBusy) ? 'animate-pulse' : ''} /> {aiBusy && AI_ACTIONS.some((a) => a.label === aiBusy) ? 'Thinking…' : 'AI Reply'} <ChevronDown size={12} />
-          </button>
-          {showAi && (
-            <div className="absolute bottom-10 left-0 z-20 w-56 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
-              {AI_ACTIONS.map((a) => (
-                <button key={a.label} onClick={() => void generateAI(a.goal, a.label)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm hover:bg-ink-50">
-                  <Sparkles size={14} className="text-brand-500" /> {a.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {REWRITE_ACTIONS.map((r) => (
-          <button key={r.style} onClick={() => void rewrite(r.style, r.label)} disabled={!!aiBusy} className="inline-flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50 disabled:opacity-60">
-            {r.style === 'SHORTER' && <Wand2 size={13} />} {aiBusy === r.label ? 'Thinking…' : r.label}
-          </button>
-        ))}
-
-        <button disabled className="inline-flex items-center gap-1 rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-300" title="Templates tab not migrated yet"><FileText size={13} /> Template</button>
-
-        <div className="relative">
-          <button onClick={() => { setShowVars((v) => !v); setShowAi(false); }} className="rounded-lg border border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-600 hover:bg-ink-50">{'{ } Variables'}</button>
-          {showVars && (
-            <div className="absolute bottom-10 left-0 z-20 grid w-56 grid-cols-1 gap-0.5 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
-              {VARIABLES.map((v) => (
-                <button key={v} onClick={() => insert(v)} className="rounded px-2 py-1.5 text-left font-mono text-xs text-brand-700 hover:bg-brand-50">{v}</button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="flex items-end gap-2">
+    <div className="border-t border-ink-100 bg-white px-3 py-3 sm:px-4">
+      {/* Single unified surface -- textarea and toolbar live inside one
+          rounded, bordered card instead of two loosely-stacked strips, so
+          the whole composer reads as one input, not a text box floating
+          above an unrelated button row. Highlights on focus the same way
+          the rest of the app's `.input` fields do. */}
+      <div className="rounded-2xl border border-ink-200 bg-white shadow-sm transition focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-100">
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void send(); }}
           rows={2}
           placeholder="Type a message…  (⌘/Ctrl + Enter to send)"
-          className="input flex-1 resize-none"
+          className="w-full resize-none rounded-t-2xl border-0 bg-transparent px-4 pb-1 pt-3 text-sm text-ink-900 outline-none placeholder:text-ink-400"
           disabled={sending}
         />
-        <div className="flex flex-col gap-1.5">
-          <Button onClick={() => void send()} disabled={sending}><Send size={16} /></Button>
-          <button onClick={() => { toast.success('Message scheduled', 'Will send at next optimal time'); setText(''); }} title="Schedule" className="rounded-lg border border-ink-200 p-2 text-ink-500 hover:bg-ink-50"><Clock size={15} /></button>
+
+        {/* Contextual toolbar -- same underlying actions as before (AI Reply
+            generation + Shorter/Professional/Persuasive rewrite), just
+            gathered into one "AI" menu instead of a permanent button row. */}
+        <div className="flex items-center gap-1 px-2 pb-2 pt-1">
+          <div className="relative">
+            <button
+              onClick={() => { setShowAi((v) => !v); setShowVars(false); }}
+              disabled={!!aiBusy}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60',
+                showAi ? 'bg-brand-100 text-brand-700' : 'text-brand-700 hover:bg-brand-50',
+              )}
+            >
+              <Sparkles size={14} className={aiThinking ? 'animate-pulse' : ''} /> {aiMenuLabel} <ChevronDown size={12} />
+            </button>
+            {showAi && (
+              <div className="absolute bottom-full left-0 z-20 mb-2 w-60 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                <p className="px-2.5 pb-1 pt-1 text-[10px] font-bold uppercase tracking-wide text-ink-400">Generate</p>
+                {AI_ACTIONS.map((a) => (
+                  <button key={a.label} onClick={() => void generateAI(a.goal, a.label)} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-ink-50">
+                    <Sparkles size={14} className="text-brand-500" /> {a.label}
+                  </button>
+                ))}
+                <p className="mt-1 border-t border-ink-100 px-2.5 pb-1 pt-2 text-[10px] font-bold uppercase tracking-wide text-ink-400">Rewrite current draft</p>
+                {REWRITE_ACTIONS.map((r) => (
+                  <button
+                    key={r.style}
+                    onClick={() => void rewrite(r.style, r.label)}
+                    disabled={!text.trim()}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Wand2 size={14} className="text-ink-400" /> {aiBusy === r.label ? 'Thinking…' : r.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="relative">
+            <button onClick={() => { setShowVars((v) => !v); setShowAi(false); }} className={cn('rounded-lg px-2.5 py-1.5 text-xs font-medium transition', showVars ? 'bg-ink-100 text-ink-700' : 'text-ink-500 hover:bg-ink-100')}>
+              {'{ }'} Variables
+            </button>
+            {showVars && (
+              <div className="absolute bottom-full left-0 z-20 mb-2 grid w-56 grid-cols-1 gap-0.5 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                {VARIABLES.map((v) => (
+                  <button key={v} onClick={() => insert(v)} className="rounded px-2 py-1.5 text-left font-mono text-xs text-brand-700 hover:bg-brand-50">{v}</button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button disabled className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-ink-300" title="Templates tab not migrated yet">
+            <FileText size={14} /> Template
+          </button>
+
+          <div className="ml-auto flex items-center gap-1.5">
+            <button onClick={() => { toast.success('Message scheduled', 'Will send at next optimal time'); setText(''); }} title="Schedule" className="rounded-full p-2 text-ink-400 transition hover:bg-ink-100 hover:text-ink-600">
+              <Clock size={16} />
+            </button>
+            <button
+              onClick={() => void send()}
+              disabled={sending || !text.trim()}
+              title="Send"
+              className="flex h-9 w-9 items-center justify-center rounded-full bg-brand-600 text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400 disabled:shadow-none"
+            >
+              <Send size={15} />
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -114,7 +114,7 @@ const qualificationSchema = new Schema(
       default: null,
     },
 
-    /**
+    /*
      * buying_intent — high | medium | low.
      * SOURCE: DEVELOPER_HANDOFF.md aiService.qualifyLead() → buyingIntent
      */

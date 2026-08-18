@@ -13,7 +13,7 @@
  * same "public but signed" design, not a new one invented here.
  */
 import { Router } from 'express';
-import { metaWebhookController } from './metaWebhook.controller.js';
+import { metaWebhookController } from './metaWebhook.controller.js';  
 
 const router = Router();
 
