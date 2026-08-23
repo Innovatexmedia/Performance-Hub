@@ -1,34 +1,3 @@
-/**
- * Settings routes.
- *
- * FILE: src/modules/settings/settings.routes.js
- *
- * SOURCE: FRONTEND_SPEC §19 Settings (10 tabs):
- *   Company · Branding · Lead Fields · Pipeline Stages · Qualification Questions
- *   · Scoring Rules · Notifications · Consent & Data · Billing · Security
- *
- * ROUTE MAP:
- *   GET  /api/settings                      — all 10 tabs data (page load)
- *   PATCH /api/settings/company             — save Company tab
- *   PATCH /api/settings/branding            — save Branding tab
- *   GET  /api/settings/lead-fields          — read-only lead fields list
- *   GET  /api/settings/pipeline-stages      — read-only pipeline stages
- *   PATCH /api/settings/qualification       — save Qualification Questions
- *   PATCH /api/settings/scoring-rules       — save Scoring Rules
- *   PATCH /api/settings/notifications       — save Notification toggles
- *   PATCH /api/settings/consent             — save Consent & Data
- *   GET  /api/settings/billing              — read billing info
- *   PATCH /api/settings/security            — save Security toggles
- *
- * PERMISSIONS:
- *   GET  routes  — all authenticated roles (read_only_user can view settings)
- *   PATCH routes — tenant_admin and above only
- *
- * Register in app.js:
- *   import settingsRoutes from './modules/settings/settings.routes.js';
- *   app.use('/api/settings', settingsRoutes);
- */
-
 import { Router } from 'express';
 import * as controller from './settings.controller.js';
 import {
@@ -64,6 +33,7 @@ router.use(resolveTenant);
 router.get('/qualification-questions', controller.getQualificationQuestions);
 router.get('/pipeline-stages/board',   controller.getPipelineStagesPublic);
 router.get('/branding/public',         controller.getBrandingPublic);
+router.get('/currency/public',         controller.getCurrencyPublic);
 router.get('/plan/public',             controller.getPlanPublic);
 
 // ── Full settings page — GET all tabs at once ─────────────────────────────────

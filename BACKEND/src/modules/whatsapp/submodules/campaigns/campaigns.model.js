@@ -26,6 +26,13 @@ const metricsSchema = new Schema(
     readCount:        { type: Number, default: 0, min: 0 },
     repliedCount:     { type: Number, default: 0, min: 0 },
     failedCount:      { type: Number, default: 0, min: 0 },
+    // Recipients skipped because they'd opted out (never actually
+    // attempted) -- distinct from failedCount (a real send attempt that
+    // errored). Needed for the send worker's completion detection: a
+    // campaign with any opted-out recipients would otherwise never see
+    // sentCount + failedCount reach recipientCount, leaving it stuck in
+    // RUNNING forever. See queues/campaignSend.worker.js.
+    skippedCount:     { type: Number, default: 0, min: 0 },
     bookingCount:     { type: Number, default: 0, min: 0 },
     paymentCount:     { type: Number, default: 0, min: 0 },
     revenueGenerated: { type: Number, default: 0, min: 0 },

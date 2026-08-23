@@ -1,44 +1,9 @@
-/**
- * Settings Service — reads and writes all 10 tabs of tenant settings.
- *
- * FILE: src/modules/settings/settings.service.js
- *
- * SOURCE: FRONTEND_SPEC §19 Settings (10 tabs):
- *   Company · Branding · Lead Fields · Pipeline Stages · Qualification Questions
- *   · Scoring Rules · Notifications · Consent & Data · Billing · Security
- *
- * SOURCE: DEVELOPER_HANDOFF.md TenantSettings entity:
- *   "company_name, company_website, accent_color, qualification_questions[],
- *    pipeline_stages(PipelineStage[]), scoring_rules[{factor,weight}],
- *    consent_required, data_retention_days, notification_prefs, whatsapp(WhatsAppSettings)"
- *
- * ARCHITECTURE:
- *   Settings are stored DIRECTLY on the Tenant document (embedded sub-schemas).
- *   No separate settings collection.
- *   The Tenant model already has all the required fields:
- *     name, website → Company tab
- *     branding.accentColor → Branding tab
- *     notificationPreferences → Notifications tab
- *     securitySettings → Security tab
- *     plan, subscriptionStatus, mrr → Billing tab
- *
- *   Fields NOT on Tenant (stored in TenantSettings sub-doc added here):
- *     qualification_questions[] → Qualification tab
- *     scoring_rules[]           → Scoring Rules tab
- *     consent_required          → Consent & Data tab
- *     data_retention_days       → Consent & Data tab
- *
- * CONNECTED MODULES:
- *   AI Qualification module reads qualification_questions from settings
- *   Scoring service reads scoring_rules from settings
- *   Auth module reads securitySettings for 2FA enforcement
- */
-
 import Tenant from '../auth/models/Tenant.js';
 import Plan from '../plans/plan.model.js';
 import Account from '../plans/account.model.js';
 import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
+import { PAYMENT_CURRENCY_VALUES } from '../payments/payment.constants.js';
 import {
   DEFAULT_QUALIFICATION_QUESTIONS,
   DEFAULT_SCORING_RULES,
@@ -173,6 +138,20 @@ export const getBrandingPublic = async (tenantId) => {
 };
 
 /**
+ * getCurrencyPublic — narrow, ungated cross-module read, same reasoning as
+ * getBrandingPublic above: EVERY logged-in user needs the tenant's
+ * configured currency to correctly format money anywhere in the app (KPI
+ * cards, campaign revenue, payment amounts) -- not just tenant_admin+, who
+ * are the only ones who can change it via the full settings bundle.
+ * Single workspace-wide currency (not per-transaction FX conversion) --
+ * see Tenant.js's `currency` field comment for why.
+ */
+export const getCurrencyPublic = async (tenantId) => {
+  const tenant = await getTenant(tenantId);
+  return { currency: tenant.currency || 'USD' };
+};
+
+/**
  * getPlanPublic — narrow, ungated cross-module read, same pattern as
  * getBrandingPublic/getPipelineStageOverrides/getQualificationQuestions
  * above: EVERY logged-in role needs to know their plan's track to render
@@ -289,6 +268,8 @@ export const getAllSettings = async (tenantId) => {
       description:     tenant.description || '',
       business_type:   tenant.businessType || 'other',
       industry:        tenant.industry || '',
+      currency:        tenant.currency || 'USD',
+      available_currencies: PAYMENT_CURRENCY_VALUES,
     },
 
     // Tab 2: Branding
@@ -473,6 +454,7 @@ export const updateCompany = async (tenantId, data, reqUser) => {
   if (data.description !== undefined) tenant.description  = data.description.trim();
   if (data.business_type !== undefined) tenant.businessType = data.business_type;
   if (data.industry !== undefined) tenant.industry        = data.industry.trim();
+  if (data.currency !== undefined) tenant.currency        = data.currency;
 
   tenant.updatedBy = ctx.userId;
   await tenant.save();
@@ -483,6 +465,8 @@ export const updateCompany = async (tenantId, data, reqUser) => {
     description:     tenant.description || '',
     business_type:   tenant.businessType,
     industry:        tenant.industry || '',
+    currency:        tenant.currency || 'USD',
+    available_currencies: PAYMENT_CURRENCY_VALUES,
   };
 };
 

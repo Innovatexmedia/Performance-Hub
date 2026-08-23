@@ -26,7 +26,8 @@ const ALLOWED_FIELDS = [
   'qualification_score',
   'lead_temperature',
   'assigned_user_id',
-  'group_id',
+  'group_ids',
+  'tags',
   'segment',
   'value',
   'notes',
@@ -57,6 +58,16 @@ function checkCommonFields(body, errors) {
       field: 'lead_temperature',
       message: 'Invalid temperature value',
     });
+  }
+  if (body.group_ids !== undefined) {
+    if (!Array.isArray(body.group_ids) || !body.group_ids.every(isString)) {
+      errors.push({ field: 'group_ids', message: 'group_ids must be an array of strings' });
+    }
+  }
+  if (body.tags !== undefined) {
+    if (!Array.isArray(body.tags) || !body.tags.every(isString)) {
+      errors.push({ field: 'tags', message: 'tags must be an array of strings' });
+    }
   }
   if (
     body.consent_status !== undefined &&

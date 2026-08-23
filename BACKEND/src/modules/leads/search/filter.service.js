@@ -109,6 +109,21 @@ export function normalizeFilters(query = {}) {
 
   /*
   |--------------------------------------------------------------------------
+  | Tags
+  |--------------------------------------------------------------------------
+  | ?tags=hot,vip -- comma-separated; matches leads that have ALL listed
+  | tags (same $all semantics as the campaign/broadcast audience builder).
+  */
+
+  if (query.tags) {
+    filters.tags = String(query.tags)
+      .split(',')
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }
+
+  /*
+  |--------------------------------------------------------------------------
   | Archived
   |--------------------------------------------------------------------------
   | Three states a caller can ask for:

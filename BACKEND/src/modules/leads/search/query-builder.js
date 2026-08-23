@@ -24,6 +24,7 @@ export function buildLeadFilter({
   segment,
   assigned_user_id,
   group_id,
+  tags,
   includeArchived = false,
   archivedOnly = false,
 } = {}, ctx = null) {
@@ -52,7 +53,17 @@ export function buildLeadFilter({
     filter.assigned_user_id = assigned_user_id;
   }
 
-  if (group_id) filter.group_id = group_id;
+  // External filter param stays `group_id` (still means "show leads that
+  // are a member of this one group") -- only the target field changes,
+  // from an equals-match on a single value to a contains-match on the
+  // `group_ids` array. Mongo resolves `{ group_ids: X }` as "array
+  // contains X" automatically, so this is a pure rename, not a new
+  // query shape.
+  if (group_id) filter.group_ids = group_id;
+
+  // Same $all semantics as the campaign/broadcast audience builder --
+  // matches leads that carry EVERY listed tag, not just any one of them.
+  if (tags && tags.length) filter.tags = { $all: tags };
 
   if (search) {
     const rx = new RegExp(escapeRegex(search), 'i');

@@ -1,10 +1,3 @@
-/**
- * Settings controller — thin HTTP layer only.
- *
- * FILE: src/modules/settings/settings.controller.js
- * Pattern matches all other controllers exactly.
- */
-
 import * as settingsService from './settings.service.js';
 import * as subscriptionService from '../plans/subscription.service.js';
 import { sendSuccess }      from '../../utils/apiResponse.js';
@@ -39,6 +32,16 @@ export const getQualificationQuestions = asyncHandler(async (req, res) => {
 export const getBrandingPublic = asyncHandler(async (req, res) => {
   const data = await settingsService.getBrandingPublic(req.user.tenantId);
   return sendSuccess(res, data, 'Branding fetched successfully');
+});
+
+/**
+ * getCurrencyPublic — GET /api/settings/currency/public
+ * Narrow, ungated (below tenant_admin) read so every role can format
+ * money correctly across the app -- see settings.service.js.
+ */
+export const getCurrencyPublic = asyncHandler(async (req, res) => {
+  const data = await settingsService.getCurrencyPublic(req.user.tenantId);
+  return sendSuccess(res, data, 'Currency fetched successfully');
 });
 
 /**

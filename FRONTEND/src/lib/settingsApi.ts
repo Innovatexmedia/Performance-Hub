@@ -55,6 +55,15 @@ export const settingsApi = {
     apiClient.get<{ accent_color: string }>('/settings/branding/public'),
 
   /**
+   * getCurrencyPublic -- same narrow/ungated pattern, so every logged-in
+   * role can format money correctly (KPIs, campaign revenue, payment
+   * amounts) using the tenant's actual configured currency instead of a
+   * hardcoded default. See store/currencyStore.ts for what consumes this.
+   */
+  getCurrencyPublic: () =>
+    apiClient.get<{ currency: string }>('/settings/currency/public'),
+
+  /**
    * getPlanPublic -- same narrow/ungated pattern, so every logged-in
    * role can know their plan's track to render the sidebar correctly
    * (hide full-only modules for whatsapp_only tenants). See

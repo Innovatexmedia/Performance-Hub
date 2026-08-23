@@ -78,6 +78,39 @@ export const campaignsRepository = {
     }, auditEntry);
   },
 
+  /**
+   * completeCampaignIfRunning / failCampaignIfRunning -- atomic,
+   * status-guarded variants of the two transitions above, used ONLY by
+   * the BullMQ worker's per-job completion check (see
+   * queues/campaignSend.worker.js). Real concurrent workers (concurrency
+   * > 1) can have two jobs finish within milliseconds of each other, both
+   * observing "all recipients processed" -- without the `status: RUNNING`
+   * filter here, both would independently call the plain
+   * completeCampaign/failCampaign above and BOTH would succeed (no
+   * concurrency guard on that unguarded transition()), double-pushing
+   * auditLog entries and racing on which terminal status wins. Filtering
+   * on current status makes MongoDB itself the single arbiter: only
+   * whichever call happens to apply first actually matches and updates;
+   * the loser's filter no longer matches (status already changed) and
+   * getting `null` back is the normal, expected "someone else already
+   * finished this" outcome, not an error.
+   */
+  completeCampaignIfRunning(tenantId, id, { performedBy, now, auditEntry }) {
+    return WhatsAppCampaign.findOneAndUpdate(
+      { _id: id, tenantId, status: CAMPAIGN_STATUS.RUNNING },
+      { $set: { status: CAMPAIGN_STATUS.COMPLETED, completedAt: now, isActive: false, updatedBy: performedBy }, $push: { auditLog: auditEntry } },
+      { new: true, runValidators: true },
+    );
+  },
+
+  failCampaignIfRunning(tenantId, id, { failureReason = '', performedBy, auditEntry }) {
+    return WhatsAppCampaign.findOneAndUpdate(
+      { _id: id, tenantId, status: CAMPAIGN_STATUS.RUNNING },
+      { $set: { status: CAMPAIGN_STATUS.FAILED, failureReason, isActive: false, updatedBy: performedBy }, $push: { auditLog: auditEntry } },
+      { new: true, runValidators: true },
+    );
+  },
+
   failCampaign(tenantId, id, { failureReason = '', performedBy, now, auditEntry }) {
     return transition(tenantId, id, {
       status:        CAMPAIGN_STATUS.FAILED,

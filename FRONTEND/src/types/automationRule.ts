@@ -110,6 +110,9 @@ export interface AutomationRuleListQuery {
   status?: RuleStatus;
   trigger?: TriggerType;
   active?: boolean;
+  /** Matches name/description -- see automationRules.service.js's
+   * buildFilter/SEARCHABLE_FIELDS. */
+  search?: string;
 }
 
 export interface AutomationRuleHistoryEntry {

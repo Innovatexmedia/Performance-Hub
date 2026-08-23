@@ -1,12 +1,6 @@
-/**
- * Settings validators.
- *
- * FILE: src/modules/settings/settings.validator.js
- * Pattern matches booking.validator.js exactly.
- */
-
 import { body, validationResult } from 'express-validator';
 import { ACCENT_COLORS }          from './settings.constants.js';
+import { PAYMENT_CURRENCY_VALUES } from '../payments/payment.constants.js';
 import { sendError }              from '../../utils/apiResponse.js';
 
 export const handleValidation = (req, res, next) => {
@@ -37,6 +31,10 @@ export const validateCompany = [
   body('description')
     .optional()
     .isLength({ max: 500 }).withMessage('description cannot exceed 500 characters'),
+
+  body('currency')
+    .optional()
+    .isIn(PAYMENT_CURRENCY_VALUES).withMessage(`currency must be one of: ${PAYMENT_CURRENCY_VALUES.join(', ')}`),
 
   handleValidation,
 ];

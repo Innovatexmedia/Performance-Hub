@@ -18,6 +18,10 @@ export interface CompanySettings {
   description: string;
   business_type: string;
   industry: string;
+  /** Workspace-wide currency (single value, not per-transaction FX --
+   * see BACKEND Tenant.js's `currency` field comment). */
+  currency: string;
+  available_currencies: string[];
 }
 
 export interface BrandingSettings {

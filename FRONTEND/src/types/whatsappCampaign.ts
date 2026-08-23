@@ -55,6 +55,10 @@ export interface CampaignMetrics {
   readCount: number;
   repliedCount: number;
   failedCount: number;
+  /** Recipients skipped because they'd already opted out -- distinct
+   * from failedCount (a real send attempt that errored). See BACKEND
+   * campaigns.model.js's skippedCount comment. */
+  skippedCount: number;
   bookingCount: number;
   paymentCount: number;
   revenueGenerated: number;

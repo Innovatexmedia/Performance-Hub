@@ -1,13 +1,4 @@
-/**
- * WhatsApp Campaigns — service (business logic + workflow engine).
- *
- * Owns status-transition validation, template-approval guard (delegates to
- * templateApprovalService.assertUsable), audience calculation against the
- * real Lead collection (the same data the Contacts/Leads tab and the real
- * inbound-webhook pipeline actually populate -- NOT the separate, unused
- * WhatsAppContact collection this file previously queried), activity
- * logging, and all lifecycle methods.
- */
+
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { hasRole, ROLES } from '../../../auth/constants/roles.js';
 import { PERMISSIONS } from '../../../auth/constants/permissions.js';
@@ -103,7 +94,10 @@ export function buildAudienceQuery(tenantId, filters = {}, includedContacts = []
   if (filters.consentStatus)        query.consent_status = filters.consentStatus;
   if (filters.optOutStatus)         query.opt_out_status = filters.optOutStatus === 'OPTED_OUT';
   if (filters.assignedUserId)       query.assigned_user_id = filters.assignedUserId;
-  if (filters.groupId)              query.group_id = filters.groupId;
+  // group_ids is an array on Lead (multi-membership) -- `{ group_ids: X }`
+  // resolves as "array contains X" in Mongo, same query shape as an
+  // equals-match on a single value would have been.
+  if (filters.groupId)              query.group_ids = filters.groupId;
   // NOTE: filters.status (contact status) is intentionally NOT mapped onto
   // Lead.status -- Lead's status is the pipeline stage (New/Qualified/Won/
   // Lost/etc), a different concept than the old WhatsAppContact "contact

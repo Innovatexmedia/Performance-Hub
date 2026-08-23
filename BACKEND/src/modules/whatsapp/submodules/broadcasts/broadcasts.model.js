@@ -26,6 +26,11 @@ const metricsSchema = new Schema(
     readCount:        { type: Number, default: 0, min: 0 },
     repliedCount:     { type: Number, default: 0, min: 0 },
     failedCount:      { type: Number, default: 0, min: 0 },
+    // Recipients skipped because they'd already opted out (never
+    // actually attempted) -- see campaigns.model.js's skippedCount
+    // comment for why the send worker needs this for completion
+    // detection.
+    skippedCount:     { type: Number, default: 0, min: 0 },
     bookingCount:     { type: Number, default: 0, min: 0 },
     paymentCount:     { type: Number, default: 0, min: 0 },
     revenueGenerated: { type: Number, default: 0, min: 0 },

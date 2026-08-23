@@ -81,6 +81,26 @@ export const broadcastsRepository = {
     }, auditEntry);
   },
 
+  /** Atomic, status-guarded variants -- see campaigns.repository.js's
+   * completeCampaignIfRunning comment for why these exist separately
+   * from the plain (unguarded) transitions above. Used only by the
+   * BullMQ worker's per-job completion check. */
+  completeBroadcastIfRunning(tenantId, id, { performedBy, now, auditEntry }) {
+    return WhatsAppBroadcast.findOneAndUpdate(
+      { _id: id, tenantId, status: BROADCAST_STATUS.RUNNING },
+      { $set: { status: BROADCAST_STATUS.COMPLETED, completedAt: now, isActive: false, updatedBy: performedBy }, $push: { auditLog: auditEntry } },
+      { new: true, runValidators: true },
+    );
+  },
+
+  failBroadcastIfRunning(tenantId, id, { failureReason = '', performedBy, auditEntry }) {
+    return WhatsAppBroadcast.findOneAndUpdate(
+      { _id: id, tenantId, status: BROADCAST_STATUS.RUNNING },
+      { $set: { status: BROADCAST_STATUS.FAILED, failureReason, isActive: false, updatedBy: performedBy }, $push: { auditLog: auditEntry } },
+      { new: true, runValidators: true },
+    );
+  },
+
   failBroadcast(tenantId, id, { failureReason = '', performedBy, auditEntry }) {
     return transition(tenantId, id, {
       status: BROADCAST_STATUS.FAILED,

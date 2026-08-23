@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
   ChevronLeft, ChevronRight, Trash2, Inbox as InboxIcon, Users, Layers, FileText,
   ShieldCheck, Megaphone, Repeat, Radio, Zap, ScrollText, BarChart3, Settings as SettingsIcon,
-  Phone, Hash, Building2, KeyRound, Link2, Fingerprint,
+  Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X,
 } from 'lucide-react';
-import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
 import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
@@ -15,9 +15,8 @@ import type { UseTenantProfileResult } from '@/hooks/useTenantProfile';
 import { BUSINESS_TYPE_OPTIONS } from '@/lib/tenantProfileApi';
 import type { BusinessType } from '@/lib/tenantProfileApi';
 import { isTemplateStatusSeen, markTemplateStatusSeen } from '@/lib/templateSeenTracker';
-import { useDb, useSettings, userName } from '@/store/hooks';
 import {
-  Card, CardHeader, Table, Th, Td, Tr, Badge, StatusBadge, Button,
+  Card, CardHeader, Table, Th, Td, Tr, Badge, StatusBadge, Button, statusTone,
   Avatar, EmptyState, Toggle, Field, Input, Select, Modal, cn,
   IconInput, SecretField, StatusStrip,
 } from '@/components/ui';
@@ -25,14 +24,24 @@ import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
 import { Inbox } from './Inbox';
 import { TemplateBuilder } from './TemplateBuilder';
-import { conversationsTrend } from '@/utils/calculations';
 import { syncFromProvider } from '@/services/whatsappService';
-import { formatCurrency, formatDateTime, timeAgo, percent } from '@/utils/formatters';
+import { formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useLeads } from '@/hooks/useLeads';
 import type { LeadListItem } from '@/types/lead';
 import { useGroups } from '@/hooks/useGroups';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
+import { useAutomationRules } from '@/hooks/useAutomationRules';
+import { useNurtureSequences, useNurtureEnrollments } from '@/hooks/useNurture';
+import { useWhatsAppAnalytics } from '@/hooks/useWhatsAppAnalytics';
+import { useTenantCurrency } from '@/hooks/useTenantCurrency';
+import { automationRulesApi } from '@/lib/automationRulesApi';
+import type { RunRuleResult } from '@/lib/automationRulesApi';
+import type {
+  AutomationRule, AutomationRuleInput, RuleCondition, RuleAction,
+  RuleStatus, TriggerType, ActionType, ConditionOperator, ConditionLogic, DelayUnit,
+} from '@/types/automationRule';
+import { TRIGGER_TYPE_VALUES, ACTION_TYPE_VALUES, CONDITION_OPERATOR_VALUES } from '@/types/automationRule';
 import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
@@ -283,13 +292,48 @@ function ContactsTab() {
   const { leads, pagination, loading, error, updateLead } = useLeads({ page, limit: 20 });
   const { groups } = useGroups();
   const [assigningId, setAssigningId] = useState<string | null>(null);
+  // Which lead's Group cell has its multi-select popover open -- a plain
+  // <Select> can only represent one value, but a lead can now belong to
+  // several groups at once (AiSensy-style), so this needs real multi-select.
+  const [openGroupPickerId, setOpenGroupPickerId] = useState<string | null>(null);
+  // Same idea for Tags, but freeform (type + Enter) instead of a fixed
+  // checklist -- there's no predefined tag list the way there is for
+  // Groups, matching AiSensy's lightweight tagging model.
+  const [openTagsPickerId, setOpenTagsPickerId] = useState<string | null>(null);
+  const [tagDraft, setTagDraft] = useState('');
 
-  const assignGroup = async (leadId: string, groupId: string) => {
-    setAssigningId(leadId);
+  const toggleContactGroup = async (lead: LeadListItem, groupId: string) => {
+    setAssigningId(lead.id);
+    const current = lead.group_ids || [];
+    const next = current.includes(groupId) ? current.filter((id) => id !== groupId) : [...current, groupId];
     try {
-      await updateLead(leadId, { group_id: groupId || null });
+      await updateLead(lead.id, { group_ids: next });
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : 'Failed to update group');
+      toast.error(err instanceof ApiError ? err.message : 'Failed to update groups');
+    } finally {
+      setAssigningId(null);
+    }
+  };
+
+  const addContactTag = async (lead: LeadListItem, rawTag: string) => {
+    const tag = rawTag.trim();
+    if (!tag || lead.tags.includes(tag)) return;
+    setAssigningId(lead.id);
+    try {
+      await updateLead(lead.id, { tags: [...lead.tags, tag] });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to add tag');
+    } finally {
+      setAssigningId(null);
+    }
+  };
+
+  const removeContactTag = async (lead: LeadListItem, tag: string) => {
+    setAssigningId(lead.id);
+    try {
+      await updateLead(lead.id, { tags: lead.tags.filter((t) => t !== tag) });
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Failed to remove tag');
     } finally {
       setAssigningId(null);
     }
@@ -308,22 +352,93 @@ function ContactsTab() {
         ) : (
           <>
             <Table>
-              <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Group</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
+              <thead><tr><Th>Contact</Th><Th>WhatsApp</Th><Th>Group</Th><Th>Tags</Th><Th>Consent</Th><Th>Opt-out</Th><Th>Last contacted</Th><Th>Score</Th></tr></thead>
               <tbody>
                 {leads.map((l) => (
                   <Tr key={l.id}>
                     <Td><div className="flex items-center gap-2"><Avatar name={l.name} color="#22c55e" size={30} /><span className="font-medium">{l.name}</span></div></Td>
                     <Td className="font-mono text-xs">{l.whatsapp_number || l.phone}</Td>
                     <Td>
-                      <Select
-                        value={l.group_id || ''}
-                        disabled={assigningId === l.id}
-                        onChange={(e) => assignGroup(l.id, e.target.value)}
-                        className="py-1 text-xs"
-                      >
-                        <option value="">No group</option>
-                        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                      </Select>
+                      <div className="relative inline-block">
+                        <button
+                          onClick={() => setOpenGroupPickerId((id) => (id === l.id ? null : l.id))}
+                          disabled={assigningId === l.id}
+                          className="flex max-w-[180px] flex-wrap items-center gap-1 rounded-lg border border-ink-200 px-2 py-1 text-left hover:bg-ink-50 disabled:opacity-60"
+                        >
+                          {l.group_ids.length === 0 ? (
+                            <span className="text-xs text-ink-400">No group</span>
+                          ) : (
+                            l.group_ids.map((gid) => {
+                              const g = groups.find((gr) => gr.id === gid);
+                              return g ? <Badge key={gid} tone="teal">{g.name}</Badge> : null;
+                            })
+                          )}
+                          <ChevronDown size={12} className="ml-auto shrink-0 text-ink-400" />
+                        </button>
+                        {openGroupPickerId === l.id && (
+                          <div className="absolute left-0 top-full z-20 mt-1 w-52 rounded-xl border border-ink-200 bg-white p-1.5 shadow-soft">
+                            {groups.length === 0 ? (
+                              <p className="px-2 py-2 text-xs text-ink-400">No groups yet.</p>
+                            ) : (
+                              groups.map((g) => (
+                                <label key={g.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-ink-50">
+                                  <input
+                                    type="checkbox"
+                                    checked={l.group_ids.includes(g.id)}
+                                    onChange={() => void toggleContactGroup(l, g.id)}
+                                    className="h-4 w-4 rounded border-ink-300 accent-brand-600"
+                                  />
+                                  {g.name}
+                                </label>
+                              ))
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </Td>
+                    <Td>
+                      <div className="relative inline-block">
+                        <button
+                          onClick={() => { setOpenTagsPickerId((id) => (id === l.id ? null : l.id)); setTagDraft(''); }}
+                          disabled={assigningId === l.id}
+                          className="flex max-w-[180px] flex-wrap items-center gap-1 rounded-lg border border-ink-200 px-2 py-1 text-left hover:bg-ink-50 disabled:opacity-60"
+                        >
+                          {l.tags.length === 0 ? (
+                            <span className="text-xs text-ink-400">No tags</span>
+                          ) : (
+                            l.tags.map((t) => <Badge key={t} tone="violet">{t}</Badge>)
+                          )}
+                          <ChevronDown size={12} className="ml-auto shrink-0 text-ink-400" />
+                        </button>
+                        {openTagsPickerId === l.id && (
+                          <div className="absolute left-0 top-full z-20 mt-1 w-56 rounded-xl border border-ink-200 bg-white p-2 shadow-soft">
+                            {l.tags.length > 0 && (
+                              <div className="mb-2 flex flex-wrap gap-1">
+                                {l.tags.map((t) => (
+                                  <button
+                                    key={t}
+                                    onClick={() => void removeContactTag(l, t)}
+                                    title="Remove tag"
+                                    className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-xs font-medium text-violet-700 hover:bg-violet-100"
+                                  >
+                                    {t} <X size={10} />
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            <input
+                              autoFocus
+                              value={tagDraft}
+                              onChange={(e) => setTagDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { e.preventDefault(); void addContactTag(l, tagDraft); setTagDraft(''); }
+                              }}
+                              placeholder="Type a tag, press Enter…"
+                              className="input py-1 text-xs"
+                            />
+                          </div>
+                        )}
+                      </div>
                     </Td>
                     <Td><Badge tone={l.consent_status === 'granted' ? 'green' : 'amber'}>{l.consent_status}</Badge></Td>
                     <Td>{l.opt_out_status ? <Badge tone="red">Opted out</Badge> : <Badge tone="gray">No</Badge>}</Td>
@@ -349,9 +464,20 @@ function ContactsTab() {
   );
 }
 
+// Deterministic per-contact avatar color for the member-management modal
+// -- same technique as Inbox.tsx's avatarColor, kept local here since
+// these are two separate page files and this one has no shared import
+// path to that one without adding cross-page coupling for a 20-line util.
+const MEMBER_AVATAR_PALETTE = ['#6366f1', '#22c55e', '#f97316', '#ec4899', '#0ea5e9', '#a855f7', '#14b8a6', '#eab308'];
+function memberAvatarColor(key: string): string {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return MEMBER_AVATAR_PALETTE[hash % MEMBER_AVATAR_PALETTE.length];
+}
+
 // ---- Groups: own tab, professional CRUD + bulk member management ----------
 function GroupsTab() {
-  const { groups, loading, error, createGroup, updateGroup, deleteGroup } = useGroups();
+  const { groups, loading, error, createGroup, updateGroup, deleteGroup, refetch: refetchGroups } = useGroups();
   // Large limit -- member-management checklist needs the full contact list,
   // not a paginated slice. Fine at current scale; would need a real search-
   // as-you-type server query if the contact base grows much larger.
@@ -371,13 +497,47 @@ function GroupsTab() {
     return () => clearTimeout(t);
   }, [memberSearch]);
 
-  const { leads: currentMembers, loading: membersLoading, updateLead } = useLeads(
-    managingGroup ? { group_id: managingGroup.id, limit: 200 } : { group_id: '__none__', limit: 1 },
+  // Current-members side gets its own independent search + page, so you
+  // can search WITHIN a group's existing members (not just the add-side
+  // contact search) -- separate state because the two lists are backed by
+  // two entirely separate server queries.
+  const [currentSearch, setCurrentSearch] = useState('');
+  const [debouncedCurrentSearch, setDebouncedCurrentSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedCurrentSearch(currentSearch), 300);
+    return () => clearTimeout(t);
+  }, [currentSearch]);
+
+  const MEMBERS_PAGE_SIZE = 8;
+  const [currentPage, setCurrentPage] = useState(1);
+  const [addPage, setAddPage] = useState(1);
+  // Typing a new search mid-pagination should always snap back to page 1
+  // -- otherwise "page 3 of a filtered-down result set" can silently show
+  // zero rows with no obvious explanation.
+  useEffect(() => setCurrentPage(1), [debouncedCurrentSearch]);
+  useEffect(() => setAddPage(1), [debouncedMemberSearch]);
+
+  const { leads: currentMembers, pagination: currentPagination, loading: membersLoading, updateLead } = useLeads(
+    managingGroup
+      ? { group_id: managingGroup.id, search: debouncedCurrentSearch.trim() || undefined, page: currentPage, limit: MEMBERS_PAGE_SIZE }
+      : { group_id: '__none__', limit: 1 },
   );
-  const { leads: searchResults, loading: searchLoading, refetch: refetchSearch } = useLeads(
-    managingGroup ? { search: debouncedMemberSearch.trim() || undefined, limit: 20 } : { group_id: '__none__', limit: 1 },
+  const { leads: searchResults, pagination: addPagination, loading: searchLoading, refetch: refetchSearch } = useLeads(
+    managingGroup
+      ? { search: debouncedMemberSearch.trim() || undefined, page: addPage, limit: MEMBERS_PAGE_SIZE }
+      : { group_id: '__none__', limit: 1 },
   );
   const leadsLoading = membersLoading || searchLoading;
+
+  // Checkbox multi-select for bulk add/remove -- persists across page
+  // navigation within the same modal session (so picking people across
+  // two pages of search results, then bulk-adding once, works the way
+  // it would in any real contact picker), and resets whenever the modal
+  // is opened fresh (see openManageMembers below).
+  const [selectedRemove, setSelectedRemove] = useState<Set<string>>(new Set());
+  const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set());
+  const [bulkRemoveOpen, setBulkRemoveOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const [showCreate, setShowCreate] = useState(false);
   const [createForm, setCreateForm] = useState({ name: '', description: '' });
@@ -438,25 +598,36 @@ function GroupsTab() {
   const openManageMembers = (g: Group) => {
     setManagingGroup(g);
     setMemberSearch('');
+    setCurrentSearch('');
+    setCurrentPage(1);
+    setAddPage(1);
+    setSelectedRemove(new Set());
+    setSelectedAdd(new Set());
   };
 
   // Additive action -- no confirmation needed, matches standard UX
   // convention (only the destructive removal below asks "are you sure").
-  // If the lead was already in a different group, this silently moves
-  // them (a Lead only ever belongs to one group), which the UI surfaces
-  // clearly via the "Currently in X" note before the click, not as a
-  // surprise afterward.
+  // Multi-membership (AiSensy-style): adding to THIS group never touches
+  // any other group the lead already belongs to -- we send the FULL
+  // desired group_ids array (current ones + this one), since the PATCH
+  // endpoint does a plain $set on whatever fields are given, not a
+  // server-side array-append.
   const addMember = async (lead: LeadListItem) => {
     if (!managingGroup) return;
     setBusyLeadId(lead.id);
     try {
-      await updateLead(lead.id, { group_id: managingGroup.id });
+      const nextGroupIds = lead.group_ids.includes(managingGroup.id) ? lead.group_ids : [...lead.group_ids, managingGroup.id];
+      await updateLead(lead.id, { group_ids: nextGroupIds });
       toast.success(`${lead.name} added to ${managingGroup.name}`);
       // updateLead only auto-refetches the "current members" hook it came
       // from -- the separate search-results hook has no way to know
       // anything changed, so without this it keeps showing this exact
       // person as still addable even though they're now already a member.
       refetchSearch();
+      // The group CARD's "N members" badge comes from a totally separate
+      // useGroups() list query (computed server-side, not live) -- without
+      // this it stays stale showing the old count until the tab remounts.
+      refetchGroups();
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not add member');
     } finally {
@@ -468,9 +639,16 @@ function GroupsTab() {
     if (!removingMember || !managingGroup) return;
     setBusyLeadId(removingMember.id);
     try {
-      await updateLead(removingMember.id, { group_id: null });
+      // Removes ONLY this group from the lead's membership -- any other
+      // group they're in stays untouched. currentMembers already carries
+      // each lead's full group_ids (it's the same LeadListItem shape as
+      // everywhere else), so no extra fetch is needed to know the rest.
+      const current = currentMembers.find((l) => l.id === removingMember.id);
+      const nextGroupIds = (current?.group_ids ?? [managingGroup.id]).filter((id) => id !== managingGroup.id);
+      await updateLead(removingMember.id, { group_ids: nextGroupIds });
       toast.success(`${removingMember.name} removed from ${managingGroup.name}`);
       refetchSearch();
+      refetchGroups(); // keep the group card's member-count badge in sync
     } catch (err) {
       toast.error(err instanceof ApiError ? err.message : 'Could not remove member');
     } finally {
@@ -479,13 +657,59 @@ function GroupsTab() {
     }
   };
 
+  const toggleSelect = (set: Set<string>, setter: (s: Set<string>) => void, id: string) => {
+    const next = new Set(set);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setter(next);
+  };
+
+  const toggleSelectAll = (pageItems: { id: string }[], set: Set<string>, setter: (s: Set<string>) => void) => {
+    const allSelected = pageItems.length > 0 && pageItems.every((i) => set.has(i.id));
+    const next = new Set(set);
+    if (allSelected) pageItems.forEach((i) => next.delete(i.id));
+    else pageItems.forEach((i) => next.add(i.id));
+    setter(next);
+  };
+
+  const bulkAdd = async () => {
+    if (!managingGroup || selectedAdd.size === 0) return;
+    setBulkBusy(true);
+    const targets = filteredLeads.filter((l) => selectedAdd.has(l.id));
+    const results = await Promise.allSettled(
+      targets.map((l) => updateLead(l.id, { group_ids: l.group_ids.includes(managingGroup.id) ? l.group_ids : [...l.group_ids, managingGroup.id] })),
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setBulkBusy(false);
+    setSelectedAdd(new Set());
+    refetchSearch();
+    refetchGroups(); // keep the group card's member-count badge in sync
+    if (failed === 0) toast.success(`${targets.length} member${targets.length === 1 ? '' : 's'} added to ${managingGroup.name}`);
+    else toast.error(`Added ${targets.length - failed} of ${targets.length} — ${failed} failed`);
+  };
+
+  const bulkRemove = async () => {
+    if (!managingGroup || selectedRemove.size === 0) return;
+    setBulkBusy(true);
+    const targets = currentMembers.filter((l) => selectedRemove.has(l.id));
+    const results = await Promise.allSettled(
+      targets.map((l) => updateLead(l.id, { group_ids: l.group_ids.filter((id) => id !== managingGroup.id) })),
+    );
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    setBulkBusy(false);
+    setSelectedRemove(new Set());
+    refetchSearch();
+    refetchGroups(); // keep the group card's member-count badge in sync
+    if (failed === 0) toast.success(`${targets.length} member${targets.length === 1 ? '' : 's'} removed from ${managingGroup.name}`);
+    else toast.error(`Removed ${targets.length - failed} of ${targets.length} — ${failed} failed`);
+  };
+
   // currentMembers is already server-scoped to this exact group (see the
   // useLeads call above) -- no client-side filtering needed. filteredLeads
   // only needs a cheap exclude-current-members pass, since searchResults
   // is already bounded to a small server-side page, never the full
   // contact base.
   const filteredLeads = managingGroup
-    ? searchResults.filter((l) => l.group_id !== managingGroup.id)
+    ? searchResults.filter((l) => !l.group_ids.includes(managingGroup.id))
     : [];
 
   if (loading) return <div className="py-12 text-center text-sm text-ink-500">Loading groups…</div>;
@@ -572,75 +796,181 @@ function GroupsTab() {
         }
       />
 
-      {/* Manage members -- real single add/remove, each action applies
-          immediately (no batch "save" step), with a confirm step before
-          any removal since that's the one destructive action here. */}
+      {/* Manage members -- search + real server-side pagination on BOTH
+          the current-members list and the add-contacts search, plus
+          checkbox multi-select for bulk add/remove. Single-row Remove/Add
+          buttons still work too (kept for the common one-off case), but
+          for anything more than a couple of people the bulk bar is what
+          makes this usable at real scale instead of one click per person. */}
       {managingGroup && (
         <Modal open onClose={() => setManagingGroup(null)} title={`Manage members — ${managingGroup.name}`} size="lg"
           footer={<Button onClick={() => setManagingGroup(null)}>Done</Button>}>
-          <div className="space-y-5">
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Current members ({currentMembers.length})</p>
-              {leadsLoading ? (
+          <div className="space-y-4">
+            {/* Each section is its own bordered sub-card -- previously
+                "Current members" and "Add members" just sat one above the
+                other separated by spacing alone, which read as one long
+                blurred list rather than two distinct actions. */}
+            <div className="rounded-2xl border border-ink-100 bg-ink-50/40 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={currentMembers.length > 0 && currentMembers.every((l) => selectedRemove.has(l.id))}
+                    onChange={() => toggleSelectAll(currentMembers, selectedRemove, setSelectedRemove)}
+                    disabled={currentMembers.length === 0}
+                    className="h-4 w-4 rounded border-ink-300 accent-brand-600 disabled:opacity-30"
+                    title="Select all on this page"
+                  />
+                  <p className="text-xs font-bold uppercase tracking-wide text-ink-500">
+                    Current members {currentPagination ? `(${currentPagination.total})` : ''}
+                  </p>
+                </div>
+                {selectedRemove.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-ink-500">{selectedRemove.size} selected</span>
+                    <button onClick={() => setSelectedRemove(new Set())} className="text-xs font-medium text-ink-400 hover:text-ink-600">Clear</button>
+                    <Button
+                      variant="secondary"
+                      className="border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
+                      disabled={bulkBusy}
+                      onClick={() => setBulkRemoveOpen(true)}
+                    >
+                      Remove selected
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <IconInput icon={<Search size={14} />} value={currentSearch} onChange={(e) => setCurrentSearch(e.target.value)} placeholder="Search current members…" className="mb-3 bg-white" />
+              {membersLoading ? (
                 <p className="py-4 text-center text-sm text-ink-400">Loading…</p>
               ) : currentMembers.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-ink-200 py-4 text-center text-sm text-ink-400">No members yet — add some below.</p>
+                <p className="rounded-xl border border-dashed border-ink-200 bg-white py-4 text-center text-sm text-ink-400">
+                  {currentSearch.trim() ? 'No current members match.' : 'No members yet — add some below.'}
+                </p>
               ) : (
-                <div className="max-h-48 overflow-y-auto rounded-xl border border-ink-100">
-                  {currentMembers.map((l) => (
-                    <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0">
-                      <Avatar name={l.name} color="#22c55e" size={26} />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
-                        <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                <>
+                  <div className="max-h-56 overflow-y-auto rounded-xl border border-ink-100 bg-white">
+                    {currentMembers.map((l) => {
+                      const checked = selectedRemove.has(l.id);
+                      return (
+                        <div key={l.id} className={cn('flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0', checked ? 'bg-brand-50' : 'hover:bg-ink-50')}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleSelect(selectedRemove, setSelectedRemove, l.id)}
+                            className="h-4 w-4 shrink-0 rounded border-ink-300 accent-brand-600"
+                          />
+                          <Avatar name={l.name} color={memberAvatarColor(l.id)} size={26} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                            <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                          </div>
+                          <Button
+                            variant="secondary"
+                            className="whitespace-nowrap border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
+                            disabled={busyLeadId === l.id}
+                            onClick={() => setRemovingMember({ id: l.id, name: l.name })}
+                          >
+                            Remove
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {currentPagination && currentPagination.totalPages > 1 && (
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-xs text-ink-400">Page {currentPagination.page} of {currentPagination.totalPages}</span>
+                      <div className="flex gap-1.5">
+                        <Button variant="secondary" className="px-2 py-1 text-xs" disabled={!currentPagination.hasPrev} onClick={() => setCurrentPage((p) => p - 1)}><ChevronLeft size={13} /> Prev</Button>
+                        <Button variant="secondary" className="px-2 py-1 text-xs" disabled={!currentPagination.hasNext} onClick={() => setCurrentPage((p) => p + 1)}>Next <ChevronRight size={13} /></Button>
                       </div>
-                      <Button
-                        variant="secondary"
-                        className="whitespace-nowrap border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50"
-                        disabled={busyLeadId === l.id}
-                        onClick={() => setRemovingMember({ id: l.id, name: l.name })}
-                      >
-                        Remove
-                      </Button>
                     </div>
-                  ))}
-                </div>
+                  )}
+                </>
               )}
             </div>
 
-            <div>
-              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">Add members</p>
-              <Input value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="mb-2" />
-              {leadsLoading ? (
+            <div className="rounded-2xl border border-ink-100 bg-ink-50/40 p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={filteredLeads.length > 0 && filteredLeads.every((l) => selectedAdd.has(l.id))}
+                    onChange={() => toggleSelectAll(filteredLeads, selectedAdd, setSelectedAdd)}
+                    disabled={filteredLeads.length === 0}
+                    className="h-4 w-4 rounded border-ink-300 accent-brand-600 disabled:opacity-30"
+                    title="Select all on this page"
+                  />
+                  <p className="text-xs font-bold uppercase tracking-wide text-ink-500">Add members</p>
+                </div>
+                {selectedAdd.size > 0 && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-ink-500">{selectedAdd.size} selected</span>
+                    <button onClick={() => setSelectedAdd(new Set())} className="text-xs font-medium text-ink-400 hover:text-ink-600">Clear</button>
+                    <Button className="px-2.5 py-1 text-xs" disabled={bulkBusy} onClick={() => void bulkAdd()}>
+                      Add selected
+                    </Button>
+                  </div>
+                )}
+              </div>
+              <IconInput icon={<Search size={14} />} value={memberSearch} onChange={(e) => setMemberSearch(e.target.value)} placeholder="Search by name or number…" className="mb-3 bg-white" />
+              {searchLoading ? (
                 <p className="py-4 text-center text-sm text-ink-400">Loading contacts…</p>
               ) : filteredLeads.length === 0 ? (
-                <p className="py-4 text-center text-sm text-ink-400">{memberSearch.trim() ? 'No contacts match.' : 'Search by name or number to find someone to add.'}</p>
+                <p className="rounded-xl border border-dashed border-ink-200 bg-white py-4 text-center text-sm text-ink-400">{memberSearch.trim() ? 'No contacts match.' : 'Search by name or number to find someone to add.'}</p>
               ) : (
-                <div className="max-h-56 overflow-y-auto rounded-xl border border-ink-100">
-                  {filteredLeads.map((l) => {
-                    const otherGroupName = l.group_id ? groups.find((g) => g.id === l.group_id)?.name : null;
-                    return (
-                      <div key={l.id} className="flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0 hover:bg-ink-50">
-                        <Avatar name={l.name} color="#94a3b8" size={26} />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
-                          <p className="truncate text-xs text-ink-500">
-                            {l.whatsapp_number || l.phone}
-                            {otherGroupName && <span className="ml-1.5 text-amber-600">· currently in {otherGroupName}</span>}
-                          </p>
+                <>
+                  <div className="max-h-56 overflow-y-auto rounded-xl border border-ink-100 bg-white">
+                    {filteredLeads.map((l) => {
+                      // Multi-membership: being in other groups is now just
+                      // informational context (shown as small chips), not
+                      // a warning that adding here will move/remove them
+                      // from anywhere -- "Add" always simply adds this one
+                      // group on top of whatever else they're already in.
+                      const otherGroupNames = l.group_ids
+                        .map((gid) => groups.find((g) => g.id === gid)?.name)
+                        .filter((n): n is string => !!n);
+                      const checked = selectedAdd.has(l.id);
+                      return (
+                        <div key={l.id} className={cn('flex items-center gap-3 border-b border-ink-50 px-3 py-2 last:border-0', checked ? 'bg-brand-50' : 'hover:bg-ink-50')}>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleSelect(selectedAdd, setSelectedAdd, l.id)}
+                            className="h-4 w-4 shrink-0 rounded border-ink-300 accent-brand-600"
+                          />
+                          <Avatar name={l.name} color={memberAvatarColor(l.id)} size={26} />
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-medium text-ink-900">{l.name}</p>
+                            <p className="truncate text-xs text-ink-500">{l.whatsapp_number || l.phone}</p>
+                            {otherGroupNames.length > 0 && (
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                {otherGroupNames.map((n) => <Badge key={n} tone="gray">{n}</Badge>)}
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            variant="secondary"
+                            className="whitespace-nowrap px-2.5 py-1 text-xs"
+                            disabled={busyLeadId === l.id}
+                            onClick={() => void addMember(l)}
+                          >
+                            Add
+                          </Button>
                         </div>
-                        <Button
-                          variant="secondary"
-                          className="whitespace-nowrap px-2.5 py-1 text-xs"
-                          disabled={busyLeadId === l.id}
-                          onClick={() => void addMember(l)}
-                        >
-                          {otherGroupName ? 'Move here' : 'Add'}
-                        </Button>
+                      );
+                    })}
+                  </div>
+                  {addPagination && addPagination.totalPages > 1 && (
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="text-xs text-ink-400">Page {addPagination.page} of {addPagination.totalPages}</span>
+                      <div className="flex gap-1.5">
+                        <Button variant="secondary" className="px-2 py-1 text-xs" disabled={!addPagination.hasPrev} onClick={() => setAddPage((p) => p - 1)}><ChevronLeft size={13} /> Prev</Button>
+                        <Button variant="secondary" className="px-2 py-1 text-xs" disabled={!addPagination.hasNext} onClick={() => setAddPage((p) => p + 1)}>Next <ChevronRight size={13} /></Button>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -655,6 +985,16 @@ function GroupsTab() {
         destructive
         onConfirm={() => void confirmRemoveMember()}
         onClose={() => setRemovingMember(null)}
+      />
+
+      <ConfirmDialog
+        open={bulkRemoveOpen}
+        title="Remove selected members"
+        message={<>Remove <strong>{selectedRemove.size} member{selectedRemove.size === 1 ? '' : 's'}</strong> from <strong>{managingGroup?.name}</strong>? They can be added back at any time.</>}
+        confirmLabel="Remove selected"
+        destructive
+        onConfirm={() => void bulkRemove()}
+        onClose={() => setBulkRemoveOpen(false)}
       />
     </div>
   );
@@ -1058,6 +1398,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
     applyRealtimeUpdate,
   } = useWhatsAppCampaigns(resource);
   const { templates } = useWhatsAppTemplates();
+  const { format: formatMoney } = useTenantCurrency();
   const usableTemplates = templates.filter((t) => t.approvalStatus === USABLE_APPROVAL_STATUS);
   const { groups } = useGroups();
 
@@ -1289,11 +1630,32 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                   {[['Bookings', m.bookingCount], ['Payments', m.paymentCount]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
                   ))}
-                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatCurrency(m.revenueGenerated)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
+                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatMoney(m.revenueGenerated)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
                 </div>
-                {c.status === 'RUNNING' && (
-                  <p className="mt-2 text-[11px] text-ink-400">Sending now — counts update live as Meta reports delivery, read, and reply status.</p>
-                )}
+                {c.status === 'RUNNING' && (() => {
+                  // Real live progress -- reads the exact same metrics
+                  // the BullMQ worker updates atomically per-recipient
+                  // and pushes via socket (already wired end-to-end via
+                  // useWhatsAppRealtime/applyRealtimeUpdate above), not
+                  // a client-side estimate or polling loop.
+                  const processed = m.sentCount + m.failedCount + (m.skippedCount || 0);
+                  const total = c.recipientCount || m.recipientCount || 0;
+                  const pct = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+                  return (
+                    <div className="mt-3">
+                      <div className="mb-1 flex items-center justify-between text-[11px] text-ink-500">
+                        <span className="flex items-center gap-1.5">
+                          <RefreshCw size={11} className="animate-spin text-brand-500" />
+                          Sending… {processed.toLocaleString()} / {total.toLocaleString()}
+                        </span>
+                        <span className="font-semibold text-ink-700">{pct}%</span>
+                      </div>
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
+                        <div className="h-full rounded-full bg-brand-600 transition-[width] duration-500 ease-out" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {c.status === 'DRAFT' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
                   {c.status === 'DRAFT' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
@@ -1472,22 +1834,68 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
 }
 
 // ---- Nurture messages ------------------------------------------------------
+/**
+ * NurtureMessagesTab -- real, backend-connected. Replaces a mock version
+ * that read fake `db.nurtureSequences` from the in-memory dev store.
+ *
+ * Deliberately READ-ONLY here (view sequences' WhatsApp steps + active
+ * enrollment counts, with a link to the full editor) rather than a second
+ * full create/edit UI -- the real CRUD for sequences already lives on the
+ * separate /nurture page (useNurtureSequences/useNurtureEnrollments,
+ * genuinely wired). Building a second, separate editor for the exact same
+ * backend data here would create two out-of-sync places to manage the
+ * same sequences, which is worse than just linking to the one that exists.
+ */
 function NurtureMessagesTab() {
-  const { db, tenantId } = useDb();
-  const seqs = db.nurtureSequences.filter((s) => s.tenant_id === tenantId);
-  const waSteps = seqs.flatMap((s) => s.steps.filter((st) => st.channel === 'WhatsApp').map((st) => ({ seq: s.name, ...st })));
+  const navigate = useNavigate();
+  const { sequences, loading, error } = useNurtureSequences();
+  const { enrollments, loading: enrollLoading } = useNurtureEnrollments({ status: 'ACTIVE' });
+
+  const waSteps = sequences.flatMap((s) =>
+    s.steps
+      .filter((st) => st.channel === 'WHATSAPP')
+      .map((st) => ({ seqId: s.id, seqName: s.name, seqStatus: s.status, ...st })),
+  );
+
   return (
-    <Card>
-      <CardHeader icon={TAB_ICONS.nurture} title="WhatsApp Nurture Messages" subtitle="WhatsApp steps across all active sequences" />
-      <Table>
-        <thead><tr><Th>Sequence</Th><Th>Step</Th><Th>Delay</Th><Th>Message</Th></tr></thead>
-        <tbody>
-          {waSteps.map((s, i) => (
-            <Tr key={i}><Td className="font-medium">{s.seq}</Td><Td>Step {s.order}</Td><Td>Day {s.delay_days}</Td><Td className="max-w-md truncate text-ink-600">{s.message}</Td></Tr>
-          ))}
-        </tbody>
-      </Table>
-    </Card>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader icon={TAB_ICONS.nurture} title="WhatsApp Nurture Messages" subtitle="WhatsApp steps across all sequences." />
+        <div className="flex flex-wrap items-center gap-4 px-5 pb-4 text-sm">
+          <span className="text-ink-500">
+            {enrollLoading ? 'Loading…' : <><span className="font-semibold text-ink-800">{enrollments.length}</span> active enrollment{enrollments.length === 1 ? '' : 's'} right now</>}
+          </span>
+          <Button variant="secondary" className="ml-auto px-3 py-1.5 text-xs" onClick={() => navigate('/nurture')}>
+            Manage sequences <ChevronRight size={13} />
+          </Button>
+        </div>
+      </Card>
+
+      {error ? (
+        <EmptyState title="Couldn't load nurture sequences" description={error} />
+      ) : loading ? (
+        <p className="p-8 text-center text-sm text-ink-400">Loading…</p>
+      ) : waSteps.length === 0 ? (
+        <EmptyState icon={TAB_ICONS.nurture} title="No WhatsApp nurture steps yet" description="Create a sequence with a WhatsApp step from the full Nurture page." />
+      ) : (
+        <Card>
+          <Table>
+            <thead><tr><Th>Sequence</Th><Th>Status</Th><Th>Step</Th><Th>Delay</Th><Th>Template</Th></tr></thead>
+            <tbody>
+              {waSteps.map((s, i) => (
+                <Tr key={i}>
+                  <Td className="font-medium">{s.seqName}</Td>
+                  <Td><Badge tone={statusTone(s.seqStatus)}>{s.seqStatus}</Badge></Td>
+                  <Td>Step {s.stepNumber}</Td>
+                  <Td>{s.delayValue} {s.delayUnit.toLowerCase()}</Td>
+                  <Td className="max-w-md truncate text-ink-600">{s.templateName || <span className="text-ink-400">No template selected</span>}</Td>
+                </Tr>
+              ))}
+            </tbody>
+          </Table>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -1694,28 +2102,434 @@ function AIAssistantTab() {
 }
 
 // ---- Rules -----------------------------------------------------------------
+// ---- Automation Rules -------------------------------------------------------
+/**
+ * RulesTab -- real, backend-connected. Replaces a mock version that read
+ * fake `db.automations` from the in-memory dev store (toggling did nothing
+ * real, nothing persisted). The actual backend (automationRules.service.js)
+ * is a genuine trigger -> conditions -> ordered-actions rule engine with
+ * execution history -- this UI is a 1:1 surface for it, not a simplification:
+ * conditions really are a flat AND/OR list (no nested groups in the schema),
+ * and actions really are an ordered list (no branching), so this is not a
+ * simplified stand-in for a graph/canvas flow builder -- it faithfully
+ * represents what the engine supports today.
+ */
+const TRIGGER_LABELS: Record<TriggerType, string> = {
+  LEAD_CREATED: 'Lead created', LEAD_UPDATED: 'Lead updated', LEAD_QUALIFIED: 'Lead qualified',
+  PIPELINE_STAGE_CHANGED: 'Pipeline stage changed', MESSAGE_RECEIVED: 'Message received',
+  MESSAGE_SENT: 'Message sent', BOOKING_CREATED: 'Booking created', BOOKING_CONFIRMED: 'Booking confirmed',
+  PAYMENT_PENDING: 'Payment pending', PAYMENT_RECEIVED: 'Payment received',
+  CAMPAIGN_COMPLETED: 'Campaign completed', CAMPAIGN_FAILED: 'Campaign failed', NO_REPLY: 'No reply',
+  TAG_ADDED: 'Tag added', TAG_REMOVED: 'Tag removed', CONTACT_CREATED: 'Contact created',
+  CONTACT_UPDATED: 'Contact updated', CUSTOM_EVENT: 'Custom event',
+};
+const ACTION_LABELS: Record<ActionType, string> = {
+  SEND_TEMPLATE: 'Send template', START_NURTURE: 'Start nurture', STOP_NURTURE: 'Stop nurture',
+  SEND_BROADCAST: 'Send broadcast', GENERATE_AI_REPLY: 'Generate AI reply', ASSIGN_USER: 'Assign user',
+  CHANGE_PIPELINE_STAGE: 'Change pipeline stage', ADD_TAG: 'Add tag', REMOVE_TAG: 'Remove tag',
+  CREATE_TASK: 'Create task', CREATE_NOTE: 'Create note', NOTIFY_USER: 'Notify user',
+  SEND_EMAIL: 'Send email', CALL_WEBHOOK: 'Call webhook', WAIT: 'Wait', END_WORKFLOW: 'End workflow',
+};
+const RULE_STATUS_TONE: Record<RuleStatus, 'gray' | 'green' | 'amber' | 'red'> = {
+  DRAFT: 'gray', ACTIVE: 'green', PAUSED: 'amber', DISABLED: 'gray', ARCHIVED: 'red',
+};
+
 function RulesTab() {
-  const { db, tenantId } = useDb();
-  const { toggleAutomation } = useStore();
-  const autos = db.automations.filter((a) => a.tenant_id === tenantId);
+  const [statusFilter, setStatusFilter] = useState<RuleStatus | 'all'>('all');
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const { rules, loading, error, createRule, updateRule, deleteRule, duplicateRule, toggleRule, refetch } = useAutomationRules({
+    status: statusFilter === 'all' ? undefined : statusFilter,
+    search: debouncedSearch.trim() || undefined,
+    active: true,
+    limit: 50,
+  });
+
+  const [formOpen, setFormOpen] = useState<{ mode: 'create' | 'edit'; rule?: AutomationRule } | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AutomationRule | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [runResult, setRunResult] = useState<{ rule: AutomationRule; result: RunRuleResult } | null>(null);
+
+  const handleToggle = async (rule: AutomationRule) => {
+    setBusyId(rule.id);
+    try {
+      await toggleRule(rule.id);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not toggle rule');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDuplicate = async (rule: AutomationRule) => {
+    setBusyId(rule.id);
+    try {
+      await duplicateRule(rule.id);
+      toast.success(`Duplicated "${rule.name}"`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not duplicate rule');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleRun = async (rule: AutomationRule) => {
+    setBusyId(rule.id);
+    try {
+      const result = await automationRulesApi.run(rule.id, {});
+      setRunResult({ rule, result });
+      refetch(); // executionCount/lastExecutedAt changed server-side
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not run rule');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    const { id, name } = deleteTarget;
+    setDeleteTarget(null);
+    try {
+      await deleteRule(id);
+      toast.success(`"${name}" deleted`);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : 'Could not delete rule');
+    }
+  };
+
   return (
-    <Card>
-      <CardHeader icon={TAB_ICONS.rules} title="WhatsApp Automation Rules" subtitle="Trigger-based WhatsApp actions" />
-      <div className="divide-y divide-ink-100">
-        {autos.map((a) => (
-          <div key={a.id} className="flex items-center justify-between px-5 py-3.5">
-            <div>
-              <p className="font-medium text-ink-900">{a.name}</p>
-              <p className="text-xs text-ink-500">When <span className="font-medium text-ink-700">{a.trigger}</span> → {a.action}</p>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader icon={TAB_ICONS.rules} title="WhatsApp Automation Rules" subtitle="Trigger-based actions -- runs automatically, or manually with 'Run now'." />
+        <div className="flex flex-wrap items-center gap-2 px-5 pb-4">
+          <IconInput icon={<Search size={14} />} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search rules…" className="max-w-xs" />
+          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as RuleStatus | 'all')} className="w-40">
+            <option value="all">All statuses</option>
+            <option value="DRAFT">Draft</option>
+            <option value="ACTIVE">Active</option>
+            <option value="PAUSED">Paused</option>
+            <option value="DISABLED">Disabled</option>
+          </Select>
+          <Button className="ml-auto px-3 py-1.5 text-xs" onClick={() => setFormOpen({ mode: 'create' })}>
+            <Plus size={14} /> New rule
+          </Button>
+        </div>
+      </Card>
+
+      {error ? (
+        <EmptyState title="Couldn't load automation rules" description={error} />
+      ) : loading && rules.length === 0 ? (
+        <p className="p-8 text-center text-sm text-ink-400">Loading rules…</p>
+      ) : rules.length === 0 ? (
+        <EmptyState icon={TAB_ICONS.rules} title="No automation rules yet" description="Create a rule to trigger actions automatically on events like a new lead or a received message." />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {rules.map((r) => (
+            <Card key={r.id} className="flex h-full flex-col p-5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate font-semibold text-ink-900">{r.name}</p>
+                  {r.description && <p className="mt-0.5 text-sm text-ink-500">{r.description}</p>}
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge tone={RULE_STATUS_TONE[r.status]}>{r.status}</Badge>
+                  <Toggle checked={r.status === 'ACTIVE'} onChange={() => { if (busyId !== r.id && r.status !== 'ARCHIVED') void handleToggle(r); }} />
+                </div>
+              </div>
+
+              <p className="mt-3 text-sm text-ink-600">
+                When <span className="font-medium text-ink-800">{TRIGGER_LABELS[r.trigger.type]}</span>
+                {r.conditions.length > 0 && (
+                  <> and <span className="font-medium text-ink-800">{r.conditions.length} condition{r.conditions.length === 1 ? '' : 's'}</span> ({r.conditionLogic}) match</>
+                )}
+                {' '}→ {r.actions.length === 0 ? <span className="text-ink-400">no actions configured</span> : r.actions.map((a) => ACTION_LABELS[a.type]).join(', then ')}
+              </p>
+
+              <div className="mt-3 flex flex-wrap gap-3 text-xs text-ink-400">
+                <span>Priority {r.priority}</span>
+                <span>Ran {r.executionCount}x</span>
+                {r.lastExecutedAt && <span>Last run {timeAgo(r.lastExecutedAt)}</span>}
+              </div>
+
+              <div className="mt-auto flex flex-wrap gap-2 border-t border-ink-100 pt-4">
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setFormOpen({ mode: 'edit', rule: r })}>Edit</Button>
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === r.id} onClick={() => void handleRun(r)}>Run now</Button>
+                <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === r.id} onClick={() => void handleDuplicate(r)}>Duplicate</Button>
+                <Button variant="secondary" className="ml-auto border-red-200 px-2.5 py-1 text-xs text-red-600 hover:bg-red-50" onClick={() => setDeleteTarget(r)}>Delete</Button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {formOpen && (
+        <RuleFormModal
+          key={formOpen.rule?.id ?? 'create'}
+          mode={formOpen.mode}
+          initial={formOpen.rule}
+          onClose={() => setFormOpen(null)}
+          onCreate={createRule}
+          onUpdate={updateRule}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete automation rule"
+        message={<>Delete <strong>{deleteTarget?.name}</strong>? This can't be undone.</>}
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => void confirmDelete()}
+        onClose={() => setDeleteTarget(null)}
+      />
+
+      {runResult && (
+        <Modal open onClose={() => setRunResult(null)} title={`Run result — ${runResult.rule.name}`} size="md"
+          footer={<Button onClick={() => setRunResult(null)}>Close</Button>}>
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Badge tone={runResult.result.status === 'SUCCESS' ? 'green' : runResult.result.status === 'PARTIAL' ? 'amber' : 'red'}>{runResult.result.status}</Badge>
+              <span className="text-sm text-ink-500">{runResult.result.actionsExecuted} action{runResult.result.actionsExecuted === 1 ? '' : 's'} executed in {runResult.result.executionTime}ms</span>
             </div>
-            <div className="flex items-center gap-3">
-              <Badge tone={a.status === 'active' ? 'green' : 'gray'}>{a.status}</Badge>
-              <Toggle checked={a.status === 'active'} onChange={() => toggleAutomation(a.id)} />
+            {runResult.result.failureReason && <p className="text-sm text-red-600">{runResult.result.failureReason}</p>}
+            <div className="max-h-64 overflow-y-auto rounded-lg bg-ink-900 p-3 font-mono text-xs text-ink-200">
+              {runResult.result.logs.map((l, i) => <p key={i}>{l}</p>)}
             </div>
           </div>
-        ))}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+const EMPTY_CONDITION: RuleCondition = { field: '', operator: 'EQUALS', value: '' };
+const EMPTY_ACTION: RuleAction = { order: 1, type: 'ADD_TAG', params: {} };
+
+function RuleFormModal({
+  mode, initial, onClose, onCreate, onUpdate,
+}: {
+  mode: 'create' | 'edit';
+  initial?: AutomationRule;
+  onClose: () => void;
+  onCreate: (input: AutomationRuleInput) => Promise<AutomationRule>;
+  onUpdate: (id: string, patch: Partial<AutomationRuleInput>) => Promise<AutomationRule>;
+}) {
+  const { members } = useTeamMembers();
+  const { templates } = useWhatsAppTemplates();
+
+  const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [triggerType, setTriggerType] = useState<TriggerType>(initial?.trigger.type ?? 'LEAD_CREATED');
+  const [priority, setPriority] = useState(initial?.priority ?? 50);
+  const [conditionLogic, setConditionLogic] = useState<ConditionLogic>(initial?.conditionLogic ?? 'AND');
+  const [conditions, setConditions] = useState<RuleCondition[]>(initial?.conditions?.length ? initial.conditions : []);
+  const [actions, setActions] = useState<RuleAction[]>(initial?.actions?.length ? initial.actions : [{ ...EMPTY_ACTION }]);
+  const [status, setStatus] = useState<RuleStatus>(initial?.status ?? 'DRAFT');
+  const [saving, setSaving] = useState(false);
+
+  const canSave = name.trim().length > 0 && actions.length > 0;
+
+  const updateAction = (i: number, patch: Partial<RuleAction>) => {
+    setActions((prev) => prev.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  };
+  const updateCondition = (i: number, patch: Partial<RuleCondition>) => {
+    setConditions((prev) => prev.map((c, idx) => (idx === i ? { ...c, ...patch } : c)));
+  };
+
+  const handleSave = async () => {
+    if (!canSave || saving) return;
+    setSaving(true);
+    const payload: AutomationRuleInput = {
+      name: name.trim(),
+      description: description.trim(),
+      trigger: { type: triggerType },
+      conditions,
+      conditionLogic,
+      actions: actions.map((a, i) => ({ ...a, order: i + 1 })),
+      status,
+      priority,
+    };
+    try {
+      if (mode === 'edit' && initial) {
+        await onUpdate(initial.id, payload);
+        toast.success('Rule updated');
+      } else {
+        await onCreate(payload);
+        toast.success('Rule created');
+      }
+      onClose();
+    } catch (err) {
+      toast.error(mode === 'edit' ? 'Could not update rule' : 'Could not create rule', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Adaptive param field(s) per action type -- covers the common,
+  // meaningful params for each real ACTION_TYPE the backend engine
+  // supports, rather than one generic JSON textarea.
+  const renderActionParams = (a: RuleAction, i: number) => {
+    const setParam = (key: string, value: unknown) => updateAction(i, { params: { ...a.params, [key]: value } });
+    switch (a.type) {
+      case 'SEND_TEMPLATE':
+        return (
+          <Select value={(a.params?.templateId as string) || ''} onChange={(e) => setParam('templateId', e.target.value)} className="text-sm">
+            <option value="">Select template…</option>
+            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </Select>
+        );
+      case 'START_NURTURE':
+        return <Input value={(a.params?.sequenceId as string) || ''} onChange={(e) => setParam('sequenceId', e.target.value)} placeholder="Nurture sequence ID" className="text-sm" />;
+      case 'STOP_NURTURE':
+        return <Input value={(a.params?.enrollmentId as string) || ''} onChange={(e) => setParam('enrollmentId', e.target.value)} placeholder="Enrollment ID" className="text-sm" />;
+      case 'SEND_BROADCAST':
+        return <Input value={(a.params?.broadcastId as string) || ''} onChange={(e) => setParam('broadcastId', e.target.value)} placeholder="Broadcast ID" className="text-sm" />;
+      case 'GENERATE_AI_REPLY':
+        return <Input value={(a.params?.goal as string) || ''} onChange={(e) => setParam('goal', e.target.value)} placeholder="Goal (e.g. booking, objection)" className="text-sm" />;
+      case 'ASSIGN_USER':
+        return (
+          <Select value={(a.params?.userId as string) || ''} onChange={(e) => setParam('userId', e.target.value)} className="text-sm">
+            <option value="">Select user…</option>
+            {members.map((m) => <option key={m.id} value={m.id}>{m.fullName}</option>)}
+          </Select>
+        );
+      case 'CHANGE_PIPELINE_STAGE':
+        return <Input value={(a.params?.stage as string) || ''} onChange={(e) => setParam('stage', e.target.value)} placeholder="Stage name" className="text-sm" />;
+      case 'ADD_TAG':
+      case 'REMOVE_TAG':
+        return <Input value={(a.params?.tag as string) || ''} onChange={(e) => setParam('tag', e.target.value)} placeholder="Tag" className="text-sm" />;
+      case 'CREATE_TASK':
+        return <Input value={(a.params?.title as string) || ''} onChange={(e) => setParam('title', e.target.value)} placeholder="Task title" className="text-sm" />;
+      case 'CREATE_NOTE':
+        return <Input value={(a.params?.text as string) || ''} onChange={(e) => setParam('text', e.target.value)} placeholder="Note text" className="text-sm" />;
+      case 'NOTIFY_USER':
+        return (
+          <div className="flex gap-2">
+            <Select value={(a.params?.userId as string) || ''} onChange={(e) => setParam('userId', e.target.value)} className="flex-1 text-sm">
+              <option value="">Select user…</option>
+              {members.map((m) => <option key={m.id} value={m.id}>{m.fullName}</option>)}
+            </Select>
+            <Input value={(a.params?.message as string) || ''} onChange={(e) => setParam('message', e.target.value)} placeholder="Message" className="flex-1 text-sm" />
+          </div>
+        );
+      case 'SEND_EMAIL':
+        return (
+          <div className="flex gap-2">
+            <Input value={(a.params?.to as string) || ''} onChange={(e) => setParam('to', e.target.value)} placeholder="To" className="flex-1 text-sm" />
+            <Input value={(a.params?.subject as string) || ''} onChange={(e) => setParam('subject', e.target.value)} placeholder="Subject" className="flex-1 text-sm" />
+          </div>
+        );
+      case 'CALL_WEBHOOK':
+        return <Input value={(a.params?.url as string) || ''} onChange={(e) => setParam('url', e.target.value)} placeholder="https://…" className="text-sm" />;
+      case 'WAIT':
+        return (
+          <div className="flex gap-2">
+            <Input type="number" min={0} value={a.delayValue ?? 0} onChange={(e) => updateAction(i, { delayValue: Number(e.target.value) })} className="w-24 text-sm" />
+            <Select value={a.delayUnit ?? 'minutes'} onChange={(e) => updateAction(i, { delayUnit: e.target.value as DelayUnit })} className="text-sm">
+              <option value="minutes">Minutes</option>
+              <option value="hours">Hours</option>
+              <option value="days">Days</option>
+            </Select>
+          </div>
+        );
+      case 'END_WORKFLOW':
+        return <p className="text-xs text-ink-400">No parameters -- stops the rule here.</p>;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={mode === 'edit' ? 'Edit automation rule' : 'New automation rule'}
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button onClick={() => void handleSave()} disabled={!canSave || saving}>{saving ? 'Saving…' : 'Save rule'}</Button>
+        </>
+      }
+    >
+      <div className="space-y-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Welcome new leads" autoFocus /></Field>
+          <Field label="Status">
+            <Select value={status} onChange={(e) => setStatus(e.target.value as RuleStatus)}>
+              <option value="DRAFT">Draft</option>
+              <option value="ACTIVE">Active</option>
+              <option value="PAUSED">Paused</option>
+            </Select>
+          </Field>
+        </div>
+        <Field label="Description"><Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Optional" /></Field>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <Field label="Trigger">
+            <Select value={triggerType} onChange={(e) => setTriggerType(e.target.value as TriggerType)}>
+              {TRIGGER_TYPE_VALUES.map((t) => <option key={t} value={t}>{TRIGGER_LABELS[t]}</option>)}
+            </Select>
+          </Field>
+          <Field label="Priority (1-100, higher runs first)">
+            <Input type="number" min={1} max={100} value={priority} onChange={(e) => setPriority(Number(e.target.value))} />
+          </Field>
+        </div>
+
+        {/* Conditions -- flat list, AND/OR toggle, matching the real
+            schema (no nested groups exist in the backend). */}
+        <div>
+          <div className="mb-2 flex items-center justify-between">
+            <p className="text-xs font-bold uppercase tracking-wide text-ink-400">Conditions (optional)</p>
+            {conditions.length > 1 && (
+              <div className="flex items-center gap-1 rounded-lg bg-ink-100 p-0.5 text-xs font-medium">
+                <button onClick={() => setConditionLogic('AND')} className={cn('rounded-md px-2 py-1', conditionLogic === 'AND' ? 'bg-white shadow-sm' : 'text-ink-500')}>AND</button>
+                <button onClick={() => setConditionLogic('OR')} className={cn('rounded-md px-2 py-1', conditionLogic === 'OR' ? 'bg-white shadow-sm' : 'text-ink-500')}>OR</button>
+              </div>
+            )}
+          </div>
+          <div className="space-y-2">
+            {conditions.map((c, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <Input value={c.field} onChange={(e) => updateCondition(i, { field: e.target.value })} placeholder="Field (e.g. lead.score)" className="flex-1 text-sm" />
+                <Select value={c.operator} onChange={(e) => updateCondition(i, { operator: e.target.value as ConditionOperator })} className="w-40 text-sm">
+                  {CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{op.replace(/_/g, ' ')}</option>)}
+                </Select>
+                <Input value={String(c.value ?? '')} onChange={(e) => updateCondition(i, { value: e.target.value })} placeholder="Value" className="flex-1 text-sm" />
+                <button onClick={() => setConditions((prev) => prev.filter((_, idx) => idx !== i))} className="shrink-0 rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600"><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setConditions((prev) => [...prev, { ...EMPTY_CONDITION }])} className="mt-2 text-xs font-semibold text-brand-700 hover:underline">+ Add condition</button>
+        </div>
+
+        {/* Actions -- ordered list, executed top to bottom. */}
+        <div>
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-400">Actions</p>
+          <div className="space-y-2">
+            {actions.map((a, i) => (
+              <div key={i} className="rounded-xl border border-ink-100 bg-ink-50/50 p-3">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ink-200 text-[11px] font-bold text-ink-600">{i + 1}</span>
+                  <Select value={a.type} onChange={(e) => updateAction(i, { type: e.target.value as ActionType, params: {} })} className="flex-1 text-sm">
+                    {ACTION_TYPE_VALUES.map((t) => <option key={t} value={t}>{ACTION_LABELS[t]}</option>)}
+                  </Select>
+                  <button onClick={() => setActions((prev) => prev.filter((_, idx) => idx !== i))} disabled={actions.length === 1} className="shrink-0 rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-30"><Trash2 size={14} /></button>
+                </div>
+                {renderActionParams(a, i)}
+              </div>
+            ))}
+          </div>
+          <button onClick={() => setActions((prev) => [...prev, { ...EMPTY_ACTION, order: prev.length + 1 }])} className="mt-2 text-xs font-semibold text-brand-700 hover:underline">+ Add action</button>
+        </div>
       </div>
-    </Card>
+    </Modal>
   );
 }
 
@@ -2117,24 +2931,44 @@ function LogsTab() {
 }
 
 // ---- Analytics -------------------------------------------------------------
+// ---- Analytics ---------------------------------------------------------
+/**
+ * AnalyticsTab -- real, backend-connected. Replaces a mock version that
+ * computed every number from the in-memory dev store (useDb()) and
+ * generated the "Template performance" chart's data with Math.random() on
+ * every single render (a new fake number each time, not even consistent
+ * fake data). See whatsappAnalyticsApi.ts's header comment for the same
+ * finding, independently documented when that file was scaffolded.
+ *
+ * "Avg response time" is shown as "Not tracked yet" rather than a made-up
+ * duration -- the backend genuinely returns null for
+ * averageFirstResponseTime/averageResolutionTime (no timestamp fields
+ * exist yet on the conversation model to compute it from). Showing a fake
+ * "14m" would be exactly the kind of fabricated number this fix removes.
+ */
 function AnalyticsTab() {
-  const { db, tenantId } = useDb();
-  const convos = db.conversations.filter((c) => c.tenant_id === tenantId);
-  const msgs = db.messages.filter((m) => m.tenant_id === tenantId);
-  const sent = msgs.filter((m) => m.direction === 'outbound').length;
-  const campaigns = db.campaigns.filter((c) => c.tenant_id === tenantId);
-  const totalSent = campaigns.reduce((s, c) => s + c.metrics.sent, 0);
-  const totalDelivered = campaigns.reduce((s, c) => s + c.metrics.delivered, 0);
-  const totalRead = campaigns.reduce((s, c) => s + c.metrics.read, 0);
-  const totalReplied = campaigns.reduce((s, c) => s + c.metrics.replied, 0);
-  const revenue = campaigns.reduce((s, c) => s + c.metrics.revenue, 0);
+  const { data, loading, error } = useWhatsAppAnalytics();
+  // Aggregate campaign analytics endpoint has no per-campaign breakdown or
+  // revenue total -- but individual campaigns (already real, same hook
+  // CampaignsTab uses) DO carry real repliedCount/revenueGenerated, so
+  // "Reply rate by campaign" and "WA Revenue" are built from that instead.
+  const { campaigns } = useWhatsAppCampaigns('campaigns', { limit: 50 });
+  const { format: formatMoney } = useTenantCurrency();
 
-  const trend = conversationsTrend(db, tenantId);
-  const replyByCampaign = campaigns.slice(0, 6).map((c) => ({ name: c.name.slice(0, 12), value: c.metrics.replied }));
-  const tplPerf = db.templates.filter((t) => t.tenant_id === tenantId).slice(0, 6).map((t) => ({ name: t.template_name.slice(0, 12), value: Math.floor(Math.random() * 80) + 20 }));
+  if (loading) return <p className="p-8 text-center text-sm text-ink-400">Loading analytics…</p>;
+  if (error || !data) return <EmptyState title="Couldn't load analytics" description={error || 'Please try again.'} />;
+
+  const { dashboard, messages, conversations, templates, trends } = data;
+  const revenue = campaigns.reduce((s, c) => s + (c.metrics?.revenueGenerated || 0), 0);
+  const replyByCampaign = campaigns
+    .filter((c) => (c.metrics?.repliedCount || 0) > 0)
+    .slice(0, 6)
+    .map((c) => ({ name: c.name.slice(0, 12), value: c.metrics.repliedCount }));
+  const tplPerf = templates.top10Templates.slice(0, 6).map((t) => ({ name: t.templateName.slice(0, 12), value: t.successRate }));
+  const trend = trends.conversations.map((p) => ({ name: p.period, value: p.total }));
   const funnel = [
-    { name: 'Sent', value: totalSent }, { name: 'Delivered', value: totalDelivered },
-    { name: 'Read', value: totalRead }, { name: 'Replied', value: totalReplied },
+    { name: 'Sent', value: messages.sent }, { name: 'Delivered', value: messages.delivered },
+    { name: 'Read', value: messages.read },
   ];
 
   return (
@@ -2143,18 +2977,18 @@ function AnalyticsTab() {
         <CardHeader icon={TAB_ICONS.analytics} title="WhatsApp Analytics" subtitle="KPIs and charts across conversations, campaigns and templates." />
       </Card>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Conversations" value={convos.length} icon={<MessageSquare size={18} />} accent="#22c55e" />
-        <KpiCard label="Messages sent" value={sent} icon={<Send size={18} />} accent="#6366f1" />
-        <KpiCard label="Delivery rate" value={percent(totalSent ? (totalDelivered / totalSent) * 100 : 0)} icon={<CheckCircle2 size={18} />} accent="#3b82f6" />
-        <KpiCard label="Reply rate" value={percent(totalRead ? (totalReplied / totalRead) * 100 : 0)} icon={<MessageSquare size={18} />} accent="#8b5cf6" />
-        <KpiCard label="Read rate" value={percent(totalDelivered ? (totalRead / totalDelivered) * 100 : 0)} icon={<CheckCircle2 size={18} />} accent="#06b6d4" />
-        <KpiCard label="Avg response" value="14m" icon={<RefreshCw size={18} />} accent="#14b8a6" />
-        <KpiCard label="WA Revenue" value={formatCurrency(revenue)} icon={<Server size={18} />} accent="#10b981" />
-        <KpiCard label="Pending replies" value={convos.filter((c) => c.unread_count > 0).length} icon={<MessageSquare size={18} />} accent="#f97316" />
+        <KpiCard label="Conversations" value={dashboard.totalConversations} icon={<MessageSquare size={18} />} accent="#22c55e" />
+        <KpiCard label="Messages sent" value={dashboard.outgoingMessages} icon={<Send size={18} />} accent="#6366f1" />
+        <KpiCard label="Delivery rate" value={percent(messages.deliveryRate, 1)} icon={<CheckCircle2 size={18} />} accent="#3b82f6" />
+        <KpiCard label="Read rate" value={percent(messages.readRate, 1)} icon={<CheckCircle2 size={18} />} accent="#06b6d4" />
+        <KpiCard label="Avg response" value="Not tracked yet" icon={<RefreshCw size={18} />} accent="#14b8a6" />
+        <KpiCard label="WA Revenue" value={formatMoney(revenue)} icon={<Server size={18} />} accent="#10b981" />
+        <KpiCard label="Pending replies" value={conversations.unread} icon={<MessageSquare size={18} />} accent="#f97316" />
+        <KpiCard label="Active conversations" value={dashboard.activeConversations} icon={<MessageSquare size={18} />} accent="#8b5cf6" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <LineChartCard title="Conversations over time" data={trend} color="#22c55e" area />
-        <BarChartCard title="Reply rate by campaign" data={replyByCampaign} color="#8b5cf6" />
+        <BarChartCard title="Replies by campaign" data={replyByCampaign} color="#8b5cf6" />
         <BarChartCard title="Template performance" data={tplPerf} color="#6366f1" />
         <DonutChartCard title="Message delivery funnel" data={funnel} />
       </div>

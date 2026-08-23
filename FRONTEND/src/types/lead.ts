@@ -1,15 +1,3 @@
-/**
- * Real Lead types -- match the backend's ACTUAL response shapes exactly.
- *
- * IMPORTANT: the list endpoint (GET /api/leads) and the single-lead endpoint
- * (GET /api/leads/:id) do NOT return the same shape. List rows go through
- * `toLeadListDTO` (a trimmed subset); single-lead reads go through
- * `toLeadDTO` (the full document). Source: src/shared/mappers/lead.mappers.js
- *
- * The Leads module also predates the { success, data } envelope used
- * elsewhere -- these types describe the RAW body returned by each route,
- * consumed via requestRaw() in leadsApi.ts.
- */
 
 export type LeadStatus =
   | 'New' | 'Contacted' | 'Qualified' | 'Booked' | 'Call Completed'
@@ -38,7 +26,13 @@ export interface LeadListItem {
   qualification_score: number;
   source: string;
   assigned_user_id: string | null;
-  group_id: string | null;
+  /** AiSensy-style multi-membership -- a lead can belong to several groups
+   * at once. Empty array = no group. */
+  group_ids: string[];
+  /** Freeform contact tags, distinct from Conversation.tags (which label
+   * individual WhatsApp threads, not the underlying contact). Powers
+   * campaign/broadcast audience targeting. */
+  tags: string[];
   value: number;
   consent_status: ConsentStatus;
   opt_out_status: boolean;
@@ -67,7 +61,11 @@ export interface Lead {
   qualification_score: number;
   lead_temperature: LeadTemperature;
   assigned_user_id: string | null;
-  group_id: string | null;
+  /** AiSensy-style multi-membership -- a lead can belong to several groups
+   * at once. Empty array = no group. */
+  group_ids: string[];
+  /** Freeform contact tags, distinct from Conversation.tags. */
+  tags: string[];
   segment: string;
   value: number;
   notes: string;
@@ -98,7 +96,13 @@ export interface LeadInput {
   qualification_score?: number;
   lead_temperature?: LeadTemperature;
   assigned_user_id?: string | null;
-  group_id?: string | null;
+  /** Full desired membership list for a PATCH -- replaces group_ids
+   * entirely (send the current array plus/minus the one you're
+   * changing, not just the single id being added/removed). */
+  group_ids?: string[];
+  /** Full desired tag list for a PATCH -- same "send the whole array"
+   * semantics as group_ids. */
+  tags?: string[];
   segment?: string;
   value?: number;
   notes?: string;
@@ -115,7 +119,13 @@ export interface LeadListQuery {
   source?: string;
   segment?: string;
   assigned_user_id?: string;
+  /** Filters to leads whose group_ids ARRAY contains this one id -- still
+   * a single id per request (not the full membership list), matches
+   * query-builder.js's `{ group_ids: group_id }` "array contains" query. */
   group_id?: string;
+  /** Comma-separated list -- matches leads carrying ALL listed tags
+   * ($all semantics, same as the campaign/broadcast audience builder). */
+  tags?: string;
   includeArchived?: boolean;
   archivedOnly?: boolean;
   sort?: string;

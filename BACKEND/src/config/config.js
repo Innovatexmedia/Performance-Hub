@@ -1,11 +1,4 @@
-/**
- * App configuration.
- * FILE: src/config/config.js
- *
- * WHAT CHANGED:
- *   - Removed JWT_SECRET check (old — never existed in this project)
- *   - JWT is validated by env.js using JWT_ACCESS_SECRET + JWT_REFRESH_SECRET
- */
+
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -32,6 +25,26 @@ const config = {
   // target -- Meta can't reach localhost. Set this explicitly (e.g. your
   // ngrok URL, or your real domain) for the webhook to actually function.
   API_BASE_URL: process.env.API_BASE_URL || `http://localhost:${process.env.PORT || 4000}`,
+  // Redis connection for BullMQ (campaign/broadcast send queue -- see
+  // src/queues/). NOT required to boot the API server (unlike
+  // MONGODB_URI) since only the send-campaign feature needs it, but the
+  // worker process (src/worker.js) will fail fast without a reachable
+  // Redis if you actually try to send a campaign. Defaults to a local
+  // Redis for dev convenience.
+  REDIS_URL: process.env.REDIS_URL || 'redis://127.0.0.1:6379',
+  // How many recipient sends a single worker process handles concurrently.
+  // Real concurrency (not the old sequential loop's fixed sleep) -- tune
+  // based on your WhatsApp provider's actual rate limits. Run multiple
+  // worker PROCESSES (not just raise this number) to scale horizontally;
+  // see src/worker.js.
+  CAMPAIGN_SEND_CONCURRENCY: parseInt(process.env.CAMPAIGN_SEND_CONCURRENCY ?? '5', 10),
+  // BullMQ rate limiter: at most this many jobs start per
+  // CAMPAIGN_SEND_RATE_DURATION_MS window, shared across all concurrent
+  // workers on this queue -- the real replacement for the old fixed
+  // 300ms sleep-between-sends, and actually enforced queue-wide instead
+  // of per-loop.
+  CAMPAIGN_SEND_RATE_MAX: parseInt(process.env.CAMPAIGN_SEND_RATE_MAX ?? '20', 10),
+  CAMPAIGN_SEND_RATE_DURATION_MS: parseInt(process.env.CAMPAIGN_SEND_RATE_DURATION_MS ?? '1000', 10),
   // Required to create a super_admin account via /auth/register -- without
   // this set, super_admin registration is permanently blocked (fails
   // closed, not open). Set this to a real, private secret and share it
@@ -58,16 +71,6 @@ const config = {
   PLAN_MAX_USERS_SCALE:      parseInt(process.env.PLAN_MAX_USERS_SCALE ?? '50', 10),
   PLAN_MAX_USERS_ENTERPRISE: parseInt(process.env.PLAN_MAX_USERS_ENTERPRISE ?? '999', 10),
 
-  // Razorpay -- real recurring subscriptions for paid plans. Both keys are
-  // required for the subscribe/verify flow to work at all; RAZORPAY_KEY_ID
-  // is also sent to the frontend (public, safe) to open Checkout.
-  // RAZORPAY_WEBHOOK_SECRET is separate from the API key secret -- set
-  // when configuring the webhook URL in the Razorpay dashboard, used only
-  // to verify inbound webhook payloads (subscription.charged/halted/etc).
-  RAZORPAY_KEY_ID:          process.env.RAZORPAY_KEY_ID || null,
-  RAZORPAY_KEY_SECRET:      process.env.RAZORPAY_KEY_SECRET || null,
-  RAZORPAY_WEBHOOK_SECRET:  process.env.RAZORPAY_WEBHOOK_SECRET || null,
-
   // Real Google Ads API access. The developer token and manager account
   // are platform-level (InnovateX applies for ONE developer token,
   // representing the whole product -- Google's real, documented model
@@ -82,6 +85,13 @@ const config = {
   // client "Authorized redirect URIs" -- see the setup steps delivered
   // alongside this integration.
   GOOGLE_ADS_OAUTH_REDIRECT_URI:  process.env.GOOGLE_ADS_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/google-ads/oauth/callback`,
+
+  // Real Shopify Partner app credentials -- platform-level, InnovateX
+  // applies for ONE Shopify app (via a Partner account), and each
+  // tenant then connects their own store to it via real OAuth.
+  SHOPIFY_CLIENT_ID:     process.env.SHOPIFY_CLIENT_ID || null,
+  SHOPIFY_CLIENT_SECRET: process.env.SHOPIFY_CLIENT_SECRET || null,
+  SHOPIFY_OAUTH_REDIRECT_URI: process.env.SHOPIFY_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/shopify/oauth/callback`,
 };
 
 if (!process.env.SUPER_ADMIN_SECRET) {
@@ -105,6 +115,14 @@ if (!process.env.GOOGLE_ADS_DEVELOPER_TOKEN || !process.env.GOOGLE_ADS_OAUTH_CLI
     '\n⚠️  Google Ads API is not fully configured.' +
     '\n   Set GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_MANAGER_CUSTOMER_ID, GOOGLE_ADS_OAUTH_CLIENT_ID, and GOOGLE_ADS_OAUTH_CLIENT_SECRET.' +
     '\n   Until all four are set, tenants cannot connect a real Google Ads account -- the Connect button will show a clear setup-required error.\n'
+  );
+}
+
+if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) {
+  console.warn(
+    '\n⚠️  Shopify is not fully configured.' +
+    '\n   Set SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET (from your Shopify Partner app).' +
+    '\n   Until both are set, tenants cannot connect a real Shopify store -- the Connect button will show a clear setup-required error.\n'
   );
 }
 

@@ -5,12 +5,13 @@ import { useSettings } from '@/hooks/useSettings';
 import { settingsApi } from '@/lib/settingsApi';
 import { openRazorpaySubscriptionCheckout } from '@/lib/razorpayCheckout';
 import { usePlanStore } from '@/store/planStore';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { applyAccentColor } from '@/utils/theme';
 import { formatCurrency } from '@/utils/formatters';
 import { settingsPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
-import { PageHeader, Card, Button, Tabs, Field, Input, Toggle, Badge, cn } from '@/components/ui';
+import { PageHeader, Card, Button, Tabs, Field, Input, Select, Toggle, Badge, cn } from '@/components/ui';
 import type {
   AllSettings, CompanySettings, BrandingSettings, LeadFieldsSettings, PipelineStageDisplay,
   QualificationSettings, ScoringRulesSettings,
@@ -91,6 +92,11 @@ function CompanyTab({ data, canEdit, onSaved }: { data: CompanySettings; canEdit
     try {
       await settingsApi.updateCompany(form);
       toast.success('Company settings saved');
+      // Every mounted component reading useTenantCurrency() (KPI cards,
+      // campaign revenue, etc.) updates immediately, not just after a
+      // reload -- same reasoning as usePlanStore.refresh() elsewhere in
+      // this file.
+      void useCurrencyStore.getState().refresh();
       onSaved();
     } catch (err) {
       toast.error('Could not save', err instanceof ApiError ? err.message : 'Please try again.');
@@ -106,6 +112,11 @@ function CompanyTab({ data, canEdit, onSaved }: { data: CompanySettings; canEdit
         <Field label="Company name"><Input disabled={!canEdit} value={form.company_name} onChange={(e) => setForm({ ...form, company_name: e.target.value })} /></Field>
         <Field label="Website"><Input disabled={!canEdit} value={form.company_website} onChange={(e) => setForm({ ...form, company_website: e.target.value })} /></Field>
         <Field label="Industry"><Input disabled={!canEdit} value={form.industry} onChange={(e) => setForm({ ...form, industry: e.target.value })} /></Field>
+        <Field label="Currency" hint="Used for all revenue/payment figures across the app.">
+          <Select disabled={!canEdit} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}>
+            {(form.available_currencies || ['USD']).map((c) => <option key={c} value={c}>{c}</option>)}
+          </Select>
+        </Field>
       </div>
       <Field label="Description"><Input disabled={!canEdit} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
       {canEdit && <Button className="mt-4" disabled={saving} onClick={() => void save()}><Save size={15} /> {saving ? 'Saving…' : 'Save'}</Button>}

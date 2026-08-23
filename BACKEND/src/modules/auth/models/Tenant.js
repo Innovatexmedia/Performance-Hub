@@ -1,47 +1,10 @@
-/**
- * =============================================================================
- * InnovateX Revenue OS — Tenant Model
- * =============================================================================
- *
- * FILE: src/modules/auth/models/Tenant.js
- *
- * FIX APPLIED — "next is not a function" in Mongoose v8
- * ──────────────────────────────────────────────────────
- * All four pre-hooks have been converted to async functions WITHOUT next().
- *
- * Root cause:
- * Mongoose v8 (via Kareem hook runner) does NOT pass `next` as a parameter
- * to hooks when they are called inside a transaction session context, OR
- * when the hook runner detects async behaviour. Calling next() in that
- * context throws: "TypeError: next is not a function".
- *
- * The universal safe pattern for ALL Mongoose v8 hooks:
- *
- *   ✅ CORRECT — async, no next(), throw to signal errors
- *   tenantSchema.pre('validate', async function () { ... })
- *   tenantSchema.pre('save',     async function () { ... })
- *
- *   ❌ BROKEN in v8 transaction context
- *   tenantSchema.pre('validate', function (next) { ...; next(); })
- *   tenantSchema.pre('save',     function (next) { ...; next(); })
- *
- * None of the four hooks here do async work (no DB calls, no awaits) --
- * EXCEPT hook 2 below, which now resolves the tenant's Plan document (a
- * real DB read, sometimes a write via getDefaultPlan()'s fallback).
- * Declaring every hook async and throwing on error is still the safest
- * pattern regardless, because Mongoose v8 handles both cases correctly:
- *   - Thrown error → Mongoose catches it, rejects the save promise
- *   - No error → Mongoose continues to next hook automatically
- *
- * =============================================================================
- */
-
 import mongoose from 'mongoose';
 import config from '../../../config/config.js';
 import {
   SUBSCRIPTION_STATUS,
 } from '../constants/auth.constants.js';
 import Account from '../../plans/account.model.js';
+import { PAYMENT_CURRENCY_VALUES } from '../../payments/payment.constants.js';
 
 const { Schema } = mongoose;
 
@@ -163,6 +126,20 @@ const tenantSchema = new Schema(
       default: 'other',
     },
     industry: { type: String, default: null },
+
+    /**
+     * Workspace-wide display/accounting currency (e.g. campaign revenue,
+     * payment amounts). Single currency per tenant -- the same "workspace
+     * currency" model Stripe/HubSpot/Salesforce use, NOT per-transaction
+     * FX conversion. Reuses PAYMENT_CURRENCY_VALUES (payments/payment.constants.js)
+     * as the single source of truth so this can never drift out of sync
+     * with what Payment.currency itself accepts.
+     */
+    currency: {
+      type:    String,
+      enum:    PAYMENT_CURRENCY_VALUES,
+      default: 'USD',
+    },
 
     // ── Owner (denormalised — see architecture notes in docs) ─────────────────
     ownerUserId: { type: Schema.Types.ObjectId, ref: 'User', default: null },

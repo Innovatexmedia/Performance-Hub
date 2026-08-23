@@ -12,7 +12,8 @@ export interface Group {
   created_by: string | null;
   created_at: string;
   updated_at: string;
-  /** Always computed live against Lead.group_id -- never stored/stale. */
+  /** Always computed live against Lead.group_ids (multi-membership array)
+   * -- never stored/stale. */
   memberCount: number;
 }
 

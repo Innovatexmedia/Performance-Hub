@@ -1,16 +1,4 @@
-/**
- * WhatsApp Broadcasts — service.
- *
- * Extends the campaign pattern with strict consent + opt-out enforcement.
- * calculateAudience returns a breakdown of eligible vs excluded contacts.
- * Excluded contacts are logged as individual activity records.
- * templateApprovalService.assertUsable enforces PROVIDER_APPROVED templates.
- *
- * Audience resolution queries the real Lead collection (the data your
- * Contacts/Leads tab and the real inbound-webhook pipeline actually
- * populate) -- NOT the separate, unused WhatsAppContact collection this
- * file previously queried.
- */
+
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
@@ -116,7 +104,10 @@ export function buildBaseContactQuery(tenantId, filters = {}) {
   if (filters.tags?.length)         query.tags = { $all: filters.tags };
   if (filters.source)               query.source = filters.source;
   if (filters.assignedUserId)       query.assigned_user_id = filters.assignedUserId;
-  if (filters.groupId)              query.group_id = filters.groupId;
+  // group_ids is an array on Lead (multi-membership) -- `{ group_ids: X }`
+  // resolves as "array contains X" in Mongo, same query shape as an
+  // equals-match on a single value would have been.
+  if (filters.groupId)              query.group_ids = filters.groupId;
   // NOTE: filters.status intentionally not mapped -- see comment in
   // campaigns.service.js buildAudienceQuery for why.
   if (filters.minimumScore !== undefined || filters.maximumScore !== undefined) {
@@ -154,7 +145,7 @@ async function resolveAudienceSummary(tenantId, audience = {}) {
     ...(filters.tags?.length         ? { tags: { $all: filters.tags } }             : {}),
     ...(filters.source               ? { source: filters.source }                    : {}),
     ...(filters.assignedUserId       ? { assigned_user_id: filters.assignedUserId }  : {}),
-    ...(filters.groupId              ? { group_id: filters.groupId }                  : {}),
+    ...(filters.groupId              ? { group_ids: filters.groupId }                 : {}),
     // NOTE: filters.status intentionally not mapped -- see comment in
     // campaigns.service.js buildAudienceQuery for why.
   };

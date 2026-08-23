@@ -41,7 +41,16 @@ const leadSchema = new Schema(
 
     // Ownership / segmentation
     assigned_user_id: { type: String, default: null },
-    group_id: { type: String, default: null, index: true },
+    // AiSensy-style multi-membership: a lead can belong to several
+    // ContactGroups at once (e.g. "Hot Leads" AND "Webinar Attendees"),
+    // unlike a pipeline stage which is single-valued. See group.model.js.
+    group_ids: { type: [String], default: [], index: true },
+    // Freeform contact tags -- lighter-weight than groups (no separate
+    // entity to create first), assignable inline while working a lead.
+    // Distinct from Conversation.tags (whatsapp/conversations/conversation.model.js),
+    // which labels individual WhatsApp threads, not the underlying contact.
+    // Powers campaign/broadcast audience targeting via { tags: { $all: [...] } }.
+    tags: { type: [String], default: [], index: true },
     segment: { type: String, trim: true },
     value: { type: Number, default: 0 },
     notes: { type: String, default: '' },
