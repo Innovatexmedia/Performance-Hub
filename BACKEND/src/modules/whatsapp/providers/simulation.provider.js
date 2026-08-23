@@ -41,6 +41,20 @@ export class SimulationProvider extends WhatsAppProvider {
     };
   }
 
+  async sendMedia({ to, mediaType, mediaUrl, caption }) {
+    const now = new Date();
+    return {
+      provider: this.name,
+      provider_message_id: `sim_media_${randomUUID()}`,
+      status: MESSAGE_STATUS.SENT,
+      to,
+      type: mediaType,
+      content: caption || `[${mediaType}] ${mediaUrl}`,
+      sent_at: now,
+      delivered_at: now,
+    };
+  }
+
   async simulateInbound({ from, content, type = 'text' }) {
     const now = new Date();
     return {

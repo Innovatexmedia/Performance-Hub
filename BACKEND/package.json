@@ -19,11 +19,13 @@
     "@socket.io/redis-emitter": "^5.1.0",
     "argon2": "^0.44.0",
     "bullmq": "^6.2.0",
+    "cloudinary": "^2.10.1",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "csv-parser": "^3.2.1",
     "dotenv": "^17.4.2",
+    "emoji-picker-react": "^4.19.1",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "express-validator": "^7.3.2",
@@ -37,8 +39,5 @@
     "nodemailer": "^8.0.11",
     "razorpay": "^2.9.8",
     "socket.io": "^4.8.3"
-  },
-  "devDependencies": {
-    "ioredis-mock": "^8.13.1"
   }
 }

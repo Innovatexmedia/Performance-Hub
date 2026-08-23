@@ -22,6 +22,7 @@ import deliveryLogsRoutes      from './submodules/deliveryLogs/deliveryLogs.rout
 import consentRoutes           from './submodules/consent/consent.routes.js';
 import whatsappAnalyticsRoutes  from './submodules/whatsappAnalytics/whatsappAnalytics.routes.js';
 import whatsappSettingsRoutes   from './submodules/whatsappSettings/whatsappSettings.routes.js';
+import savedRepliesRoutes       from './submodules/savedReplies/savedReplies.routes.js';
 import metaWebhookRoutes        from './webhooks/metaWebhook.routes.js';
 
 const whatsappRouter = Router();
@@ -82,5 +83,6 @@ whatsappRouter.use('/delivery-logs', deliveryLogsRoutes);
 whatsappRouter.use('/consent', consentRoutes);
 whatsappRouter.use('/analytics', whatsappAnalyticsRoutes);
 whatsappRouter.use('/settings', whatsappSettingsRoutes);
+whatsappRouter.use('/saved-replies', savedRepliesRoutes);
 
 export default whatsappRouter;

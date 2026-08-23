@@ -1,7 +1,8 @@
-import { apiClientRaw } from '@/lib/apiClient';
+import { apiClientRaw, requestFormDataRaw } from '@/lib/apiClient';
 import type {
   Conversation, ConversationDetails, ConversationListQuery, ConversationListResult,
   ConversationNote, Message, MessageType, SendMessageResult, LoadOlderMessagesResult,
+  UploadedMedia,
 } from '@/types/whatsapp';
 
 /**
@@ -45,8 +46,18 @@ export const whatsappInboxApi = {
   removeTag: (id: string, tag: string) =>
     apiClientRaw.delete<Conversation>(`/whatsapp/conversations/${id}/tags/${encodeURIComponent(tag)}`),
 
-  send: (conversationId: string, content: string, type: MessageType = 'text') =>
-    apiClientRaw.post<SendMessageResult>('/whatsapp/messages/send', { conversationId, content, type }),
+  send: (conversationId: string, content: string, type: MessageType = 'text', media?: { url: string; filename?: string } | null) =>
+    apiClientRaw.post<SendMessageResult>('/whatsapp/messages/send', { conversationId, content, type, media: media || undefined }),
+
+  /** Uploads a file to durable storage (Cloudinary) BEFORE it's attached
+   * to any message -- call this first, then pass the returned url into
+   * send()'s `media` param. Separate from send() so the UI can show real
+   * upload progress and a failed send doesn't mean re-uploading. */
+  uploadMedia: (file: File) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return requestFormDataRaw<UploadedMedia>('/whatsapp/messages/upload', formData);
+  },
 
   simulateInbound: (conversationId: string, content: string, type: MessageType = 'text') =>
     apiClientRaw.post<{ message: Message; conversation: Conversation }>('/whatsapp/messages/simulate-inbound', { conversationId, content, type }),

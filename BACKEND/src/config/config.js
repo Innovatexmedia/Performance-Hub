@@ -1,4 +1,11 @@
-
+/**
+ * App configuration.
+ * FILE: src/config/config.js
+ *
+ * WHAT CHANGED:
+ *   - Removed JWT_SECRET check (old — never existed in this project)
+ *   - JWT is validated by env.js using JWT_ACCESS_SECRET + JWT_REFRESH_SECRET
+ */
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -45,6 +52,13 @@ const config = {
   // of per-loop.
   CAMPAIGN_SEND_RATE_MAX: parseInt(process.env.CAMPAIGN_SEND_RATE_MAX ?? '20', 10),
   CAMPAIGN_SEND_RATE_DURATION_MS: parseInt(process.env.CAMPAIGN_SEND_RATE_DURATION_MS ?? '1000', 10),
+  // Cloudinary -- stores media (images/documents/voice notes) sent and
+  // received over WhatsApp. Required for real media messaging; text-only
+  // messaging works fine without it (upload attempts fail with a clear
+  // error rather than the app crashing at boot).
+  CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
+  CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
+  CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
   // Required to create a super_admin account via /auth/register -- without
   // this set, super_admin registration is permanently blocked (fails
   // closed, not open). Set this to a real, private secret and share it

@@ -1,12 +1,4 @@
-/**
- * WhatsApp provider abstraction (transport layer only).
- *
- * Providers simulate / perform the *transport* and return a normalized
- * response. Persistence (creating messages, delivery logs, updating
- * conversations) is orchestrated by the message service — keeping
- * repositories as the sole MongoDB-access layer. Swap in a real provider
- * (Meta Cloud API, Twilio, etc.) by implementing this same interface.
- */
+
 export class WhatsAppProvider {
   get name() {
     return 'base';
@@ -30,6 +22,19 @@ export class WhatsAppProvider {
    */
   async sendTemplate(_payload) {
     throw new Error('sendTemplate() not implemented');
+  }
+
+  /**
+   * Send an outbound MEDIA message (image, document, or audio/voice note).
+   * mediaUrl must already be a durable, publicly-fetchable HTTPS URL
+   * (Cloudinary -- see shared/services/cloudinary.service.js). Meta's
+   * Cloud API sends media "by link" directly from that URL, no separate
+   * Meta-side upload step.
+   * @param {{ to: string, mediaType: 'image'|'document'|'audio', mediaUrl: string, caption?: string, filename?: string }} _payload
+   * @returns {Promise<{ provider, provider_message_id, status, sent_at, delivered_at }>}
+   */
+  async sendMedia(_payload) {
+    throw new Error('sendMedia() not implemented');
   }
 
   /**

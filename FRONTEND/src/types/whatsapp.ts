@@ -1,20 +1,4 @@
-/**
- * Real WhatsApp Inbox types -- match the backend exactly.
- *
- * Raw response family (like Leads/Pipeline) -- res.json(result) directly,
- * no { success, data } wrapper. Consumed via requestRaw()/apiClientRaw.
- *
- * SOURCE: src/modules/whatsapp/conversations/, src/modules/whatsapp/messages/,
- * src/modules/whatsapp/notes/, src/modules/whatsapp/tags/
- *
- * NOTE on backend fixes made before this integration:
- *   - buildLeadContext() was missing UTM fields + payment_status entirely --
- *     both required by FRONTEND_SPEC section 5. Fixed; both included below.  
- *   - MessageStatus was 5 lowercase values, now the real 12-value spec set
- *     (Title Case), including 'Blocked by Opt-Out'.
- *   - sendMessage had NO opt-out guard at all -- fixed; a blocked send
- *     returns { blocked: true, blockedReason: 'opt_out' }.
- */
+
 
 export type ConversationStatus = 'New' | 'Open' | 'Pending' | 'Qualified' | 'Booked' | 'Won' | 'Lost' | 'Ghosted';
 export const CONVERSATION_STATUS_VALUES: ConversationStatus[] = ['New', 'Open', 'Pending', 'Qualified', 'Booked', 'Won', 'Lost', 'Ghosted'];
@@ -24,7 +8,7 @@ export type MessageStatus =
   | 'Read' | 'Replied' | 'Failed' | 'Cancelled' | 'Blocked by Opt-Out' | 'Blocked by Template Not Approved';
 
 export type MessageDirection = 'inbound' | 'outbound';
-export type MessageType = 'text' | 'image' | 'document' | 'template';
+export type MessageType = 'text' | 'image' | 'document' | 'audio' | 'template';
 
 export interface Conversation {
   id: string;
@@ -51,6 +35,12 @@ export interface Message {
   direction: MessageDirection;
   type: MessageType;
   content: string;
+  /** Populated only when type is image/document/audio -- media_url is a
+   * durable Cloudinary URL (never Meta's own short-lived one). */
+  media_url: string | null;
+  media_filename: string | null;
+  media_mime_type: string | null;
+  media_size_bytes: number | null;
   sender: string | null;
   recipient: string | null;
   provider: string;
@@ -133,4 +123,12 @@ export interface SendMessageResult {
   providerResponse: unknown;
   blocked?: boolean;
   blockedReason?: 'opt_out';
+}
+
+/** SOURCE: POST /api/whatsapp/messages/upload response shape. */
+export interface UploadedMedia {
+  url: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
 }

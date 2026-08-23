@@ -1,34 +1,4 @@
-/**
- * Meta WhatsApp Cloud API webhook -- the REAL inbound receiver.
- *
- * Per-tenant URL: /api/whatsapp/webhooks/meta/:tenantId -- each tenant's
- * own Meta App is configured to call THIS tenant's URL, so the tenantId
- * is known from the URL itself, not guessed from payload content.
- *
- * SECURITY: every POST is verified against the tenant's own appSecret
- * using Meta's documented X-Hub-Signature-256 scheme BEFORE any payload
- * content is trusted. Without this, anyone who learns/guesses a tenant's
- * webhook URL could POST fake inbound messages into their inbox.
- *
- * Confirmed with the user: an inbound message from an unknown phone
- * number auto-creates BOTH a new Lead (source: 'WhatsApp', status: 'New')
- * and a new Conversation. An already-known number reuses the existing
- * Lead/Conversation (matched via leadRepository.findByWhatsAppNumber /
- * conversationRepository.findByPhone -- see those functions for why exact
- * string matching isn't used).
- *
- * FIX (this pass): Meta sends every subscribed webhook field to this SAME
- * URL, distinguished by `change.field`. This handler used to assume every
- * change was a message/status change and never even looked at `field` --
- * so a real `message_template_status_update` event (Meta approving or
- * rejecting a submitted template) silently produced empty
- * value.messages/value.statuses arrays and did nothing. Also added:
- * mirroring delivered/read/failed status updates onto the V2 delivery-logs
- * entry (deliveryLogsService), not just the Message document -- previously
- * only the Message record was updated, so the Delivery Logs tab's
- * status/stats never advanced past SENT/0% even for genuinely delivered
- * messages.
- */
+
 
 import crypto from 'crypto';
 import { AppError } from '../../../shared/helpers/lead.helpers.js';
@@ -38,6 +8,8 @@ import { deliveryLogsService } from '../submodules/deliveryLogs/deliveryLogs.ser
 import { conversationRepository } from '../conversations/conversation.repository.js';
 import { messageRepository } from '../messages/message.repository.js';
 import { messageService } from '../messages/message.service.js';
+import { fetchAndUploadToCloudinary } from '../../../shared/services/cloudinary.service.js';
+import { toDTO } from '../messageSender.js';
 import { MESSAGE_STATUS } from '../messages/message.model.js';
 import { CONVERSATION_STATUS } from '../conversations/conversation.model.js';
 import { leadRepository } from '../../leads/lead/lead.repository.js';
@@ -229,14 +201,135 @@ export const metaWebhookService = {
     return { processed: true };
   },
 
-  async _handleInboundMessage(ctx, msg, profileName) {
-    const content = msg.type === 'text' ? (msg.text?.body || '') : `[${msg.type} message -- content type not yet supported]`;
+  /**
+   * Maps a real Meta inbound message payload to our internal type +
+   * media, downloading the actual file bytes from Meta and storing them
+   * durably in Cloudinary. Meta's own media URL is short-lived AND
+   * requires the tenant's access token to even fetch -- useless to store
+   * directly, since it won't still work by the time someone opens the
+   * conversation later.
+   *
+   * Returns { content, type, media } -- media is null for text (or for
+   * any type we don't have real support for yet: video, sticker,
+   * location, contacts, interactive replies -- same honest "not yet
+   * supported" placeholder as before for those, not a silent failure).
+   */
+  async _resolveInboundContent(ctx, msg) {
+    if (msg.type === 'text') {
+      return { content: msg.text?.body || '', type: 'text', media: null };
+    }
 
-    const conversation = await findOrCreateLeadAndConversation(ctx, msg.from, profileName);
+    // WhatsApp stickers are static/animated WEBP images -- Meta's webhook
+    // shape for them (msg.sticker.id, .mime_type) is structurally
+    // identical to msg.image, so they're treated as regular images here
+    // (WEBP renders natively in <img>, no separate sticker UI/schema
+    // needed for a business inbox to genuinely "support" receiving them).
+    const MEDIA_TYPES = { image: 'image', document: 'document', audio: 'audio', sticker: 'image' };
+    const ourType = MEDIA_TYPES[msg.type];
+    if (!ourType) {
+      // video, sticker, location, contacts, interactive, button, etc. --
+      // genuinely not implemented yet, same as before this fix.
+      return { content: `[${msg.type} message -- content type not yet supported]`, type: 'text', media: null };
+    }
 
-    await messageService.recordInboundMessage(ctx, conversation, {
+    return { type: ourType }; // caller does the actual (slow) fetch separately -- see _fetchAndAttachInboundMedia
+  },
+
+  /**
+   * The slow part of receiving media -- Meta media lookup + download +
+   * Cloudinary re-upload (can genuinely take several seconds for a
+   * larger file). Deliberately NOT called synchronously from
+   * _handleInboundMessage anymore: it used to be awaited before the
+   * message even got created, so the CRM showed NOTHING for however long
+   * this took, then a fully-loaded bubble would suddenly appear -- felt
+   * "late" compared to real WhatsApp, which shows a message bubble the
+   * instant it arrives (with a downloading state) and fills in the media
+   * once it's ready. Now: _handleInboundMessage creates a placeholder
+   * message immediately (media_url: null) and returns right away; THIS
+   * function runs in the background (fire-and-forget from the caller)
+   * and updates that same message + pushes a second socket event once
+   * the real file is ready.
+   */
+  async _fetchAndAttachInboundMedia(ctx, msg, ourType, messageId) {
+    const metaMedia = msg[msg.type];
+    const mediaId = metaMedia?.id;
+    if (!mediaId) {
+      await this._finishInboundMediaPlaceholder(ctx, messageId, { content: `[${msg.type} message -- no media id in payload]`, type: 'text' });
+      return;
+    }
+
+    try {
+      const config = await whatsappSettingsService.getProviderConfig(ctx);
+      const { accessToken, graphApiVersion = 'v21.0' } = config.meta || {};
+      if (!accessToken) throw new Error('No Meta access token configured for this tenant');
+
+      // Step 1: resolve the media_id to Meta's own (short-lived,
+      // auth-gated) URL.
+      const metaResponse = await fetch(`https://graph.facebook.com/${graphApiVersion}/${mediaId}`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!metaResponse.ok) throw new Error(`Meta media lookup failed (status ${metaResponse.status})`);
+      const metaMediaInfo = await metaResponse.json();
+
+      // Step 2: download the actual bytes from that URL (same Bearer
+      // token required) and re-upload to Cloudinary in one step.
+      const uploaded = await fetchAndUploadToCloudinary(metaMediaInfo.url, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        mimeType: metaMediaInfo.mime_type || metaMedia.mime_type,
+        filename: metaMedia.filename || `${msg.type}-${mediaId}`,
+      });
+
+      await this._finishInboundMediaPlaceholder(ctx, messageId, {
+        content: metaMedia.caption || '',
+        type: ourType,
+        media: {
+          url: uploaded.url,
+          filename: metaMedia.filename || null,
+          mimeType: metaMediaInfo.mime_type || metaMedia.mime_type || null,
+          sizeBytes: metaMediaInfo.file_size || null,
+        },
+      });
+    } catch (err) {
+      // A media download/upload failure must NEVER crash the whole
+      // webhook handler -- fall back to the honest placeholder, log why,
+      // and keep going. The customer's message still gets recorded, just
+      // without the actual file attached.
+      console.error(`[WA_INBOUND] Failed to fetch/store ${msg.type} media (id=${mediaId}) for tenant ${ctx.tenantId}:`, err.message);
+      await this._finishInboundMediaPlaceholder(ctx, messageId, { content: `[${msg.type} message -- could not retrieve media: ${err.message}]`, type: 'text' });
+    }
+  },
+
+  /** Updates the placeholder message created in _handleInboundMessage
+   * with the real (or failed-fallback) content, and pushes the second
+   * "media is ready" socket event the frontend swaps the placeholder
+   * bubble for. */
+  async _finishInboundMediaPlaceholder(ctx, messageId, { content, type, media }) {
+    const patch = {
       content,
-      type: 'text',
+      type,
+      media_url: media?.url ?? null,
+      media_filename: media?.filename ?? null,
+      media_mime_type: media?.mimeType ?? null,
+      media_size_bytes: media?.sizeBytes ?? null,
+    };
+    const updated = await messageRepository.updateById(ctx.tenantId, messageId, patch);
+    if (updated) {
+      emitToTenant(ctx.tenantId, 'whatsapp:message', {
+        conversationId: String(updated.conversation_id),
+        message: toDTO(updated),
+      });
+    }
+  },
+
+  async _handleInboundMessage(ctx, msg, profileName) {
+    const conversation = await findOrCreateLeadAndConversation(ctx, msg.from, profileName);
+    const { content, type, media } = await this._resolveInboundContent(ctx, msg);
+    const isPendingMedia = media === undefined; // media types return { type } only, no content/media yet -- see _resolveInboundContent
+
+    const result = await messageService.recordInboundMessage(ctx, conversation, {
+      content: isPendingMedia ? '' : content,
+      type,
+      media: isPendingMedia ? null : media,
       transport: {
         provider: 'meta',
         provider_message_id: msg.id,
@@ -244,6 +337,14 @@ export const metaWebhookService = {
         received_at: msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date(),
       },
     });
+
+    // The slow part -- runs in the background, NOT awaited here, so this
+    // function (and the webhook's HTTP response to Meta) returns quickly
+    // regardless of how long the real media fetch takes. See
+    // _fetchAndAttachInboundMedia's comment for why.
+    if (isPendingMedia) {
+      void this._fetchAndAttachInboundMedia(ctx, msg, type, result.message.id);
+    }
 
     // Real "Replied" tracking: if the most recent outbound message in this
     // conversation was a campaign/broadcast send that hasn't already been
@@ -274,8 +375,25 @@ export const metaWebhookService = {
       const patch = { status: mapped };
       if (mapped === MESSAGE_STATUS.DELIVERED) patch.delivered_at = new Date(Number(status.timestamp) * 1000);
       if (mapped === MESSAGE_STATUS.READ) patch.read_at = new Date(Number(status.timestamp) * 1000);
-      await messageRepository.updateById(ctx.tenantId, message._id, patch);
+      const updated = await messageRepository.updateById(ctx.tenantId, message._id, patch);
       console.log(`[WA_INBOUND_DEV] Updated message ${message._id} status -> ${mapped}`);
+
+      // REAL-TIME PUSH -- was completely missing. The DB update above was
+      // already correct, but nothing ever told a connected browser tab
+      // this happened, so a message's tick only ever advanced (Sent ->
+      // Delivered -> Read) after some UNRELATED action forced a refetch
+      // (switching conversations, reloading, etc.) -- looked like a long,
+      // inconsistent "delay" even though the underlying data was already
+      // up to date within milliseconds of Meta's webhook arriving. Same
+      // event shape as every other message push (see message.service.js /
+      // messageSender.js) so the frontend's existing useWhatsAppRealtime
+      // handling needs zero changes to pick this up.
+      if (updated) {
+        emitToTenant(ctx.tenantId, 'whatsapp:message', {
+          conversationId: String(updated.conversation_id),
+          message: toDTO(updated),
+        });
+      }
 
       // If this message was sent as part of a campaign/broadcast, its
       // real Delivered/Read counts move here -- this is the only place

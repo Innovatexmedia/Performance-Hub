@@ -10,17 +10,6 @@ export const MESSAGE_DIRECTION_VALUES = Object.freeze(
   Object.values(MESSAGE_DIRECTION),
 );
 
-/**
- * MessageStatus (12) -- SOURCE: DEVELOPER_HANDOFF.md entity list, exact
- * values and Title Case. Previously only had 5 lowercase values
- * (queued/sent/delivered/read/failed) -- missing Draft, Pending Approval,
- * Scheduled, Replied, Cancelled, and critically Blocked by Opt-Out /
- * Blocked by Template Not Approved, both required for the opt-out guard
- * DEVELOPER_HANDOFF.md's action table explicitly names for sendMessage.
- * Every reference to these values goes through this constant object
- * (MESSAGE_STATUS.SENT etc.), never a hardcoded string literal -- confirmed
- * by grepping every consumer -- so realigning the values here is safe.
- */
 export const MESSAGE_STATUS = Object.freeze({
   DRAFT: 'Draft',
   PENDING_APPROVAL: 'Pending Approval',
@@ -41,6 +30,7 @@ export const MESSAGE_TYPE = Object.freeze({
   TEXT: 'text',
   IMAGE: 'image',
   DOCUMENT: 'document',
+  AUDIO: 'audio',
   TEMPLATE: 'template',
 });
 export const MESSAGE_TYPE_VALUES = Object.freeze(Object.values(MESSAGE_TYPE));
@@ -72,6 +62,15 @@ const messageSchema = new Schema(
     direction: { type: String, enum: MESSAGE_DIRECTION_VALUES, required: true },
     type: { type: String, enum: MESSAGE_TYPE_VALUES, default: MESSAGE_TYPE.TEXT },
     content: { type: String, default: '' },
+
+    // Populated only when type is image/document/audio. media_url is a
+    // durable Cloudinary URL, never Meta's own (temporary, auth-gated)
+    // media URL -- see shared/services/cloudinary.service.js and
+    // metaWebhook.service.js's inbound handling for why.
+    media_url: { type: String, default: null },
+    media_filename: { type: String, default: null },
+    media_mime_type: { type: String, default: null },
+    media_size_bytes: { type: Number, default: null },
 
     sender: { type: String, default: null },
     recipient: { type: String, default: null },

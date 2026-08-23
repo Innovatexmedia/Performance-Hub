@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import {
-  Tag, UserPlus, StickyNote, Search, PanelRightClose, PanelRightOpen,
+  MessageSquarePlus, Tag, UserPlus, StickyNote, Search, PanelRightClose, PanelRightOpen,
   Megaphone, Link2, KanbanSquare, CreditCard, UserCog, Clock, Wallet, Phone,
+  FileText, Download, Play, Pause, Check, CheckCheck, Clock3, Mic, Image as ImageIcon,
 } from 'lucide-react';
 import { Avatar, Badge, StatusBadge, Button, Select, cn } from '@/components/ui';
 import { Composer } from './Composer';
@@ -15,8 +16,22 @@ import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
 import { useAuthStore } from '@/store/authStore';
 import { hasRoleOrPermission } from '@/lib/permissions';
 import { ApiError } from '@/lib/apiClient';
+import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
 import { CONVERSATION_STATUS_VALUES } from '@/types/whatsapp';
-import type { ConversationStatus } from '@/types/whatsapp';
+import type { ConversationStatus, Message, MessageStatus } from '@/types/whatsapp';
+
+// Canned replies for the "Simulate inbound" dev tool -- rotates instead of
+// repeating one fixed string, so clicking it more than once produces a
+// realistic-looking back-and-forth instead of the same bubble stacked
+// several times in a row.
+const SIMULATED_INBOUND_REPLIES = [
+  'Thanks for reaching out! Tell me more.',
+  'Sounds good, what are the next steps?',
+  'Can you share more details on pricing?',
+  'Got it, let me check and get back to you.',
+  'That works for me — can we schedule a call?',
+  "Thanks, I'll review this and reply soon.",
+];
 
 // Deterministic per-contact avatar color -- the same person resolves to the
 // same color everywhere their avatar appears (conversation list, chat
@@ -33,6 +48,13 @@ function avatarColor(key: string): string {
 
 export function Inbox() {
   const { members, nameById } = useTeamMembers();
+  // "Simulate inbound" fakes a customer reply -- only safe to show while
+  // the tenant is actually on Simulation Mode. If they've connected a
+  // real provider (Meta, Twilio, etc.), this button would silently inject
+  // a fake message into a real conversation with no way to tell it apart
+  // from an actual reply -- hiding it once real data is flowing.
+  const { settings: whatsappSettings } = useWhatsAppSettings();
+  const isSimulationMode = whatsappSettings?.provider === 'SIMULATION';
   const location = useLocation();
   const requestedConversationId = (location.state as { conversationId?: string } | null)?.conversationId ?? null;
 
@@ -61,7 +83,7 @@ export function Inbox() {
   const canAssign = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'assign_conversations');
   const {
     details, notes, loading: detailLoading, refetch: refetchDetails,
-    sendMessage, assign, changeStatus, addNote, addTag, removeTag,
+    sendMessage, simulateInbound, assign, changeStatus, addNote, addTag, removeTag,
     loadOlder, loadingOlder,
   } = useConversationDetails(activeId);
 
@@ -177,6 +199,21 @@ export function Inbox() {
       el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
     }
   }, [messages]);
+
+  const handleSimulateInbound = async () => {
+    try {
+      // Last inbound message content, so the next simulated reply avoids
+      // repeating it verbatim -- picks a different canned line whenever
+      // more than one option exists.
+      const lastInbound = [...messages].reverse().find((m) => m.direction === 'inbound')?.content;
+      const options = SIMULATED_INBOUND_REPLIES.filter((r) => r !== lastInbound);
+      const pool = options.length > 0 ? options : SIMULATED_INBOUND_REPLIES;
+      const text = pool[Math.floor(Math.random() * pool.length)];
+      await simulateInbound(text);
+    } catch (err) {
+      toast.error('Could not simulate message', err instanceof ApiError ? err.message : 'Please try again.');
+    }
+  };
 
   const handleAddTag = async () => {
     if (!tagInput.trim()) return;
@@ -306,10 +343,20 @@ export function Inbox() {
                         : cn(groupedWithPrev && 'rounded-tl-md', groupedWithNext ? 'rounded-bl-md' : 'rounded-bl-sm'),
                       isBlocked ? 'bg-red-50 text-red-700 ring-1 ring-red-200' : isOutbound ? 'bg-brand-600 text-white' : 'bg-white text-ink-800',
                     )}>
-                      <p>{m.content}</p>
+                      <MessageBody m={m} isOutbound={isOutbound} />
                       {!groupedWithNext && (
-                        <p className={cn('mt-0.5 text-[10px]', isBlocked ? 'text-red-500' : isOutbound ? 'text-brand-200' : 'text-ink-400')}>
-                          {timeAgo(m.created_at)} · {m.status}
+                        <p className={cn('mt-0.5 flex items-center gap-1 text-xs', isBlocked ? 'text-red-500' : isOutbound ? 'text-brand-200' : 'text-ink-400')}>
+                          {timeAgo(m.created_at)}
+                          {/* Status only makes sense for OUTBOUND messages
+                              (whether the recipient got/read what WE sent) --
+                              real WhatsApp never shows a status indicator on
+                              a message the other person sent. Matches
+                              official WhatsApp's tick convention: one check
+                              = sent, two gray checks = delivered, two BLUE
+                              checks = read. Failed/blocked stay as text --
+                              too important to bury in an icon. */}
+                          {isOutbound && !isBlocked && <MessageStatusIndicator status={m.status} />}
+                          {isBlocked && <>· {m.status}</>}
                         </p>
                       )}
                     </div>
@@ -320,6 +367,9 @@ export function Inbox() {
             </div>
 
             <div className="flex items-center gap-2 border-t border-ink-100 px-3 py-2">
+              {isSimulationMode && (
+                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => void handleSimulateInbound()}><MessageSquarePlus size={14} /> Simulate inbound</Button>
+              )}
               <div className="ml-auto flex items-center gap-1">
                 <input value={tagInput} onChange={(e) => setTagInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void handleAddTag()} placeholder="add tag" className="w-24 rounded-md border border-ink-200 px-2 py-1 text-xs outline-none" />
                 <button onClick={() => void handleAddTag()} className="rounded-md p-1.5 text-ink-500 hover:bg-ink-100"><Tag size={14} /></button>
@@ -413,6 +463,164 @@ export function Inbox() {
       )}
     </div>
   );
+}
+
+/** Renders a message's content by type -- image preview, document
+ * download link, native audio player for voice notes, or plain text.
+ * Caption (m.content) shows below media when present, same as WhatsApp's
+ * own client. */
+function MessageBody({ m, isOutbound }: { m: Message; isOutbound: boolean }) {
+  // Inbound media that's still being fetched from Meta + re-uploaded to
+  // Cloudinary (see BACKEND metaWebhook.service.js's _fetchAndAttachInboundMedia)
+  // -- the message record already exists (type is correct) but
+  // media_url isn't ready yet. Shown as a real "downloading" bubble
+  // (matching what real WhatsApp does) instead of either a blank
+  // paragraph or nothing at all -- a second socket push swaps this out
+  // for the loaded media automatically once it's ready, no polling.
+  if ((m.type === 'image' || m.type === 'document' || m.type === 'audio') && !m.media_url) {
+    const label = m.type === 'image' ? 'Photo' : m.type === 'audio' ? 'Voice message' : 'Document';
+    const Icon = m.type === 'image' ? ImageIcon : m.type === 'audio' ? Mic : FileText;
+    return (
+      <div className={cn('flex items-center gap-2.5 rounded-lg px-2.5 py-2', isOutbound ? 'bg-white/10' : 'bg-ink-50')}>
+        <Icon size={18} className="shrink-0 opacity-70" />
+        <span className="text-sm">{label}</span>
+        <span className={cn('h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent opacity-70', isOutbound ? 'ml-auto' : 'ml-auto')} />
+      </div>
+    );
+  }
+
+  if (m.type === 'image' && m.media_url) {
+    return (
+      <div>
+        <a href={m.media_url} target="_blank" rel="noopener noreferrer">
+          <img src={m.media_url} alt={m.content || 'Image'} className="max-h-64 w-full rounded-lg object-cover" />
+        </a>
+        {m.content && <p className="mt-1.5">{m.content}</p>}
+      </div>
+    );
+  }
+
+  if (m.type === 'document' && m.media_url) {
+    return (
+      <div>
+        <a
+          href={m.media_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            'flex items-center gap-2.5 rounded-lg px-2.5 py-2',
+            isOutbound ? 'bg-white/10 hover:bg-white/15' : 'bg-ink-50 hover:bg-ink-100',
+          )}
+        >
+          <FileText size={20} className="shrink-0" />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{m.media_filename || 'Document'}</span>
+          <Download size={14} className="shrink-0 opacity-70" />
+        </a>
+        {m.content && <p className="mt-1.5">{m.content}</p>}
+      </div>
+    );
+  }
+
+  if (m.type === 'audio' && m.media_url) {
+    return <AudioPlayer src={m.media_url} isOutbound={isOutbound} />;
+  }
+
+  return <p>{m.content}</p>;
+}
+
+/**
+ * Custom audio player for voice-note/audio messages -- replaces the raw
+ * browser-native <audio controls> widget (inconsistent styling across
+ * browsers, looks like an unstyled HTML element, not a real product UI).
+ * Play/pause + a real clickable progress bar + time display, matching
+ * the message bubble's color (white icon/track on the green outbound
+ * bubble, brand-colored on the white inbound bubble) -- the audio
+ * element itself stays hidden, all visible UI is custom.
+ */
+function AudioPlayer({ src, isOutbound }: { src: string; isOutbound: boolean }) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const [playing, setPlaying] = useState(false);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+
+  const togglePlay = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) audio.pause();
+    else void audio.play();
+  };
+
+  const seek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const audio = audioRef.current;
+    if (!audio || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    audio.currentTime = ratio * duration;
+  };
+
+  const fmt = (s: number) => {
+    if (!Number.isFinite(s)) return '0:00';
+    return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  };
+
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  return (
+    <div className="flex w-56 max-w-full items-center gap-2.5">
+      <audio
+        ref={audioRef}
+        src={src}
+        preload="metadata"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+        className="hidden"
+      />
+      <button
+        onClick={togglePlay}
+        className={cn(
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition',
+          isOutbound ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-100 text-brand-700 hover:bg-brand-200',
+        )}
+      >
+        {playing ? <Pause size={15} fill="currentColor" /> : <Play size={15} fill="currentColor" className="ml-0.5" />}
+      </button>
+      <div className="min-w-0 flex-1">
+        <div
+          onClick={seek}
+          className={cn('h-1.5 w-full cursor-pointer rounded-full', isOutbound ? 'bg-white/25' : 'bg-ink-200')}
+        >
+          <div
+            className={cn('h-full rounded-full', isOutbound ? 'bg-white' : 'bg-brand-600')}
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className={cn('mt-1 text-[11px] tabular-nums', isOutbound ? 'text-white/80' : 'text-ink-400')}>
+          {fmt(currentTime)} / {fmt(duration)}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Real WhatsApp-style status ticks for an OUTBOUND message -- single
+ * check (sent/queued), double gray check (delivered), double BLUE check
+ * (read) -- matching official WhatsApp's exact convention instead of
+ * spelling the status out as text. Anything that doesn't map cleanly to
+ * a tick (Draft/Pending Approval/Scheduled/Replied/Cancelled -- rare
+ * pre-send or edge states) falls back to showing the plain status word,
+ * same as before this change.
+ */
+function MessageStatusIndicator({ status }: { status: MessageStatus }) {
+  if (status === 'Read') return <CheckCheck size={16} strokeWidth={2.5} className="shrink-0" style={{ color: '#53bdeb' }} />;
+  if (status === 'Delivered') return <CheckCheck size={16} strokeWidth={2.5} className="shrink-0 opacity-90" />;
+  if (status === 'Sent' || status === 'Replied') return <Check size={16} strokeWidth={2.5} className="shrink-0 opacity-90" />;
+  if (status === 'Queued' || status === 'Scheduled') return <Clock3 size={13} className="shrink-0 opacity-70" />;
+  if (status === 'Failed') return <span className="text-red-300">Failed</span>;
+  return <span>· {status}</span>;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

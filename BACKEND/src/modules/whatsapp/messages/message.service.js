@@ -42,6 +42,22 @@ function preview(content = '') {
   return s.length > 120 ? `${s.slice(0, 117)}...` : s;
 }
 
+/** Spreadable {media_url, media_filename, media_mime_type, media_size_bytes}
+ * object from a { url, filename, mimeType, sizeBytes } media payload, or
+ * {} when there's no media -- lets every messageRepository.create() call
+ * just do `...mediaFields(media)` instead of repeating four conditional
+ * fields at each call site (there are 4 across this file: outbound
+ * failed/success, inbound). */
+function mediaFields(media) {
+  if (!media) return {};
+  return {
+    media_url: media.url || null,
+    media_filename: media.filename || null,
+    media_mime_type: media.mimeType || null,
+    media_size_bytes: media.sizeBytes ?? null,
+  };
+}
+
 async function getConversationOrThrow(ctx, conversationId) {
   const conversation = await conversationRepository.findById(ctx.tenantId, conversationId);
   if (!conversation) throw AppError.notFound('Conversation not found');
@@ -121,7 +137,7 @@ function toDeliveryLogPayload(conversation, message, transport) {
  * equivalent object built from Meta's real webhook payload -- both share
  * the same { provider, provider_message_id, status, received_at } shape.
  */
-async function recordInboundMessage(ctx, conversation, { content, type, transport }) {
+async function recordInboundMessage(ctx, conversation, { content, type, media = null, transport }) {
   const message = await messageRepository.create({
     tenant_id: ctx.tenantId,
     conversation_id: conversation._id,
@@ -129,6 +145,7 @@ async function recordInboundMessage(ctx, conversation, { content, type, transpor
     direction: MESSAGE_DIRECTION.INBOUND,
     type,
     content,
+    ...mediaFields(media),
     sender: conversation.phone,
     recipient: ctx.userId || 'system',
     provider: transport.provider,
@@ -200,8 +217,16 @@ export const messageService = {
    * Send an outbound message:
    * provider transport → persist message → delivery log → update conversation
    * → touch lead → activity.
+   *
+   * `media` (optional): { url, filename, mimeType, sizeBytes }. When
+   * present and type is image/document/audio, routes through
+   * provider.sendMedia() instead of provider.sendMessage() -- Meta's
+   * media-send request shape is genuinely different (media object with a
+   * `link`, not a `text.body`), see meta.provider.js. `content` in this
+   * case is treated as an optional caption (image/document only -- Meta
+   * rejects captions on audio).
    */
-  async sendMessage(ctx, { conversationId, content, type = MESSAGE_TYPE.TEXT }) {
+  async sendMessage(ctx, { conversationId, content, type = MESSAGE_TYPE.TEXT, media = null }) {
     const conversation = await getConversationOrThrow(ctx, conversationId);
 
     // Opt-out guard -- DEVELOPER_HANDOFF.md's action table lists this FIRST
@@ -245,11 +270,9 @@ export const messageService = {
 
     let transport;
     try {
-      transport = await provider.sendMessage({
-        to: conversation.phone,
-        content,
-        type,
-      });
+      transport = media
+        ? await provider.sendMedia({ to: conversation.phone, mediaType: type, mediaUrl: media.url, caption: content, filename: media.filename })
+        : await provider.sendMessage({ to: conversation.phone, content, type });
     } catch (sendError) {
       // A real Meta send can genuinely fail (invalid token, number not
       // opted in to receive, rate limit, etc.) -- record it as a Failed
@@ -262,6 +285,7 @@ export const messageService = {
         direction: MESSAGE_DIRECTION.OUTBOUND,
         type,
         content,
+        ...mediaFields(media),
         sender: ctx.userId || 'system',
         recipient: conversation.phone,
         provider: provider.name,
@@ -281,6 +305,7 @@ export const messageService = {
       direction: MESSAGE_DIRECTION.OUTBOUND,
       type,
       content,
+      ...mediaFields(media),
       sender: ctx.userId || 'system',
       recipient: conversation.phone,
       provider: transport.provider,
@@ -376,8 +401,8 @@ export const messageService = {
    * update, activity-log, tracking-event, and realtime-emit logic -- not
    * duplicated between "fake" and "real" inbound messages.
    */
-  async recordInboundMessage(ctx, conversation, { content, type, transport }) {
-    return recordInboundMessage(ctx, conversation, { content, type, transport });
+  async recordInboundMessage(ctx, conversation, { content, type, media = null, transport }) {
+    return recordInboundMessage(ctx, conversation, { content, type, media, transport });
   },
 
   async getMessages(ctx, conversationId, query = {}) {

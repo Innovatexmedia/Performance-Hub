@@ -11,12 +11,13 @@
  * stored in WhatsAppSettings, so a new instance is constructed per call with
  * that tenant's real config -- see resolveProvider() in provider.factory.js.
  *
- * SCOPE: text messages only, fully implemented and correct against Meta's
- * documented Cloud API request/response shape. image/document/template
- * message types are NOT implemented yet -- sendMessage() throws a clear
- * error for those rather than silently sending something malformed. This
- * matches Message.type's 4 values (text/image/document/template) existing
- * in the model already, but only 'text' has a real transport path today.
+ * SCOPE: sendMessage() is text-only -- passing type='image'/'document' to
+ * it still throws, since Meta's text-send endpoint shape is genuinely
+ * different from its media-send shape. Real media (image/document/audio)
+ * goes through the separate sendMedia() method below instead, sent "by
+ * link" against a durable Cloudinary URL -- see provider.interface.js's
+ * sendMedia() doc comment for why no separate Meta-side upload step is
+ * needed.
  */
 
 import { WhatsAppProvider } from './provider.interface.js';
@@ -45,6 +46,40 @@ export class MetaProvider extends WhatsAppProvider {
    */
   static normalizePhone(phone) {
     return String(phone || '').replace(/[^\d]/g, '');
+  }
+
+  /**
+   * Browsers' MediaRecorder can only produce webm-container audio (see
+   * FRONTEND Composer.tsx's voice-note recorder) -- Meta's Cloud API
+   * flatly rejects that container for audio messages (confirmed live,
+   * error code 131053: "Unsupported Audio mime type video/webm"; Meta
+   * only accepts audio/ogg;codecs=opus, audio/mpeg, audio/amr, audio/mp4,
+   * audio/aac). No browser reliably supports recording directly into any
+   * of those formats via MediaRecorder, so client-side format selection
+   * can't fix this alone.
+   *
+   * Fix: Cloudinary stores audio under its 'video' resource type (see
+   * shared/services/cloudinary.service.js), which supports on-the-fly
+   * format transcoding via the delivery URL -- swapping the file
+   * extension to .m4a (audio-only MPEG-4, Meta-accepted as audio/mp4)
+   * makes Cloudinary transcode and serve that format instead of the raw
+   * upload, generated on first request and cached afterward. No ffmpeg
+   * or extra infrastructure needed on our side.
+   *
+   * NOTE: .mp4 (not .m4a) was tried first and confirmed live NOT to
+   * work -- Cloudinary's .mp4 delivery for a video-resource asset is a
+   * generic video container even with no video track, so Meta correctly
+   * reports it back as "video/mp4" and rejects it (error 131053, same
+   * as the original .webm rejection, just a different container). .m4a
+   * is the audio-only MPEG-4 variant and is what actually reports as
+   * audio/mp4.
+   *
+   * Only rewrites .webm URLs -- anything else passes through unchanged
+   * (voice notes only ever originate from our own recorder today, but
+   * this stays a no-op rather than a blind rewrite if that ever changes).
+   */
+  static toMetaCompatibleAudioUrl(url) {
+    return /\.webm(\?|$)/i.test(url) ? url.replace(/\.webm(\?|$)/i, '.m4a$1') : url;
   }
 
   async sendMessage({ to, content, type = 'text' }) {
@@ -95,6 +130,46 @@ export class MetaProvider extends WhatsAppProvider {
           ? { components: [{ type: 'body', parameters: bodyParams.map((v) => ({ type: 'text', text: String(v) })) }] }
           : {}),
       },
+    };
+
+    return this._post(body);
+  }
+
+  /**
+   * Real media send via the Graph API, sent "by link" -- mediaUrl must
+   * already be a durable, publicly-fetchable HTTPS URL (Cloudinary), NOT
+   * something requiring auth to fetch, since Meta's own servers fetch it
+   * directly. See provider.interface.js's sendMedia() doc comment.
+   */
+  async sendMedia({ to, mediaType, mediaUrl, caption, filename }) {
+    if (!['image', 'document', 'audio'].includes(mediaType)) {
+      throw new Error(`MetaProvider.sendMedia: unsupported mediaType "${mediaType}" -- only image, document, audio are implemented.`);
+    }
+    if (!mediaUrl) throw new Error('MetaProvider.sendMedia: mediaUrl is required');
+
+    const effectiveUrl = mediaType === 'audio' ? MetaProvider.toMetaCompatibleAudioUrl(mediaUrl) : mediaUrl;
+
+    const mediaObject = { link: effectiveUrl };
+    // caption is valid for image/document, NOT for audio -- Meta rejects
+    // the whole request if an audio object includes a caption field.
+    if (caption && mediaType !== 'audio') mediaObject.caption = caption;
+    // filename is only meaningful (and only accepted by Meta) for document type.
+    if (filename && mediaType === 'document') mediaObject.filename = filename;
+    // `voice: true` is what actually makes WhatsApp render this as the
+    // native round voice-note bubble (waveform, mic icon, auto-download,
+    // "played" receipts) instead of a generic playable media file --
+    // confirmed via Meta's own docs, which show `voice` as a real,
+    // separate field on the audio object alongside `link`. Delivery
+    // format alone (the .m4a rewrite above) was NOT what controlled this
+    // -- confirmed live: a working .m4a send without this flag still
+    // rendered as a plain audio attachment, not a voice note.
+    if (mediaType === 'audio') mediaObject.voice = true;
+
+    const body = {
+      messaging_product: 'whatsapp',
+      to: MetaProvider.normalizePhone(to),
+      type: mediaType,
+      [mediaType]: mediaObject,
     };
 
     return this._post(body);
