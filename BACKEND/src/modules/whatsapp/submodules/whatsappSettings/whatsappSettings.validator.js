@@ -55,6 +55,7 @@ export const validateProviderSection = [
   body('meta.webhookUrl').optional({ values: 'falsy' }).isURL().withMessage('webhookUrl must be a valid URL'),
   body('meta.phoneNumberId').optional().isString().trim(),
   body('meta.businessAccountId').optional().isString().trim(),
+  body('meta.appId').optional().isString().trim(),
   body('meta.connected').optional().isBoolean().withMessage('meta.connected must be a boolean'),
   handleValidation,
 ];

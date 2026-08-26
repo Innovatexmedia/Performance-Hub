@@ -21,6 +21,12 @@ const headerSchema = new Schema(
     type: { type: String, enum: HEADER_TYPE_VALUES, default: HEADER_TYPE.NONE },
     text: { type: String, default: '' },
     mediaUrl: { type: String, default: '' },
+    // Needed by Meta's Resumable Upload API (file_length + file_type query
+    // params) when submitting this template for approval -- captured once
+    // at upload time in TemplateBuilder.tsx rather than re-fetched from
+    // Cloudinary at submission time.
+    mediaMimeType: { type: String, default: '' },
+    mediaSizeBytes: { type: Number, default: 0 },
   },
   { _id: false },
 );

@@ -1,10 +1,20 @@
-
+/**
+ * WhatsApp Campaigns — service (business logic + workflow engine).
+ *
+ * Owns status-transition validation, template-approval guard (delegates to
+ * templateApprovalService.assertUsable), audience calculation against the
+ * real Lead collection (the same data the Contacts/Leads tab and the real
+ * inbound-webhook pipeline actually populate -- NOT the separate, unused
+ * WhatsAppContact collection this file previously queried), activity
+ * logging, and all lifecycle methods.
+ */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { hasRole, ROLES } from '../../../auth/constants/roles.js';
 import { PERMISSIONS } from '../../../auth/constants/permissions.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
 import { Lead } from '../../../leads/lead/lead.model.js';
+import { Message, MESSAGE_STATUS } from '../../messages/message.model.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
 import { campaignSenderService } from '../../campaignSender.service.js';
 import { campaignsRepository } from './campaigns.repository.js';
@@ -253,6 +263,50 @@ export const campaignsService = {
     }
 
     return toCampaignDTO(campaign);
+  },
+
+  /**
+   * resendFailed -- AiSensy's "Failed Retries" manual mode: creates a
+   * NEW campaign targeting only the leads whose message failed in the
+   * original, same template. Deliberately a fresh campaign rather than
+   * reopening the original one:
+   *   - The original's COMPLETED/FAILED status and metrics are a real
+   *     historical record (this run sent to N people, M succeeded) --
+   *     reopening it to append more sends would mean un-completing it
+   *     and fudging the recipient-count math the BullMQ worker's
+   *     completion detection relies on (see campaignSend.worker.js).
+   *   - A separate "{name} (Retry)" campaign reuses 100% of the already
+   *     real, tested create -> approve -> start pipeline (including the
+   *     confirmation step, template-approval guard, and BullMQ send)
+   *     with zero new queue/completion-logic risk.
+   *   - Matches how real platforms (Interakt explicitly) present
+   *     retries as distinct, inspectable records rather than silently
+   *     merging retry numbers into the original campaign's stats.
+   */
+  async resendFailed(ctx, id) {
+    const original = await campaignsRepository.findById(ctx.tenantId, id);
+    if (!original) throw new AppError(404, 'Campaign not found');
+    if (![CAMPAIGN_STATUS.COMPLETED, CAMPAIGN_STATUS.FAILED].includes(original.status)) {
+      throw new AppError(400, 'Only a completed or failed campaign can be resent.');
+    }
+
+    const failedLeadIds = await Message.find({
+      tenant_id: ctx.tenantId,
+      source_type: 'CAMPAIGN',
+      source_id: original._id,
+      status: MESSAGE_STATUS.FAILED,
+    }).distinct('lead_id');
+
+    if (failedLeadIds.length === 0) {
+      throw new AppError(400, 'No failed sends on this campaign to resend.');
+    }
+
+    return this.createCampaign(ctx, {
+      name: `${original.name} (Retry)`,
+      type: original.type,
+      templateId: original.templateId,
+      audience: { filters: {}, includedContacts: failedLeadIds.map(String) },
+    });
   },
 
   async getCampaign(ctx, id) {

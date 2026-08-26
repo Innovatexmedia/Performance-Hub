@@ -44,6 +44,13 @@ function buildCampaignApi(resource: CampaignResource) {
     start: (id: string, comment?: string) =>
       apiClient.post<WhatsAppCampaign>(`${base}/${id}/start`, { comment }),
 
+    /** AiSensy's "Failed Retries" (manual mode): creates a NEW campaign
+     * targeting only the leads whose message failed in this one, same
+     * template. See BACKEND campaigns.service.js's resendFailed doc
+     * comment for why it's a new campaign, not reopening this one. */
+    resendFailed: (id: string) =>
+      apiClient.post<WhatsAppCampaign>(`${base}/${id}/resend-failed`, {}),
+
     complete: (id: string, comment?: string) =>
       apiClient.post<WhatsAppCampaign>(`${base}/${id}/complete`, { comment }),
 

@@ -73,6 +73,14 @@ router.post('/:id/start',
   validateWithComment, broadcastsController.start,
 );
 
+// POST /api/whatsapp/broadcasts/:id/resend-failed -- see
+// campaigns.routes.js's identical route for the reasoning; gated like
+// creating a broadcast since that's what this does under the hood.
+router.post('/:id/resend-failed',
+  authenticate, requireRole(ROLE_MIN.CREATE),
+  broadcastsController.resendFailed,
+);
+
 router.post('/:id/complete',
   authenticate, requireRole(ROLE_MIN.COMPLETE),
   validateWithComment, broadcastsController.complete,

@@ -1,39 +1,4 @@
-/**
- * Real WhatsApp Settings types -- match the backend model exactly.
- *
- * SOURCE: src/modules/whatsapp/submodules/whatsappSettings/whatsappSettings.model.js
- * Standard envelope (unlike Leads/Pipeline/Messages) -- uses request(), not requestRaw().
- *
- * SCOPED to Phase 1: the Provider Settings screen (provider connection +
- * sync toggles) -- the other 8 settings sections (business profile,
- * messaging, media, ai, automation, notifications, security, limits)
- * exist on the backend but aren't part of this screen, so they're not
- * fully typed here.
- *
- * IMPORTANT: accessToken/appSecret/verifyToken are NEVER returned by the
- * API (stripped server-side) -- only hasAccessToken/hasAppSecret/
- * hasVerifyToken booleans, so the UI can show "already set" without ever
- * seeing the real secret again. This is deliberate backend behavior, not
- * a bug to work around.
- *
- * ARCHITECTURE DECISION (Option B) -- WhatsApp Mode governs Provider, and
- * the backend owns execution mode entirely:
- *   - panelMode 'NATIVE' (default)  -> provider is FORCED to META_CLOUD
- *     server-side. The Provider dropdown must be locked/disabled in the
- *     UI, not just "some options disabled" -- there is only one valid
- *     provider in this mode.
- *   - panelMode 'THIRD_PARTY'       -> provider becomes a real user choice
- *     among THIRD_PARTY_PROVIDER_VALUES. None of these have a working
- *     adapter yet (Phase 1 scope) -- show them, but disabled, "(coming
- *     soon)", per IMPLEMENTED_THIRD_PARTY_PROVIDERS below.
- *   - `providerMode` is NEVER sent by the client, ever, under any
- *     endpoint. It does not appear on UpdateProviderInput on purpose. The
- *     backend derives it exclusively: reset to 'SIMULATION' (meaning
- *     "unverified") whenever `provider` changes, flipped to 'LIVE' only
- *     inside testConnection() after a real successful Meta Graph API
- *     response. Simulation/Sandbox are not user-facing concepts at all --
- *     they never appear as selectable values anywhere in this UI.
- */
+
 
 export type WhatsAppProvider =
   | 'META_CLOUD' | 'WATI' | 'INTERAKT' | 'AISENSY' | 'GALLABOX'
@@ -78,6 +43,11 @@ export type PanelMode = 'NATIVE' | 'THIRD_PARTY';
 export interface WhatsAppSettingsMeta {
   businessAccountId: string;
   phoneNumberId: string;
+  /** Meta APP ID (from the Facebook Developer App) -- required for the
+   * Resumable Upload API when submitting a template with a media header
+   * for approval. Distinct from businessAccountId (the WABA) and
+   * phoneNumberId (the sending number). */
+  appId: string;
   graphApiVersion: string;
   webhookUrl: string;
   connected: boolean;
@@ -124,6 +94,7 @@ export interface UpdateProviderInput {
   meta?: {
     businessAccountId?: string;
     phoneNumberId?: string;
+    appId?: string;
     accessToken?: string;
     verifyToken?: string;
     appSecret?: string;

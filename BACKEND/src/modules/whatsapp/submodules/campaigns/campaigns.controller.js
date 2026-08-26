@@ -75,6 +75,12 @@ export const campaignsController = {
     return sendSuccess(res, campaign, 'Campaign started');
   }),
 
+  // POST /api/whatsapp/campaigns/:id/resend-failed
+  resendFailed: asyncHandler(async (req, res) => {
+    const campaign = await campaignsService.resendFailed(buildCtx(req), req.params.id);
+    return sendSuccess(res, campaign, 'Retry campaign created', 201);
+  }),
+
   // POST /api/whatsapp/campaigns/:id/complete
   complete: asyncHandler(async (req, res) => {
     const campaign = await campaignsService.completeCampaign(buildCtx(req), req.params.id, { comment: req.body.comment });

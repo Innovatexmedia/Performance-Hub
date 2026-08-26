@@ -110,6 +110,7 @@ export async function sendToOneRecipient(ctx, { cfg, entity, template, lead }) {
       templateName: template.name,
       languageCode: template.languageCode,
       bodyParams,
+      header: template.header,
     });
   } catch (sendError) {
     const failedMessage = await messageRepository.create({

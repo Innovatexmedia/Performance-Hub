@@ -18,6 +18,10 @@ export interface UseWhatsAppCampaignsResult {
   approveCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
   scheduleCampaign: (id: string, scheduledAt: string, comment?: string) => Promise<WhatsAppCampaign>;
   startCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
+  /** Creates a NEW campaign/broadcast targeting only the leads whose
+   * message failed in the given one, same template. See BACKEND
+   * campaigns.service.js's resendFailed doc comment. */
+  resendFailed: (id: string) => Promise<WhatsAppCampaign>;
   completeCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
   cancelCampaign: (id: string, comment?: string) => Promise<WhatsAppCampaign>;
   failCampaign: (id: string, failureReason?: string, comment?: string) => Promise<WhatsAppCampaign>;
@@ -107,6 +111,12 @@ export function useWhatsAppCampaigns(
     return campaign;
   }, [api, refetch]);
 
+  const resendFailed = useCallback(async (id: string) => {
+    const campaign = await api.resendFailed(id);
+    refetch();
+    return campaign;
+  }, [api, refetch]);
+
   const completeCampaign = useCallback(async (id: string, comment?: string) => {
     const campaign = await api.complete(id, comment);
     refetch();
@@ -137,6 +147,6 @@ export function useWhatsAppCampaigns(
     campaigns, pagination, loading, error, refetch,
     createCampaign, updateCampaign, deleteCampaign,
     approveCampaign, scheduleCampaign, startCampaign, completeCampaign,
-    cancelCampaign, failCampaign, previewAudience, applyRealtimeUpdate,
+    cancelCampaign, failCampaign, previewAudience, applyRealtimeUpdate, resendFailed,
   };
 }

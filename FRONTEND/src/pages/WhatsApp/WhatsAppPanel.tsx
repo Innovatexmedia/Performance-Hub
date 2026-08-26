@@ -4,7 +4,7 @@ import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
   ChevronLeft, ChevronRight, Trash2, Inbox as InboxIcon, Users, Layers, FileText,
   ShieldCheck, Megaphone, Repeat, Radio, Zap, ScrollText, BarChart3, Settings as SettingsIcon,
-  Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X,
+  Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X, Eye,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
@@ -23,7 +23,7 @@ import {
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
 import { Inbox } from './Inbox';
-import { TemplateBuilder } from './TemplateBuilder';
+import { TemplateBuilder, TemplatePreview } from './TemplateBuilder';
 import { syncFromProvider } from '@/services/whatsappService';
 import { formatDateTime, timeAgo, percent } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
@@ -999,11 +999,64 @@ function GroupsTab() {
     </div>
   );
 }
+/**
+ * parseTemplateSubmissionError -- turns Meta's raw "submit to provider"
+ * rejection text into a specific, actionable title + explanation instead
+ * of showing the raw sentence verbatim. Every pattern here is one we
+ * personally hit and root-caused debugging this feature (file format,
+ * missing body example, missing App ID) -- not guessed, confirmed live.
+ * Anything unrecognized still shows Meta's own message, just under a
+ * clearer "Meta rejected this template" heading instead of a flat error.
+ */
+function parseTemplateSubmissionError(raw: string): { title: string; description: string } {
+  const msg = raw || '';
+  if (/type of file is not supported/i.test(msg)) {
+    return {
+      title: 'Header file format not accepted',
+      description: "Meta only accepts JPEG/PNG for image headers, MP4/3GPP for video, and PDF for documents. Edit the template and re-upload the header using exactly one of those formats.",
+    };
+  }
+  if (/BODY.*missing expected field.*example/i.test(msg) || /missing expected field.*example/i.test(msg)) {
+    return {
+      title: 'Missing example value',
+      description: 'Meta requires a sample value for every {{n}} placeholder before it will review the template. Edit the template, make sure every placeholder has a field mapped, and save again.',
+    };
+  }
+  if (/App ID is not configured/i.test(msg)) {
+    return {
+      title: 'Meta App ID missing',
+      description: "This template has a media header, which needs your Facebook Developer App ID to upload the example file. Add it in WhatsApp Settings, then try submitting again.",
+    };
+  }
+  if (/IMAGE header type need.*example/i.test(msg) || /sample.*header/i.test(msg)) {
+    return {
+      title: 'Header example missing',
+      description: 'This template\u2019s header type needs a sample file attached before Meta will review it. Edit the template and upload one.',
+    };
+  }
+  if (/not connected to meta/i.test(msg) || /whatsapp is not connected/i.test(msg)) {
+    return {
+      title: 'WhatsApp not connected',
+      description: 'Connect a real Meta Cloud API account in WhatsApp Settings before submitting templates for approval.',
+    };
+  }
+  if (/rate limit|too many requests/i.test(msg)) {
+    return {
+      title: 'Meta rate limit reached',
+      description: 'Too many requests were sent to Meta in a short time. Wait a few minutes and try submitting again.',
+    };
+  }
+  // Unrecognized -- still show Meta's own message, just framed clearly
+  // rather than as an unexplained flat error.
+  return { title: 'Meta rejected this template', description: msg.replace(/^Meta rejected this template\s*--\s*/i, '') };
+}
+
 function TemplatesTab() {
   const { templates, loading, error, refetch, deleteTemplate, duplicateTemplate, activateTemplate, pauseTemplate, archiveTemplate } = useWhatsAppTemplates();
   const { submitForReview, submitToProvider } = useTemplateApproval(refetch);
   const [showBuilder, setShowBuilder] = useState(false);
   const [editTpl, setEditTpl] = useState<WhatsAppTemplateReal | null>(null);
+  const [previewTpl, setPreviewTpl] = useState<WhatsAppTemplateReal | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const currentUser = useAuthStore((s) => s.user);
 
@@ -1023,13 +1076,19 @@ function TemplatesTab() {
   // on the real templateApproval route.
   const canSubmitToProvider = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
-  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
+  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
     setBusyId(id);
     try {
       await action();
       toast.success(successMsg);
     } catch (err) {
-      toast.error(failMsg, err instanceof ApiError ? err.message : 'Please try again.');
+      const raw = err instanceof ApiError ? err.message : 'Please try again.';
+      if (parseError && err instanceof ApiError) {
+        const parsed = parseError(raw);
+        toast.error(parsed.title, parsed.description);
+      } else {
+        toast.error(failMsg, raw);
+      }
     } finally {
       setBusyId(null);
     }
@@ -1081,6 +1140,7 @@ function TemplatesTab() {
                 variant="ghost" className="px-2.5 py-1 text-xs" disabled={busyId === t.id}
                 onClick={() => void runAction(t.id, () => duplicateTemplate(t.id), 'Template duplicated', 'Could not duplicate template')}
               ><Copy size={12} /> Duplicate</Button>
+              <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setPreviewTpl(t)}><Eye size={12} /> Preview</Button>
               {t.approvalStatus === 'DRAFT' && t.createdBy === currentUser?.id && !canActivateDirectly(t) && (
                 <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitForReview(t.id), 'Submitted for internal review', 'Could not submit for review')}>
                   <Send size={12} /> Submit for Internal Review
@@ -1096,7 +1156,7 @@ function TemplatesTab() {
               )}
               {t.approvalStatus === 'INTERNALLY_APPROVED' && (
                 canSubmitToProvider ? (
-                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider')}>
+                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError)}>
                     <Send size={12} /> Submit to provider
                   </Button>
                 ) : (
@@ -1126,6 +1186,19 @@ function TemplatesTab() {
 
       {showBuilder && <TemplateBuilder onClose={() => setShowBuilder(false)} onSaved={refetch} />}
       {editTpl && <TemplateBuilder template={editTpl} onClose={() => setEditTpl(null)} onSaved={refetch} />}
+      {previewTpl && (
+        <Modal open onClose={() => setPreviewTpl(null)} title={`Preview — ${previewTpl.name}`} size="sm" footer={<Button onClick={() => setPreviewTpl(null)}>Close</Button>}>
+          <TemplatePreview
+            headerType={previewTpl.header?.type ?? 'NONE'}
+            headerText={previewTpl.header?.text}
+            headerMediaUrl={previewTpl.header?.mediaUrl}
+            body={previewTpl.body}
+            footer={previewTpl.footer}
+            buttons={previewTpl.buttons}
+            category={previewTpl.category}
+          />
+        </Modal>
+      )}
     </div>
   );
 }
@@ -1182,13 +1255,19 @@ function ApprovalTab() {
   const isSelfSubmission = (t: WhatsAppTemplateReal) =>
     !!t.submittedBy && t.submittedBy === currentUser?.id && !atLeast(currentUser?.role, 'tenant_admin');
 
-  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string) => {
+  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
     setBusyId(id);
     try {
       await action();
       toast.success(successMsg);
     } catch (err) {
-      toast.error(failMsg, err instanceof ApiError ? err.message : 'Please try again.');
+      const raw = err instanceof ApiError ? err.message : 'Please try again.';
+      if (parseError && err instanceof ApiError) {
+        const parsed = parseError(raw);
+        toast.error(parsed.title, parsed.description);
+      } else {
+        toast.error(failMsg, raw);
+      }
     } finally {
       setBusyId(null);
     }
@@ -1217,7 +1296,7 @@ function ApprovalTab() {
   };
 
   const handleSubmitToProvider = (t: WhatsAppTemplateReal) =>
-    runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider');
+    runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError);
 
   // A DRAFT template hasn't entered the approval pipeline yet -- there's
   // nothing here for anyone but its own creator to act on (they need to
@@ -1395,7 +1474,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
     createCampaign, updateCampaign, deleteCampaign,
     approveCampaign, scheduleCampaign, startCampaign,
     completeCampaign, cancelCampaign, failCampaign, previewAudience,
-    applyRealtimeUpdate,
+    applyRealtimeUpdate, resendFailed,
   } = useWhatsAppCampaigns(resource);
   const { templates } = useWhatsAppTemplates();
   const { format: formatMoney } = useTenantCurrency();
@@ -1418,14 +1497,41 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   // the whole list, so numbers tick up silently with no loading flash.
   useWhatsAppRealtime(
     broadcast
-      ? { onBroadcast: (payload) => applyRealtimeUpdate(payload.broadcast) }
-      : { onCampaign: (payload) => applyRealtimeUpdate(payload.campaign) },
+      ? { onBroadcast: (payload) => {
+          // Detects a RUNNING -> FAILED flip that happens shortly after
+          // Start (e.g. template/audience issue caught by campaignSender.service.js's
+          // pre-flight check) -- previously this only showed up as a
+          // silent status change in the list, easy to miss right after
+          // the "Started" success toast.
+          const prev = campaigns.find((c) => c.id === payload.broadcast.id);
+          if (prev?.status === 'RUNNING' && payload.broadcast.status === 'FAILED') {
+            toast.error(`"${payload.broadcast.name}" failed to send`, payload.broadcast.failureReason || 'Check the campaign for details.');
+          }
+          applyRealtimeUpdate(payload.broadcast);
+        } }
+      : { onCampaign: (payload) => {
+          const prev = campaigns.find((c) => c.id === payload.campaign.id);
+          if (prev?.status === 'RUNNING' && payload.campaign.status === 'FAILED') {
+            toast.error(`"${payload.campaign.name}" failed to send`, payload.campaign.failureReason || 'Check the campaign for details.');
+          }
+          applyRealtimeUpdate(payload.campaign);
+        } },
   );
 
   const [show, setShow] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Real "review before you send" step -- previously "Start now" fired
+  // immediately with zero confirmation, the only bulk-send action in the
+  // whole tab that had none (Delete and Disconnect both confirm).
+  // Combined with a template preview here rather than two separate
+  // features, since seeing exactly what's about to go out to N real
+  // people IS the confirmation that actually matters.
+  const [startTarget, setStartTarget] = useState<WhatsAppCampaignReal | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [resendTarget, setResendTarget] = useState<WhatsAppCampaignReal | null>(null);
+  const [resending, setResending] = useState(false);
   const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
   const { members } = useTeamMembers();
 
@@ -1660,17 +1766,24 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                   {c.status === 'DRAFT' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => approveCampaign(c.id), 'Approved')}>Approve</Button>}
                   {c.status === 'DRAFT' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
                   {c.status === 'DRAFT' && !canApproveOrSend && <p className="text-xs text-ink-400">Awaiting approval from someone with campaign-sending rights.</p>}
-                  {c.status === 'APPROVED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'APPROVED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => setStartTarget(c)}><Send size={12} /> Start now</Button>}
                   {c.status === 'APPROVED' && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => {
                     const dt = window.prompt('Schedule for (ISO date/time, e.g. 2026-08-05T10:00:00)');
                     if (dt) runAction(c.id, () => scheduleCampaign(c.id, new Date(dt).toISOString()), 'Scheduled');
                   }}>Schedule</Button>}
-                  {c.status === 'SCHEDULED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => startCampaign(c.id), 'Started')}><Send size={12} /> Start now</Button>}
+                  {c.status === 'SCHEDULED' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => setStartTarget(c)}><Send size={12} /> Start now</Button>}
                   {c.status === 'SCHEDULED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
                   {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => completeCampaign(c.id), 'Completed')}>Mark completed</Button>}
                   {c.status === 'RUNNING' && canApproveOrSend && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => failCampaign(c.id, 'Manually marked as failed'), 'Marked failed')}>Mark failed</Button>}
                   {c.status === 'RUNNING' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
                   {c.status === 'FAILED' && canCancel && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => runAction(c.id, () => cancelCampaign(c.id), 'Cancelled')}>Cancel</Button>}
+                  {/* AiSensy's "Failed Retries" manual mode -- only shown
+                      once there's actually something to retry. */}
+                  {['COMPLETED', 'FAILED'].includes(c.status) && m.failedCount > 0 && canApproveOrSend && (
+                    <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => setResendTarget(c)}>
+                      <RefreshCw size={12} /> Resend failed ({m.failedCount})
+                    </Button>
+                  )}
                   {!EDIT_LOCKED.includes(c.status) && <Button disabled={isBusy} variant="secondary" className="px-3 py-1 text-xs" onClick={() => startEdit(c)}>Edit</Button>}
                   {!DELETE_LOCKED.includes(c.status) && (
                     <button
@@ -1688,6 +1801,91 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
           })}
         </div>
       )}
+      {/* Start confirmation + template preview -- the actual "review
+          before you send" step. Previously "Start now" fired immediately
+          with zero confirmation, the only bulk-send action in this tab
+          that had none. */}
+      {startTarget && (() => {
+        const tpl = templates.find((t) => t.id === startTarget.templateId);
+        return (
+          <Modal
+            open onClose={() => setStartTarget(null)} title={`Send "${startTarget.name}"?`} size="md"
+            footer={<>
+              <Button variant="secondary" onClick={() => setStartTarget(null)} disabled={starting}>Cancel</Button>
+              <Button
+                disabled={starting}
+                onClick={async () => {
+                  setStarting(true);
+                  try {
+                    await startCampaign(startTarget.id);
+                    toast.success('Started');
+                    setStartTarget(null);
+                  } catch (err) {
+                    toast.error('Could not start', err instanceof ApiError ? err.message : 'Please try again.');
+                  } finally {
+                    setStarting(false);
+                  }
+                }}
+              >
+                {starting ? 'Starting…' : `Send to ${startTarget.recipientCount} recipient${startTarget.recipientCount === 1 ? '' : 's'}`}
+              </Button>
+            </>}
+          >
+            <div className="space-y-4">
+              <div className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-sm text-amber-800">
+                This will send a real WhatsApp message to <strong>{startTarget.recipientCount}</strong> {startTarget.recipientCount === 1 ? 'person' : 'people'} using the template below. This can't be undone once it starts.
+              </div>
+              {tpl ? (
+                <TemplatePreview
+                  headerType={tpl.header?.type ?? 'NONE'}
+                  headerText={tpl.header?.text}
+                  headerMediaUrl={tpl.header?.mediaUrl}
+                  body={tpl.body}
+                  footer={tpl.footer}
+                  buttons={tpl.buttons}
+                  category={tpl.category}
+                />
+              ) : (
+                <p className="text-sm text-ink-400">Template preview unavailable.</p>
+              )}
+            </div>
+          </Modal>
+        );
+      })()}
+
+      {/* Resend-failed confirmation -- creates a NEW campaign for just
+          the failed leads (see BACKEND campaigns.service.js's
+          resendFailed), still needs its own separate Start afterward. */}
+      {resendTarget && (
+        <Modal
+          open onClose={() => setResendTarget(null)} title="Create retry campaign?" size="sm"
+          footer={<>
+            <Button variant="secondary" onClick={() => setResendTarget(null)} disabled={resending}>Cancel</Button>
+            <Button
+              disabled={resending}
+              onClick={async () => {
+                setResending(true);
+                try {
+                  await resendFailed(resendTarget.id);
+                  toast.success('Retry campaign created', 'Review it in the list, then Start it when ready -- it does not send automatically.');
+                  setResendTarget(null);
+                } catch (err) {
+                  toast.error('Could not create retry campaign', err instanceof ApiError ? err.message : 'Please try again.');
+                } finally {
+                  setResending(false);
+                }
+              }}
+            >
+              {resending ? 'Creating…' : `Create for ${resendTarget.metrics.failedCount} failed recipient${resendTarget.metrics.failedCount === 1 ? '' : 's'}`}
+            </Button>
+          </>}
+        >
+          <p className="text-sm text-ink-600">
+            This creates a new campaign, <strong>"{resendTarget.name} (Retry)"</strong>, targeting only the {resendTarget.metrics.failedCount} recipient{resendTarget.metrics.failedCount === 1 ? '' : 's'} whose message failed last time, using the same template. The original campaign's numbers stay unchanged. The new campaign won't send automatically -- you'll still need to Start it, same as any other campaign.
+          </p>
+        </Modal>
+      )}
+
       {show && (
         <Modal open onClose={() => { setShow(false); resetForm(); }} title={editingId ? `Edit ${broadcast ? 'Broadcast' : 'Campaign'}` : `New WhatsApp ${broadcast ? 'Broadcast' : 'Campaign'}`}
           footer={<><Button variant="secondary" onClick={() => { setShow(false); resetForm(); }} disabled={submitting}>Cancel</Button><Button onClick={create} disabled={submitting}>{submitting ? (editingId ? 'Saving…' : 'Creating…') : (editingId ? 'Save changes' : 'Create')}</Button></>}>
@@ -1700,6 +1898,24 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                 {usableTemplates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
               </Select>
             </Field>
+            {/* Live preview of the selected template -- previously this
+                dropdown showed only a name, no way to confirm what
+                message an audience is actually about to receive before
+                creating the campaign. */}
+            {form.templateId && (() => {
+              const tpl = usableTemplates.find((t) => t.id === form.templateId);
+              return tpl ? (
+                <TemplatePreview
+                  headerType={tpl.header?.type ?? 'NONE'}
+                  headerText={tpl.header?.text}
+                  headerMediaUrl={tpl.header?.mediaUrl}
+                  body={tpl.body}
+                  footer={tpl.footer}
+                  buttons={tpl.buttons}
+                  category={tpl.category}
+                />
+              ) : null;
+            })()}
             <Field label="Audience">
               <div className="mb-2 flex gap-1.5 rounded-lg bg-ink-100 p-1 text-xs">
                 <button type="button" onClick={() => setForm({ ...form, audienceMode: 'group' })} className={cn('flex-1 rounded-md py-1.5 font-medium transition', form.audienceMode === 'group' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500')}>Target group</button>
@@ -3004,6 +3220,7 @@ function SettingsTab() {
   const [panelMode, setPanelMode] = useState<PanelMode>('NATIVE');
   const [businessAccountId, setBusinessAccountId] = useState('');
   const [phoneNumberId, setPhoneNumberId] = useState('');
+  const [appId, setAppId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [appSecret, setAppSecret] = useState('');
   const [verifyToken, setVerifyToken] = useState('');
@@ -3022,6 +3239,7 @@ function SettingsTab() {
     setProvider(settings.panelMode === 'NATIVE' ? NATIVE_PROVIDER : settings.provider);
     setBusinessAccountId(settings.meta.businessAccountId);
     setPhoneNumberId(settings.meta.phoneNumberId);
+    setAppId(settings.meta.appId || '');
   }, [settings]);
 
   const clearTestFeedback = () => { setTestResult(null); setTestError(null); };
@@ -3057,6 +3275,7 @@ function SettingsTab() {
         meta: {
           businessAccountId,
           phoneNumberId,
+          appId,
           ...(accessToken ? { accessToken } : {}),
           ...(appSecret ? { appSecret } : {}),
           ...(verifyToken ? { verifyToken } : {}),
@@ -3219,6 +3438,14 @@ function SettingsTab() {
               className={fieldError(hasBusinessAccountId) ? 'border-red-300 focus:border-red-400' : ''}
             />
             {fieldError(hasBusinessAccountId) && <p className="mt-1 text-[11px] text-red-600">Required</p>}
+          </Field>
+          <Field label="Meta App ID" hint="From your Facebook Developer App -- required to submit templates with a media (image/video/document) header for approval.">
+            <IconInput
+              icon={<Fingerprint size={14} />}
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+              placeholder="e.g. 1234567890123456"
+            />
           </Field>
           <Field label="Access token">
             <SecretField

@@ -1,49 +1,4 @@
-/**
- * =============================================================================
- * InnovateX Revenue OS — WhatsApp Template Parameter Resolution
- * =============================================================================
- *
- * FILE: src/modules/whatsapp/templateParams.js
- *
- * WHY THIS EXISTS
- * ───────────────
- * Meta validates the number of `components[body].parameters` we send against
- * the number of {{n}} placeholders in the APPROVED BODY TEXT. Sending the
- * wrong count is a hard rejection: error 132000, every recipient, always.
- *
- * The old send path used `template.variables` directly as the parameter list.
- * That field is populated two different ways depending on how the template
- * reached the DB:
- *
- *   • created locally  → variablesFromTemplateData() collects placeholder
- *                        NAMES from header + body + footer + BUTTONS
- *   • synced from Meta → mapMetaComponents() lifts example VALUES from the
- *                        BODY component only
- *
- * So it was neither reliably the right count (header/button placeholders
- * inflate it) nor the right content (names, or Meta's example text, sent
- * verbatim to real contacts).
- *
- * THE FIX
- * ───────
- * `template.body` is the single source of truth -- it is the exact string
- * Meta approved and the exact string Meta counts placeholders in. We parse
- * the body at send time and resolve one value per placeholder, per lead.
- * That makes the count correct by construction, for both template origins,
- * with no data migration.
- *
- * `template.variables` is retained but demoted to a NAME MAP, used only to
- * give positional {{1}}/{{2}} placeholders something to resolve against.
- *
- * SCOPE
- * ─────
- * BODY parameters only -- matching MetaProvider.sendTemplate()'s own scope.
- * Header and button dynamic parameters need separate `header`/`button`
- * components that the provider does not build yet; see extractPlaceholders
- * usage in validateTemplateParams() for how those are surfaced as a config
- * error rather than silently mis-sent.
- * =============================================================================
- */
+
 
 import { VARIABLE_PATTERN } from './submodules/templates/templates.constants.js';
 
@@ -151,6 +106,19 @@ export function resolveLeadValue(lead, key, fallbackName) {
  * @param {Object} lead
  * @returns {string[]}
  */
+/**
+ * buildBodyParams -- resolves each {{n}} or {{name}} placeholder to a
+ * real value from the lead, for actual message sending.
+ *
+ * Returns { name, value }[] rather than a flat value[] -- Meta's SEND
+ * payload needs a `parameter_name` field for each parameter when the
+ * template was registered with parameter_format: "NAMED" (confirmed
+ * against Meta's own docs; a plain positional-shaped send parameter for
+ * a named-format template is a real, separate risk of the exact class of
+ * bug found at template REGISTRATION time -- see templateApproval.service.js's
+ * buildMetaComponents). `name` is null for a positional template, where
+ * Meta expects no parameter_name field at all.
+ */
 export function buildBodyParams(template, lead) {
   const { names, positional } = extractPlaceholders(template?.body);
   const nameMap = Array.isArray(template?.variables) ? template.variables : [];
@@ -158,9 +126,9 @@ export function buildBodyParams(template, lead) {
   return names.map((placeholder, index) => {
     if (positional) {
       // {{1}} carries no field name of its own -- variables[0] supplies it.
-      return resolveLeadValue(lead, nameMap[index], null);
+      return { name: null, value: resolveLeadValue(lead, nameMap[index], null) };
     }
-    return resolveLeadValue(lead, placeholder, nameMap[index]);
+    return { name: placeholder, value: resolveLeadValue(lead, placeholder, nameMap[index]) };
   });
 }
 
@@ -175,7 +143,7 @@ export function renderBody(template, lead) {
 
   let text = String(template?.body || '');
   names.forEach((placeholder, index) => {
-    const value = params[index] ?? '';
+    const value = params[index]?.value ?? '';
     // Rebuilt per placeholder so {{ name }} with padding also matches.
     const re = new RegExp(`\\{\\{\\s*${placeholder}\\s*\\}\\}`, 'g');
     text = text.replace(re, value);

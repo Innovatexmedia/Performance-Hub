@@ -10,20 +10,15 @@ import { ACTIVITY_TYPE } from '../../../leads/activities/activity.model.js';
 import { templatesRepository } from './templates.repository.js';
 import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
+import { extractPlaceholders } from '../../templateParams.js';
+import { validateContent } from './templates.contentRules.js';
 import {
   TEMPLATE_STATUS,
   TEMPLATE_CATEGORY_VALUES,
   APPROVAL_STATUS,
   PROVIDER_STATUS,
-  HEADER_TYPE,
   BUTTON_TYPE_VALUES,
-  BUTTON_TYPES_REQUIRING_VALUE,
   HEADER_TYPE_VALUES,
-  MAX_BUTTONS,
-  MAX_BODY_LENGTH,
-  MAX_FOOTER_LENGTH,
-  MAX_HEADER_TEXT_LENGTH,
-  MAX_BUTTON_TEXT_LENGTH,
   VARIABLE_PATTERN,
   SEARCHABLE_FIELDS,
   SORTABLE_FIELDS,
@@ -108,57 +103,31 @@ function variablesFromTemplateData(data = {}) {
   return collectVariables(data.body);
 }
 
-/** Content validation; returns an array of { field, message } errors. */
-function validateContent(data = {}) {
-  const errors = [];
-
-  if (data.body !== undefined && String(data.body).length > MAX_BODY_LENGTH) {
-    errors.push({ field: 'body', message: `body exceeds ${MAX_BODY_LENGTH} characters` });
+/**
+ * resolveVariables -- variables array actually persisted on the template.
+ *
+ * For NAMED placeholders ({{customer_name}}) the placeholder text IS the
+ * field name (resolved via LEAD_FIELD_ALIASES at send time), so
+ * auto-collecting them from the body is correct and self-describing --
+ * unchanged from before.
+ *
+ * For POSITIONAL placeholders ({{1}}, {{2}}) there is NO way to derive
+ * "what does {{1}} mean" from the placeholder itself -- collectVariables()
+ * would literally return ["1", "2"], which is useless as a field mapping
+ * (no lead field is named "1"). Previously this was silently used anyway,
+ * so a {{1}}-style template would send successfully but with an empty
+ * string in place of the parameter, no error, wrong content delivered.
+ * If the client (TemplateBuilder.tsx's per-placeholder field-mapping UI)
+ * provides an explicit `data.variables` array, trust it instead --
+ * that's a real human-authored mapping, not an auto-detected non-answer.
+ */
+function resolveVariables(data = {}) {
+  const detected = variablesFromTemplateData(data);
+  const isPositional = detected.length > 0 && detected.every((v) => /^\d+$/.test(v));
+  if (isPositional && Array.isArray(data.variables) && data.variables.length >= detected.length) {
+    return data.variables.map((v) => String(v || '').trim());
   }
-  if (data.footer && String(data.footer).length > MAX_FOOTER_LENGTH) {
-    errors.push({ field: 'footer', message: `footer exceeds ${MAX_FOOTER_LENGTH} characters` });
-  }
-
-  if (data.header) {
-    const { type, text, mediaUrl } = data.header;
-    if (type !== undefined && !HEADER_TYPE_VALUES.includes(type)) {
-      errors.push({ field: 'header.type', message: 'Invalid header type' });
-    }
-    if (type === HEADER_TYPE.TEXT) {
-      if (!text) errors.push({ field: 'header.text', message: 'header text is required for TEXT header' });
-      else if (String(text).length > MAX_HEADER_TEXT_LENGTH) {
-        errors.push({ field: 'header.text', message: `header text exceeds ${MAX_HEADER_TEXT_LENGTH} characters` });
-      }
-    }
-    if ([HEADER_TYPE.IMAGE, HEADER_TYPE.VIDEO, HEADER_TYPE.DOCUMENT].includes(type) && !mediaUrl) {
-      errors.push({ field: 'header.mediaUrl', message: `mediaUrl is required for ${type} header` });
-    }
-  }
-
-  if (data.buttons !== undefined) {
-    if (!Array.isArray(data.buttons)) {
-      errors.push({ field: 'buttons', message: 'buttons must be an array' });
-    } else {
-      if (data.buttons.length > MAX_BUTTONS) {
-        errors.push({ field: 'buttons', message: `a template may have at most ${MAX_BUTTONS} buttons` });
-      }
-      data.buttons.forEach((btn, i) => {
-        if (!btn || !BUTTON_TYPE_VALUES.includes(btn.type)) {
-          errors.push({ field: `buttons[${i}].type`, message: 'Invalid button type' });
-        }
-        if (!btn || !btn.text || !String(btn.text).trim()) {
-          errors.push({ field: `buttons[${i}].text`, message: 'button text is required' });
-        } else if (String(btn.text).length > MAX_BUTTON_TEXT_LENGTH) {
-          errors.push({ field: `buttons[${i}].text`, message: `button text exceeds ${MAX_BUTTON_TEXT_LENGTH} characters` });
-        }
-        if (btn && BUTTON_TYPES_REQUIRING_VALUE.includes(btn.type) && (!btn.value || !String(btn.value).trim())) {
-          errors.push({ field: `buttons[${i}].value`, message: `value is required for ${btn.type} button` });
-        }
-      });
-    }
-  }
-
-  return errors;
+  return detected;
 }
 
 function buildFilter(query = {}) {
@@ -314,7 +283,7 @@ export const templatesService = {
       ...data,
       tenantId: ctx.tenantId,
       slug,
-      variables: variablesFromTemplateData(data),
+      variables: resolveVariables(data),
       status: data.status || TEMPLATE_STATUS.DRAFT,
       // approvalStatus is ALWAYS DRAFT on create, regardless of what the
       // client sent -- a template only ever enters the real approval
@@ -439,6 +408,10 @@ export const templatesService = {
         body: content.body ?? existing.body,
         footer: content.footer ?? existing.footer,
         buttons: content.buttons ?? existing.buttons,
+        // Needed so resolveVariables() can see a freshly-submitted
+        // positional-placeholder field mapping on edit, not just on
+        // create -- previously omitted here entirely.
+        variables: content.variables ?? existing.variables,
       };
       const errors = validateContent(merged);
       if (errors.length) throw new AppError(400, 'Template validation failed', errors);
@@ -450,7 +423,7 @@ export const templatesService = {
         content.footer !== undefined ||
         content.buttons !== undefined;
       if (touchesContent) {
-        set.variables = variablesFromTemplateData(merged);
+        set.variables = resolveVariables(merged);
         set.version = (existing.version || 1) + 1;
       }
       if (content.slug !== undefined) {

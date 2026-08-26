@@ -35,7 +35,7 @@ export class SimulationProvider extends WhatsAppProvider {
       status: MESSAGE_STATUS.SENT,
       to,
       type: 'template',
-      content: `[template:${templateName}/${languageCode}] ${bodyParams.join(', ')}`,
+      content: `[template:${templateName}/${languageCode}] ${bodyParams.map((p) => p?.value ?? p).join(', ')}`,
       sent_at: now,
       delivered_at: now,
     };

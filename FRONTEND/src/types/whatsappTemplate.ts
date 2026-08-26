@@ -1,35 +1,4 @@
-/**
- * Real WhatsApp Template types -- match the backend exactly, field-for-field.
- *
- * SOURCE: src/modules/whatsapp/submodules/templates/templates.model.js +
- * .constants.js. Confirmed against real Postman responses (create, activate,
- * duplicate) before writing this file -- every field name below is verified,
- * not inferred from the .md spec docs.
- *
- * IMPORTANT: the backend's actual field names (name, slug, languageCode,
- * approvalStatus, providerMetadata, etc.) are DIFFERENT from what
- * DEVELOPER_HANDOFF.md describes (template_name, language, status_history,
- * etc.) -- confirmed and deliberately NOT reconciled, per explicit
- * instruction: keep the backend exactly as it is, match the frontend to it.
- *
- * Standard envelope (like WhatsApp Settings) -- {success, message, data},
- * with sendPaginated putting `pagination` as a TOP-LEVEL sibling of `data`,
- * NOT nested under meta.pagination like Leads/Pipeline's convention.
- *
- * ApprovalStatus FIX: this used to list values from BOTH of two
- * independent backend enums that both wrote the same `approvalStatus`
- * field -- templates.constants.js's old local APPROVAL_STATUS (which had
- * ACTIVE, ARCHIVED, CHANGES_REQUESTED, REJECTED_INTERNALLY) and
- * templateApproval.constants.js's APPROVAL_STATUS (which has REJECTED and
- * DISABLED instead). The backend now has ONE APPROVAL_STATUS
- * (templates.constants.js re-exports templateApproval.constants.js's
- * version) -- this type mirrors that single canonical enum exactly. In
- * particular: no ACTIVE (that's a TemplateStatus, never an approval
- * status), no ARCHIVED, no CHANGES_REQUESTED, no REJECTED_INTERNALLY.
- * "Changes requested" is represented as approvalStatus going back to
- * DRAFT (see ALLOWED_TRANSITIONS / the request-changes action), not as
- * its own status value.
- */
+
 
 export type TemplateCategory =
   | 'MARKETING' | 'UTILITY' | 'AUTHENTICATION' | 'BOOKING' | 'PAYMENT'
@@ -95,6 +64,10 @@ export interface TemplateHeader {
   type: HeaderType;
   text: string;
   mediaUrl: string;
+  /** Captured once at upload time -- needed by Meta's Resumable Upload
+   * API (file_length/file_type) when submitting for approval. */
+  mediaMimeType?: string;
+  mediaSizeBytes?: number;
 }
 
 export interface ProviderMetadata {
@@ -175,6 +148,12 @@ export interface CreateTemplateInput {
   footer?: string;
   header?: Partial<TemplateHeader>;
   buttons?: TemplateButton[];
+  /** Field-mapping for {{1}}/{{2}}-style positional placeholders --
+   * REQUIRED for those (there's no way to auto-derive "what does {{1}}
+   * mean"). Omit entirely for named placeholders ({{customer_name}}),
+   * which resolve by name automatically. See BACKEND
+   * templates.service.js's resolveVariables(). */
+  variables?: string[];
 }
 
 /**
@@ -192,6 +171,7 @@ export interface UpdateTemplateInput {
   footer?: string;
   header?: Partial<TemplateHeader>;
   buttons?: TemplateButton[];
+  variables?: string[];
 }
 
 export interface TemplateListQuery {

@@ -106,15 +106,57 @@ export class MetaProvider extends WhatsAppProvider {
    * business-initiated messages to a user outside an active 24h
    * customer-service session, so campaigns can never use sendMessage().
    *
-   * `bodyParams` is a flat list of string values filled into the template
-   * body's {{1}}, {{2}}, ... placeholders IN ORDER. Only the body component
-   * is populated -- header/button dynamic params aren't supported yet, same
-   * "implemented only where the shape is fully correct" scoping as
-   * sendMessage()'s text-only limitation above.
+   * `bodyParams` is now an array of { name, value } (see templateParams.js's
+   * buildBodyParams doc comment) -- `name` is the Meta parameter_name for a
+   * NAMED-format template, or null for a POSITIONAL one. Sending the wrong
+   * shape for a template's actual registered format is a real, confirmed
+   * bug (found at template REGISTRATION time in templateApproval.service.js's
+   * buildMetaComponents, same root cause here on the send side). Only the
+   * body component is populated -- header/button dynamic params aren't
+   * supported yet, same "implemented only where the shape is fully
+   * correct" scoping as sendMessage()'s text-only limitation above.
    */
-  async sendTemplate({ to, templateName, languageCode, bodyParams = [] }) {
+  async sendTemplate({ to, templateName, languageCode, bodyParams = [], header }) {
     if (!templateName) throw new Error('MetaProvider.sendTemplate: templateName is required');
     if (!languageCode) throw new Error('MetaProvider.sendTemplate: languageCode is required');
+
+    const components = [];
+
+    // Media header component -- was completely missing before this fix,
+    // so any approved template with an IMAGE/VIDEO/DOCUMENT header
+    // (a real, common WhatsApp template pattern) silently failed to
+    // send: Meta requires a header component whenever the approved
+    // template definition HAS a media header, and there was previously
+    // no code path that ever built one. Static TEXT headers need no
+    // component at all (the approved text is baked into the template on
+    // Meta's side already) -- only media headers need a parameter here.
+    if (header?.type && header.type !== 'NONE' && header.type !== 'TEXT' && header?.mediaUrl) {
+      const headerMediaType = header.type.toLowerCase(); // 'IMAGE' -> 'image', etc.
+      if (!['image', 'video', 'document'].includes(headerMediaType)) {
+        throw new Error(`MetaProvider.sendTemplate: unsupported header type "${header.type}"`);
+      }
+      components.push({
+        type: 'header',
+        parameters: [{ type: headerMediaType, [headerMediaType]: { link: header.mediaUrl } }],
+      });
+    }
+
+    // Meta rejects a `components` array with zero-length parameters for
+    // a template that has no placeholders -- so this is only included
+    // when there's actually something to fill in. `parameter_name` is
+    // only added when present (a NAMED-format parameter) -- omitted
+    // entirely for POSITIONAL ones, matching Meta's documented send
+    // payload shape for each format exactly.
+    if (bodyParams.length) {
+      components.push({
+        type: 'body',
+        parameters: bodyParams.map((p) => ({
+          type: 'text',
+          ...(p?.name ? { parameter_name: p.name } : {}),
+          text: String(p?.value ?? p ?? ''), // `p ?? ''` fallback keeps this working if an older caller ever passes plain strings
+        })),
+      });
+    }
 
     const body = {
       messaging_product: 'whatsapp',
@@ -123,12 +165,7 @@ export class MetaProvider extends WhatsAppProvider {
       template: {
         name: templateName,
         language: { code: languageCode },
-        // Meta rejects a `components` array with zero-length parameters for
-        // a template that has no placeholders -- so this is only included
-        // when there's actually something to fill in.
-        ...(bodyParams.length
-          ? { components: [{ type: 'body', parameters: bodyParams.map((v) => ({ type: 'text', text: String(v) })) }] }
-          : {}),
+        ...(components.length ? { components } : {}),
       },
     };
 

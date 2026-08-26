@@ -1,8 +1,21 @@
-
+/**
+ * WhatsApp Broadcasts — service.
+ *
+ * Extends the campaign pattern with strict consent + opt-out enforcement.
+ * calculateAudience returns a breakdown of eligible vs excluded contacts.
+ * Excluded contacts are logged as individual activity records.
+ * templateApprovalService.assertUsable enforces PROVIDER_APPROVED templates.
+ *
+ * Audience resolution queries the real Lead collection (the data your
+ * Contacts/Leads tab and the real inbound-webhook pipeline actually
+ * populate) -- NOT the separate, unused WhatsAppContact collection this
+ * file previously queried.
+ */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
 import { Lead } from '../../../leads/lead/lead.model.js';
+import { Message, MESSAGE_STATUS } from '../../messages/message.model.js';
 import { CONSENT_STATUS as LEAD_CONSENT_STATUS } from '../../../leads/lead/lead.constants.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
 import { campaignSenderService } from '../../campaignSender.service.js';
@@ -277,6 +290,35 @@ export const broadcastsService = {
       { type: broadcast.type, templateId: String(data.templateId) });
 
     return toBroadcastDTO(broadcast);
+  },
+
+  /** resendFailed -- see campaigns.service.js's resendFailed doc comment
+   * for the full reasoning (same pattern: a new broadcast targeting only
+   * the leads whose message failed in the original, not reopening it). */
+  async resendFailed(ctx, id) {
+    const original = await broadcastsRepository.findById(ctx.tenantId, id);
+    if (!original) throw new AppError(404, 'Broadcast not found');
+    if (![BROADCAST_STATUS.COMPLETED, BROADCAST_STATUS.FAILED].includes(original.status)) {
+      throw new AppError(400, 'Only a completed or failed broadcast can be resent.');
+    }
+
+    const failedLeadIds = await Message.find({
+      tenant_id: ctx.tenantId,
+      source_type: 'BROADCAST',
+      source_id: original._id,
+      status: MESSAGE_STATUS.FAILED,
+    }).distinct('lead_id');
+
+    if (failedLeadIds.length === 0) {
+      throw new AppError(400, 'No failed sends on this broadcast to resend.');
+    }
+
+    return this.createBroadcast(ctx, {
+      name: `${original.name} (Retry)`,
+      type: original.type,
+      templateId: original.templateId,
+      audience: { filters: {}, includedContacts: failedLeadIds.map(String) },
+    });
   },
 
   async getBroadcast(ctx, id) {

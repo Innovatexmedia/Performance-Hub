@@ -101,6 +101,34 @@ export const MAX_BODY_LENGTH = 1024;
 export const MAX_FOOTER_LENGTH = 60;
 export const MAX_HEADER_TEXT_LENGTH = 60;
 export const MAX_BUTTON_TEXT_LENGTH = 25;
+export const MAX_NAME_LENGTH = 512;
+
+// Meta requires template names to be lowercase letters, digits, and
+// underscores only -- no spaces, no uppercase, no hyphens. Enforced
+// live at the "purse_sale" → "purse-sale" (Copy) naming issue found this
+// session (see submitTemplateToMeta's toMetaTemplateName() workaround
+// for hyphens specifically) -- catching the wrong FORMAT at save time,
+// before it ever reaches Meta, is the actual fix rather than continuing
+// to patch around it downstream.
+export const TEMPLATE_NAME_PATTERN = /^[a-z0-9_]+$/;
+
+// Meta's real accepted mime types PER header media type for template
+// registration specifically (stricter than what's accepted for regular
+// chat message attachments) -- confirmed live this session: uploading
+// outside this list gets the whole template rejected at Meta's template-
+// creation step with "The type of file is not supported", even after a
+// technically-successful Resumable Upload.
+export const HEADER_MEDIA_MIME_TYPES = Object.freeze({
+  IMAGE: ['image/jpeg', 'image/png'],
+  VIDEO: ['video/mp4', 'video/3gpp'],
+  DOCUMENT: ['application/pdf'],
+});
+
+// Loose but real format checks for button values -- catches an obviously
+// malformed URL/phone number before Meta does, with a clearer message
+// than Meta's own generic rejection text.
+export const URL_BUTTON_PATTERN = /^https?:\/\/.+/i;
+export const PHONE_BUTTON_PATTERN = /^\+?[0-9]{7,15}$/;
 
 // {{variable}} detection — letters, digits, underscore.
 export const VARIABLE_PATTERN = '\\{\\{\\s*([a-zA-Z0-9_]+)\\s*\\}\\}';

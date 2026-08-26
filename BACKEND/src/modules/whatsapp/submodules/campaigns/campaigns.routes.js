@@ -90,6 +90,17 @@ router.post('/:id/start',
   campaignsController.start,
 );
 
+// POST /api/whatsapp/campaigns/:id/resend-failed -- creates a new
+// campaign for just the failed leads (see campaigns.service.js's
+// resendFailed doc comment). Gated like creating a campaign, since
+// that's exactly what this does under the hood -- it doesn't itself
+// send anything, the resulting campaign still needs its own Start.
+router.post('/:id/resend-failed',
+  authenticate,
+  requireRole(ROLE_MIN.CREATE),
+  campaignsController.resendFailed,
+);
+
 router.post('/:id/complete',
   authenticate,
   requireRole(ROLE_MIN.COMPLETE),

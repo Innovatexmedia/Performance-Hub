@@ -37,15 +37,38 @@ function resourceTypeFor(mimeType) {
  * @param {{ mimeType: string, folder?: string, filename?: string }} opts
  * @returns {Promise<{ url: string, publicId: string, bytes: number, format: string, resourceType: string }>}
  */
+/** Maps a mime type to Cloudinary's `format` upload param, forcing the
+ * delivery URL to always serve exactly that format regardless of any
+ * account-level "auto format" optimization Cloudinary might otherwise
+ * apply (e.g. silently serving WebP instead of the JPEG that was
+ * actually uploaded, to save bandwidth for regular web use). Matters a
+ * lot for WhatsApp template headers specifically -- Meta requires JPEG/
+ * PNG exactly and rejects anything else at template-creation time (see
+ * templateApproval.service.js), so an unpredictable auto-converted
+ * delivery format would cause exactly that kind of silent, hard-to-
+ * diagnose rejection even when the user picked a genuinely correct file. */
+const MIME_TO_FORMAT = {
+  'image/jpeg': 'jpg',
+  'image/png': 'png',
+  'video/mp4': 'mp4',
+  'video/3gpp': '3gp',
+  'application/pdf': 'pdf',
+};
+
 export function uploadBuffer(buffer, { mimeType, folder = 'whatsapp-media', filename } = {}) {
   ensureConfigured();
   const resourceType = resourceTypeFor(mimeType || '');
+  const format = MIME_TO_FORMAT[mimeType];
 
   return new Promise((resolve, reject) => {
     const uploadStream = cloudinary.uploader.upload_stream(
       {
         folder,
         resource_type: resourceType,
+        // Forces the delivery URL to this exact format -- see
+        // MIME_TO_FORMAT's comment above for why this isn't left to
+        // Cloudinary's default/automatic behavior.
+        ...(format ? { format } : {}),
         // Keeps the original filename recognizable in the Cloudinary
         // dashboard and in the URL, purely for human debugging -- not
         // relied on for anything functional.

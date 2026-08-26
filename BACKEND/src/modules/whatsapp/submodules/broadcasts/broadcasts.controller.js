@@ -75,6 +75,12 @@ export const broadcastsController = {
     return sendSuccess(res, broadcast, 'Broadcast started');
   }),
 
+  // POST /api/whatsapp/broadcasts/:id/resend-failed
+  resendFailed: asyncHandler(async (req, res) => {
+    const broadcast = await broadcastsService.resendFailed(buildCtx(req), req.params.id);
+    return sendSuccess(res, broadcast, 'Retry broadcast created', 201);
+  }),
+
   // POST /api/whatsapp/broadcasts/:id/complete
   complete: asyncHandler(async (req, res) => {
     const broadcast = await broadcastsService.completeBroadcast(

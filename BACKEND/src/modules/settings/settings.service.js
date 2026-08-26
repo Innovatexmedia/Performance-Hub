@@ -239,18 +239,14 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
     max_campaigns:         refreshedTenant.maxCampaigns,
     max_workspaces:        refreshedTenant.maxWorkspaces,
     current_workspace_count: accountWorkspaceCount,
-    current_user_count:    refreshedTenant.currentUserCount,
+    current_user_count:    refreshedTenant.currentUserCount, 
     current_lead_count:    refreshedTenant.currentLeadCount,
     current_campaign_count:refreshedTenant.currentCampaignCount,
     plan_details:          currentPlan,
-    available_plans:       availablePlans,
+    available_plans:       availablePlans, 
   };
 };
 
-/**
- * getAllSettings — returns all 10 tabs of settings data.
- * Called on Settings page load — one request, all tabs.
- */
 export const getAllSettings = async (tenantId) => {
   const tenant = await getTenant(tenantId);
   const [currentPlan, availablePlans, account, accountWorkspaceCount] = await Promise.all([
