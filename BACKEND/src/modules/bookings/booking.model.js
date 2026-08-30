@@ -199,11 +199,24 @@ bookingSchema.index({ tenant_id: 1, status: 1 });
 bookingSchema.index({ tenant_id: 1, lead_id: 1 });
 bookingSchema.index({ tenant_id: 1, meeting_date: 1, status: 1 });
 bookingSchema.index({ tenant_id: 1, assigned_user_id: 1, status: 1 });
-// Real, DB-level dedup guarantee for externally-synced bookings -- sparse
-// so this never applies to natively-created bookings (external_id: null).
+// Real, DB-level dedup guarantee for externally-synced bookings.
+//
+// BUG FIX: this was declared `sparse: true`, but both external_source and
+// external_id have `default: null` on the schema -- so they're always
+// genuinely PRESENT (with value null) on a natively-created booking, never
+// actually missing. A sparse index only excludes a document when ALL of
+// its indexed fields are absent, not when they're explicitly null -- so
+// this never behaved as its own comment claimed: the SECOND native
+// booking for any tenant collided on the unique constraint with the
+// first, both having the identical literal {external_source: null,
+// external_id: null}. This is a real, latent bug independent of this
+// seed script (confirmed by the seed run's own duplicate-key errors on
+// two ordinary native bookings). A partial index expresses the actually
+// -intended rule correctly: only enforce uniqueness once a booking is
+// genuinely externally-synced (external_id is a real, non-null value).
 bookingSchema.index(
   { tenant_id: 1, external_source: 1, external_id: 1 },
-  { unique: true, sparse: true }
+  { unique: true, partialFilterExpression: { external_id: { $type: 'string' } } }
 );
 
 // Named export — matches Lead and Deal model export patterns

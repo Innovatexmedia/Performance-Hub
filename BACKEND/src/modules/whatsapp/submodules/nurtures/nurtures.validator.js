@@ -27,7 +27,18 @@ const stepRules = [
   body('steps.*.stepNumber').optional().isInt({ min: 1 }).withMessage('stepNumber must be a positive integer'),
   body('steps.*.delayValue').optional().isInt({ min: 0 }).withMessage('delayValue must be a non-negative integer'),
   body('steps.*.delayUnit').optional().isIn(DELAY_UNIT_VALUES).withMessage('Invalid delayUnit'),
-  body('steps.*.templateId').optional().isMongoId().withMessage('templateId must be a valid id'),
+  // { values: 'falsy' } -- NOT bare .optional() -- matches the same real
+  // fix already used for leadId/contactId in validateEnroll below.
+  // express-validator's plain .optional() only skips a field when it's
+  // literally `undefined`; an empty string IS present, so isMongoId()
+  // still ran on it and rejected it. templateId is genuinely optional at
+  // the FORMAT-validation layer (a step's frontend form starts with
+  // templateId: '' before a real one is typed in) -- whether a template
+  // is actually REQUIRED for a given step is a business rule enforced
+  // deeper, in nurtures.service.js's validateSteps()/assertUsable(), which
+  // still runs and still rejects an active step with no real,
+  // provider-approved template. This only fixes the format check.
+  body('steps.*.templateId').optional({ values: 'falsy' }).isMongoId().withMessage('templateId must be a valid id'),
 ];
 
 // ── Sequence ───────────────────────────────────────────────────────────────────

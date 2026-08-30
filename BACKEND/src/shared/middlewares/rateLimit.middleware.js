@@ -32,6 +32,21 @@ const rateLimitHandler = (req, res) =>
   sendError(res, 'Too many requests. Please try again later.', 429);
 
 /**
+ * nurtureWebhookRateLimit — 60 requests per minute per IP.
+ * Applied to the public incoming Nurture webhook trigger endpoint.
+ * More generous than login (this is meant for real external system
+ * traffic, not a human typing a password), but still a real, enforced
+ * ceiling against abuse of a public, token-authenticated endpoint.
+ */
+export const nurtureWebhookRateLimit = rateLimit({
+  windowMs:        60 * 1000,
+  max:             60,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler:         rateLimitHandler,
+});
+
+/**
  * loginRateLimit — 5 attempts per 15 minutes per IP.
  * Applied to POST /auth/login and POST /auth/forgot-password.
  */

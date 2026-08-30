@@ -1,11 +1,13 @@
-import { useState } from 'react';
-import { Plus, Play, Pause, Archive, MessageCircle, Mail, Smartphone, CheckSquare, UserPlus, History } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { Plus, Play, Pause, Archive, MessageCircle, Mail, Smartphone, CheckSquare, UserPlus, History, Sparkles, Calendar, CreditCard, ShoppingBag, Globe, Link as LinkIcon, Copy, RefreshCw } from 'lucide-react';
 import { useNurtureSequences, useNurtureEnrollments } from '@/hooks/useNurture';
+import { nurtureApi } from '@/lib/nurtureApi';
 import { useLeads } from '@/hooks/useLeads';
 import { PageHeader, Card, CardHeader, Button, Badge, Modal, Field, Input, Select, Textarea, EmptyState } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
+import { InsertVariablePicker } from '@/components/nurture/InsertVariablePicker';
 import { toast } from '@/store/toastStore';
-import { ApiError } from '@/lib/apiClient';
+import { ApiError, apiErrorMessage } from '@/lib/apiClient';
 import type { NurtureChannel, NurtureSequence, NurtureStep } from '@/types/nurture';
 
 const channelIcon: Record<NurtureChannel, typeof Mail> = {
@@ -13,12 +15,22 @@ const channelIcon: Record<NurtureChannel, typeof Mail> = {
   EMAIL: Mail,
   SMS: Smartphone,
   MANUAL_TASK: CheckSquare,
+  AI: Sparkles,
+  BOOKING: Calendar,
+  PAYMENT: CreditCard,
+  SHOPIFY: ShoppingBag,
+  API_REQUEST: Globe,
 };
 const channelLabel: Record<NurtureChannel, string> = {
   WHATSAPP: 'WhatsApp',
   EMAIL: 'Email',
   SMS: 'SMS',
   MANUAL_TASK: 'Manual task',
+  AI: 'AI Message',
+  BOOKING: 'Booking',
+  PAYMENT: 'Payment',
+  SHOPIFY: 'Shopify',
+  API_REQUEST: 'API Request',
 };
 
 const emptyStep = (stepNumber: number): NurtureStep => ({
@@ -33,14 +45,53 @@ const emptyStep = (stepNumber: number): NurtureStep => ({
   isActive: true,
 });
 
+/**
+ * sanitizeStepForSubmit -- only a real WHATSAPP step ever needs a real
+ * templateId. emptyStep() defaults every step to templateId: '' regardless
+ * of channel, so a Manual Task/Email/AI/etc. step reached the backend as a
+ * real, present empty-string value -- which triggered a real
+ * WhatsAppTemplate lookup for a step that will never send via a WhatsApp
+ * template at all (that lookup then crashed with a real Mongoose CastError
+ * on the empty string). Send templateId as genuinely absent (omitted) for
+ * every non-WhatsApp step, and only when a real value was actually typed
+ * in for a WhatsApp step -- never as "".
+ */
+const sanitizeStepForSubmit = (step: NurtureStep): NurtureStep => {
+  if (step.channel === 'WHATSAPP' && step.templateId) return step;
+  const { templateId: _templateId, ...rest } = step;
+  return rest;
+};
+
 export function Nurture() {
   const { sequences, loading, error, activate, pause, archive, create, enroll } = useNurtureSequences();
-  const { enrollments } = useNurtureEnrollments();
+  // Real refetch, not a page reload: useNurtureEnrollments already exposes
+  // this via the same reload-token pattern useNurtureSequences uses -- it
+  // just wasn't being called anywhere on this page. Enrolling a lead
+  // creates a new enrollment doc, and opening History is exactly the
+  // moment the user wants the current server-side truth, not whatever was
+  // cached at page-load time.
+  const { enrollments, refetch: refetchEnrollments } = useNurtureEnrollments();
   const { leads } = useLeads({ page: 1, limit: 100 });
 
   const [showCreate, setShowCreate] = useState(false);
+
+  // Real refs, keyed per (step, field), so InsertVariablePicker can
+  // target the exact field's cursor position rather than just appending
+  // to the end.
+  const fieldRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
+  const fieldRef = (stepNumber: number, field: string) => {
+    const key = `${stepNumber}-${field}`;
+    if (!(key in fieldRefs.current)) fieldRefs.current[key] = null;
+    return {
+      get current() { return fieldRefs.current[key]; },
+      set current(el: HTMLInputElement | HTMLTextAreaElement | null) { fieldRefs.current[key] = el; },
+    } as React.RefObject<HTMLInputElement & HTMLTextAreaElement>;
+  };
   const [assignTo, setAssignTo] = useState<NurtureSequence | null>(null);
   const [historyFor, setHistoryFor] = useState<NurtureSequence | null>(null);
+  const [webhookUrlFor, setWebhookUrlFor] = useState<NurtureSequence | null>(null);
+  const [webhookUrl, setWebhookUrl] = useState<string | null>(null);
+  const [webhookUrlLoading, setWebhookUrlLoading] = useState(false);
   const [selLead, setSelLead] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -57,6 +108,17 @@ export function Nurture() {
   const activeCount = sequences.filter((s) => s.status === 'ACTIVE').length;
   const enrolledActive = enrollments.filter((e) => e.status === 'ACTIVE').length;
   const completedCount = enrollments.filter((e) => e.status === 'COMPLETED').length;
+
+  // Real refetch on open, not stale page state: the History modal shows
+  // each enrollment's current status/step/executionHistory, all of which
+  // change server-side on their own schedule (the nurture scheduler
+  // executing steps, or a booking/reply/opt-out pausing an enrollment) --
+  // none of those are actions this page itself triggers, so the only
+  // correct moment to get the current truth is the moment the user asks
+  // to see it, which is exactly when this modal opens.
+  useEffect(() => {
+    if (historyFor) refetchEnrollments();
+  }, [historyFor, refetchEnrollments]);
 
   const resetForm = () => setForm({ name: '', description: '', type: 'NURTURE', triggerType: 'MANUAL', qualificationTemperature: '', steps: [emptyStep(1)] });
 
@@ -79,13 +141,18 @@ export function Nurture() {
         type: form.type as NurtureSequence['type'],
         triggerType: form.triggerType as NurtureSequence['triggerType'],
         qualificationTemperature: (form.qualificationTemperature || null) as NurtureSequence['qualificationTemperature'],
-        steps: form.steps,
+        steps: form.steps.map(sanitizeStepForSubmit),
       });
       toast.success('Sequence created');
       setShowCreate(false);
       resetForm();
     } catch (err) {
-      toast.error('Could not create sequence', err instanceof ApiError ? err.message : 'Please try again.');
+      // apiErrorMessage: same existing pattern already used in
+      // LeadFormModal.tsx. The backend's real 400 response already
+      // carries a field-level `errors` array (e.g. "templateId must be a
+      // valid id") -- err.message alone was only ever the generic
+      // "Validation failed", hiding exactly which field/rule failed.
+      toast.error('Could not create sequence', apiErrorMessage(err));
     } finally {
       setSaving(false);
     }
@@ -124,11 +191,51 @@ export function Nurture() {
     if (!assignTo || !selLead) return;
     try {
       await enroll(assignTo.id, selLead);
+      // Real refetch: enroll() creates a new enrollment doc server-side,
+      // but useNurtureSequences (where enroll lives) has no knowledge of
+      // useNurtureEnrollments' separate state -- without this, "Currently
+      // enrolled" and the History modal stayed stale until a full reload.
+      refetchEnrollments();
       toast.success('Lead enrolled', 'Their first step will send on the next scheduler run.');
       setAssignTo(null);
     } catch (err) {
       toast.error('Could not enroll lead', err instanceof ApiError ? err.message : 'This lead may already be enrolled in this sequence.');
     }
+  };
+
+  const openWebhookUrl = async (seq: NurtureSequence) => {
+    setWebhookUrlFor(seq);
+    setWebhookUrl(null);
+    setWebhookUrlLoading(true);
+    try {
+      const res = await nurtureApi.getWebhookUrl(seq.id);
+      setWebhookUrl(res.url);
+    } catch (err) {
+      toast.error('Could not load webhook URL', err instanceof ApiError ? err.message : 'Please try again.');
+      setWebhookUrlFor(null);
+    } finally {
+      setWebhookUrlLoading(false);
+    }
+  };
+
+  const handleRegenerateWebhookUrl = async () => {
+    if (!webhookUrlFor) return;
+    setWebhookUrlLoading(true);
+    try {
+      const res = await nurtureApi.regenerateWebhookUrl(webhookUrlFor.id);
+      setWebhookUrl(res.url);
+      toast.success('Webhook URL regenerated', 'The previous URL no longer works — update any external tool using it.');
+    } catch (err) {
+      toast.error('Could not regenerate webhook URL', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setWebhookUrlLoading(false);
+    }
+  };
+
+  const handleCopyWebhookUrl = async () => {
+    if (!webhookUrl) return;
+    await navigator.clipboard.writeText(webhookUrl);
+    toast.success('Copied to clipboard');
   };
 
   if (error) {
@@ -183,6 +290,9 @@ export function Nurture() {
                   {seq.status !== 'ARCHIVED' && seq.status !== 'COMPLETED' && (
                     <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setAssignTo(seq)}><UserPlus size={13} /> Enroll lead</Button>
                   )}
+                  {seq.triggerType === 'CUSTOM' && (
+                    <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => void openWebhookUrl(seq)}><LinkIcon size={13} /> Webhook URL</Button>
+                  )}
                   {(seq.status === 'DRAFT' || seq.status === 'PAUSED' || seq.status === 'ACTIVE') && (
                     <Button variant="secondary" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs" onClick={() => void handleToggle(seq)}>
                       {seq.status === 'ACTIVE' ? <><Pause size={13} /> Pause</> : <><Play size={13} /> Activate</>}
@@ -212,6 +322,7 @@ export function Nurture() {
                 <option value="LEAD_QUALIFIED">Auto-enroll on AI Qualification</option>
                 <option value="LEAD_CREATED">Lead created</option>
                 <option value="BOOKING_CREATED">Booking created</option>
+                <option value="CUSTOM">Incoming webhook</option>
               </Select>
             </Field>
             {form.triggerType === 'LEAD_QUALIFIED' && (
@@ -224,20 +335,44 @@ export function Nurture() {
               </Field>
             )}
 
-            <div className="space-y-3 rounded-lg border border-ink-100 p-3">
-              <p className="text-xs font-medium text-ink-600">Steps</p>
-              {form.steps.map((step) => (
-                <div key={step.stepNumber} className="space-y-2 rounded-lg bg-ink-50 p-3">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-medium text-ink-500">Step {step.stepNumber}</p>
-                    {form.steps.length > 1 && (
-                      <button className="text-xs text-red-600" onClick={() => removeStep(step.stepNumber)}>Remove</button>
-                    )}
+            <div className="space-y-0 rounded-lg border border-ink-100 p-3">
+              <p className="mb-2 text-xs font-medium text-ink-600">Workflow</p>
+
+              {/* Real visual start-of-flow node -- reflects the trigger picked above. */}
+              <div className="flex items-center gap-2 rounded-lg border border-brand-200 bg-brand-50 px-3 py-2">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-600 text-[10px] font-bold text-white">▶</span>
+                <p className="text-xs font-medium text-brand-700">
+                  Trigger: {form.triggerType === 'MANUAL' ? 'Manual enrollment only' : form.triggerType === 'LEAD_QUALIFIED' ? `AI Qualification (${form.qualificationTemperature || '…'})` : form.triggerType === 'LEAD_CREATED' ? 'Lead created' : form.triggerType === 'BOOKING_CREATED' ? 'Booking created' : 'Incoming webhook'}
+                </p>
+              </div>
+
+              {form.steps.map((step) => {
+                const Icon = channelIcon[step.channel] || MessageCircle;
+                return (
+                <div key={step.stepNumber}>
+                  {/* Real connecting line + arrow -- every step, including the first (connects down from the Trigger node above). */}
+                  <div className="flex justify-start pl-[15px]">
+                    <div className="h-4 w-px bg-ink-200" />
                   </div>
+                  <div className="space-y-2 rounded-lg bg-ink-50 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-ink-500 shadow-sm"><Icon size={13} /></span>
+                        <p className="text-xs font-medium text-ink-500">Step {step.stepNumber} — {channelLabel[step.channel]}</p>
+                      </div>
+                      {form.steps.length > 1 && (
+                        <button className="text-xs text-red-600" onClick={() => removeStep(step.stepNumber)}>Remove</button>
+                      )}
+                    </div>
                   <div className="grid grid-cols-3 gap-2">
                     <Select value={step.channel} onChange={(e) => updateStep(step.stepNumber, { channel: e.target.value as NurtureChannel })}>
                       <option value="WHATSAPP">WhatsApp</option>
                       <option value="EMAIL">Email</option>
+                      <option value="AI">AI Message</option>
+                      <option value="BOOKING">Booking</option>
+                      <option value="PAYMENT">Payment</option>
+                      <option value="SHOPIFY">Shopify</option>
+                      <option value="API_REQUEST">API Request / Webhook</option>
                       <option value="MANUAL_TASK">Manual task</option>
                       <option value="SMS">SMS (not yet sendable)</option>
                     </Select>
@@ -249,24 +384,153 @@ export function Nurture() {
                       <option value="WEEKS">Weeks</option>
                     </Select>
                   </div>
+
                   {step.channel === 'WHATSAPP' && (
                     <Input value={step.templateId || ''} onChange={(e) => updateStep(step.stepNumber, { templateId: e.target.value })} placeholder="WhatsApp Template ID" />
                   )}
+
                   {step.channel === 'EMAIL' && (
                     <>
-                      <Input value={step.emailSubject || ''} onChange={(e) => updateStep(step.stepNumber, { emailSubject: e.target.value })} placeholder="Email subject" />
-                      <Textarea value={step.emailBody || ''} onChange={(e) => updateStep(step.stepNumber, { emailBody: e.target.value })} placeholder="Email body (HTML)" />
+                      <div className="flex items-center gap-2">
+                        <Input ref={fieldRef(step.stepNumber, 'emailSubject')} value={step.emailSubject || ''} onChange={(e) => updateStep(step.stepNumber, { emailSubject: e.target.value })} placeholder="Email subject" />
+                        <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'emailSubject')} onInsert={(v) => updateStep(step.stepNumber, { emailSubject: v })} />
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <Textarea ref={fieldRef(step.stepNumber, 'emailBody')} value={step.emailBody || ''} onChange={(e) => updateStep(step.stepNumber, { emailBody: e.target.value })} placeholder="Email body (HTML)" />
+                        <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'emailBody')} onInsert={(v) => updateStep(step.stepNumber, { emailBody: v })} />
+                      </div>
                     </>
                   )}
-                  {step.channel === 'MANUAL_TASK' && (
-                    <Input value={step.taskDescription || ''} onChange={(e) => updateStep(step.stepNumber, { taskDescription: e.target.value })} placeholder="What should the assigned person do?" />
+
+                  {step.channel === 'AI' && (
+                    <>
+                      <p className="text-xs text-ink-500">Generates a personalized WhatsApp message using your connected AI provider (Claude/Gemini).</p>
+                      <div className="flex items-center gap-2">
+                        <Input ref={fieldRef(step.stepNumber, 'aiGoal')} value={step.aiGoal || ''} onChange={(e) => updateStep(step.stepNumber, { aiGoal: e.target.value })} placeholder="Goal, e.g. remind them about their upcoming call" />
+                        <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'aiGoal')} onInsert={(v) => updateStep(step.stepNumber, { aiGoal: v })} />
+                      </div>
+                      <Select value={step.aiTone || 'Professional'} onChange={(e) => updateStep(step.stepNumber, { aiTone: e.target.value })}>
+                        <option value="Professional">Professional</option>
+                        <option value="Friendly">Friendly</option>
+                        <option value="Persuasive">Persuasive</option>
+                        <option value="Empathetic">Empathetic</option>
+                      </Select>
+                    </>
                   )}
+
+                  {step.channel === 'BOOKING' && (
+                    <>
+                      <Select value={step.bookingAction || 'CHECK_STATUS'} onChange={(e) => updateStep(step.stepNumber, { bookingAction: e.target.value as NurtureStep['bookingAction'] })}>
+                        <option value="CHECK_STATUS">Check booking status</option>
+                        <option value="SEND_LINK">Send existing booking link</option>
+                        <option value="SEND_REMINDER">Send booking reminder</option>
+                        <option value="CREATE">Create booking (requires a real date/time below)</option>
+                      </Select>
+                      {step.bookingAction === 'CREATE' && (
+                        <>
+                          <Input value={step.bookingMeetingType || ''} onChange={(e) => updateStep(step.stepNumber, { bookingMeetingType: e.target.value })} placeholder="Meeting type, e.g. Discovery Call" />
+                          <div className="grid grid-cols-2 gap-2">
+                            <Input value={step.bookingDate || ''} onChange={(e) => updateStep(step.stepNumber, { bookingDate: e.target.value })} placeholder="Date (YYYY-MM-DD)" />
+                            <Input value={step.bookingTime || ''} onChange={(e) => updateStep(step.stepNumber, { bookingTime: e.target.value })} placeholder="Time (HH:MM)" />
+                          </div>
+                          <p className="text-xs text-amber-700">A booking is only created if both a real date and time are set — never auto-generated.</p>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {step.channel === 'PAYMENT' && (
+                    <>
+                      <Select value={step.paymentAction || 'CHECK_STATUS'} onChange={(e) => updateStep(step.stepNumber, { paymentAction: e.target.value as NurtureStep['paymentAction'] })}>
+                        <option value="CHECK_STATUS">Check payment status</option>
+                        <option value="CREATE_REQUEST">Create payment request</option>
+                      </Select>
+                      {step.paymentAction === 'CREATE_REQUEST' && (
+                        <>
+                          <Input type="number" min={0} value={step.paymentAmount ?? ''} onChange={(e) => updateStep(step.stepNumber, { paymentAmount: Number(e.target.value) })} placeholder="Amount" />
+                          <div className="flex items-center gap-2">
+                            <Input ref={fieldRef(step.stepNumber, 'paymentNote')} value={step.paymentNote || ''} onChange={(e) => updateStep(step.stepNumber, { paymentNote: e.target.value })} placeholder="Message shown with the payment link" />
+                            <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'paymentNote')} onInsert={(v) => updateStep(step.stepNumber, { paymentNote: v })} />
+                          </div>
+                          <p className="text-xs text-ink-500">Creates a real InnovateX payment record and sends its real link — this is not a Razorpay checkout, since no lead-facing Razorpay integration exists yet.</p>
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {step.channel === 'SHOPIFY' && (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Input ref={fieldRef(step.stepNumber, 'shopifyOrderId')} value={step.shopifyOrderId || ''} onChange={(e) => updateStep(step.stepNumber, { shopifyOrderId: e.target.value })} placeholder="Shopify Order ID (or a variable)" />
+                        <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'shopifyOrderId')} onInsert={(v) => updateStep(step.stepNumber, { shopifyOrderId: v })} />
+                      </div>
+                      <p className="text-xs text-ink-500">Looks up this specific order and makes its details available as variables (e.g. <code>{'{{shopify.fulfillment_status}}'}</code>) for later steps.</p>
+                    </>
+                  )}
+
+                  {step.channel === 'API_REQUEST' && (
+                    <>
+                      <div className="grid grid-cols-3 gap-2">
+                        <Select value={step.apiMethod || 'POST'} onChange={(e) => updateStep(step.stepNumber, { apiMethod: e.target.value as NurtureStep['apiMethod'] })}>
+                          <option value="GET">GET</option>
+                          <option value="POST">POST</option>
+                          <option value="PUT">PUT</option>
+                          <option value="PATCH">PATCH</option>
+                          <option value="DELETE">DELETE</option>
+                        </Select>
+                        <div className="col-span-2 flex items-center gap-2">
+                          <Input ref={fieldRef(step.stepNumber, 'apiUrl')} value={step.apiUrl || ''} onChange={(e) => updateStep(step.stepNumber, { apiUrl: e.target.value })} placeholder="https://..." />
+                          <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'apiUrl')} onInsert={(v) => updateStep(step.stepNumber, { apiUrl: v })} />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5">
+                        <p className="text-xs font-medium text-ink-500">Headers</p>
+                        {(step.apiHeaders || []).map((h, i) => (
+                          <div key={i} className="flex gap-2">
+                            <Input value={h.key} onChange={(e) => {
+                              const headers = [...(step.apiHeaders || [])];
+                              headers[i] = { ...headers[i], key: e.target.value };
+                              updateStep(step.stepNumber, { apiHeaders: headers });
+                            }} placeholder="Header name" />
+                            <Input value={h.value} onChange={(e) => {
+                              const headers = [...(step.apiHeaders || [])];
+                              headers[i] = { ...headers[i], value: e.target.value };
+                              updateStep(step.stepNumber, { apiHeaders: headers });
+                            }} placeholder="Value" />
+                            <button className="text-xs text-red-600" onClick={() => {
+                              updateStep(step.stepNumber, { apiHeaders: (step.apiHeaders || []).filter((_, hi) => hi !== i) });
+                            }}>Remove</button>
+                          </div>
+                        ))}
+                        <Button variant="secondary" className="text-xs" onClick={() => updateStep(step.stepNumber, { apiHeaders: [...(step.apiHeaders || []), { key: '', value: '' }] })}>
+                          <Plus size={12} /> Add header
+                        </Button>
+                      </div>
+                      {step.apiMethod !== 'GET' && (
+                        <div className="flex items-start gap-2">
+                          <Textarea ref={fieldRef(step.stepNumber, 'apiBody')} value={step.apiBody || ''} onChange={(e) => updateStep(step.stepNumber, { apiBody: e.target.value })} placeholder="Request body (JSON)" />
+                          <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'apiBody')} onInsert={(v) => updateStep(step.stepNumber, { apiBody: v })} />
+                        </div>
+                      )}
+                      <p className="text-xs text-ink-500">Requests to private/internal addresses are automatically blocked for security.</p>
+                    </>
+                  )}
+
+                  {step.channel === 'MANUAL_TASK' && (
+                    <div className="flex items-center gap-2">
+                      <Input ref={fieldRef(step.stepNumber, 'taskDescription')} value={step.taskDescription || ''} onChange={(e) => updateStep(step.stepNumber, { taskDescription: e.target.value })} placeholder="What should the assigned person do?" />
+                      <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'taskDescription')} onInsert={(v) => updateStep(step.stepNumber, { taskDescription: v })} />
+                    </div>
+                  )}
+
                   {step.channel === 'SMS' && (
                     <p className="text-xs text-amber-700">SMS steps are saved for real, but cannot send yet — no SMS provider is configured in this application.</p>
                   )}
+                  </div>
                 </div>
-              ))}
-              <Button variant="secondary" onClick={addStep} className="w-full text-xs"><Plus size={13} /> Add step</Button>
+                );
+              })}
+              <Button variant="secondary" onClick={addStep} className="mt-3 w-full text-xs"><Plus size={13} /> Add step</Button>
             </div>
           </div>
         </Modal>
@@ -300,6 +564,32 @@ export function Nurture() {
                 </div>
               ))
             )}
+          </div>
+        </Modal>
+      )}
+
+      {webhookUrlFor && (
+        <Modal open onClose={() => setWebhookUrlFor(null)} title={`Webhook URL — ${webhookUrlFor.name}`}>
+          <div className="space-y-3">
+            <p className="text-xs text-ink-500">
+              A real, external system (a form builder, another CRM, Zapier/Make, or a custom script) can <code>POST</code> a JSON payload with at least an <code>email</code> or <code>phone</code> to this URL to automatically match or create a lead and enroll them here. Every field in the payload becomes a real workflow variable (<code>{'{{webhook.fieldname}}'}</code>) for later steps.
+            </p>
+            {webhookUrlLoading ? (
+              <p className="text-sm text-ink-400">Loading…</p>
+            ) : webhookUrl ? (
+              <>
+                <div className="flex items-center gap-2 rounded-lg border border-ink-100 bg-ink-50 p-2.5">
+                  <code className="flex-1 overflow-x-auto whitespace-nowrap text-xs text-ink-700">{webhookUrl}</code>
+                  <Button variant="secondary" className="shrink-0 px-2 py-1 text-xs" onClick={() => void handleCopyWebhookUrl()}><Copy size={12} /> Copy</Button>
+                </div>
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                  <strong>This URL is a real credential</strong> — anyone with it can enroll leads into this sequence. Only share it with the external system you're actually connecting.
+                </div>
+                <Button variant="ghost" disabled={webhookUrlLoading} className="w-full text-xs text-red-600" onClick={() => void handleRegenerateWebhookUrl()}>
+                  <RefreshCw size={13} /> Regenerate URL (invalidates the current one immediately)
+                </Button>
+              </>
+            ) : null}
           </div>
         </Modal>
       )}

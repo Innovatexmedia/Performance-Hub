@@ -6,7 +6,7 @@
  * WHAT CHANGED:
  *   - assess() is now async — calls Google Gemini API when GEMINI_API_KEY is set
  *   - Falls back to deterministic mock when key is missing (app never breaks)
- *   - Uses gemini-1.5-flash model — fast, cheap, accurate for structured JSON
+ *   - Uses gemini-3.5-flash-lite model — fast, cheap, accurate for structured JSON
  *   - Returns same shape as before — all callers unchanged
  *
  * ENV REQUIRED:
@@ -24,9 +24,11 @@ import { LEAD_TEMPERATURE } from '../lead/lead.constants.js';
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY;
 const isAiLive = () => Boolean(GEMINI_API_KEY());
 
-// Gemini API endpoint for gemini-1.5-flash
+// Gemini API endpoint -- real model id, matches aiReplyAssistant.service.js's
+// GEMINI_MODEL, the currently-supported Gemini model already in real use
+// elsewhere in this codebase. gemini-1.5-flash returns 404 on the current API.
 const GEMINI_URL = () =>
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY()}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY()}`;
 
 // =============================================================================
 // GEMINI API CALL

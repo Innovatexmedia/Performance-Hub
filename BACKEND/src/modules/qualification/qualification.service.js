@@ -58,8 +58,8 @@ import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 // LEAD_TEMPERATURE for hot lead check
 import { LEAD_TEMPERATURE } from '../leads/lead/lead.constants.js';
 import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.service.js';
-import { NurtureSequence } from '../whatsapp/submodules/nurtures/nurtures.model.js';
-import { TRIGGER_TYPE, SEQUENCE_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
+import { NurtureSequence, NurtureEnrollment } from '../whatsapp/submodules/nurtures/nurtures.model.js';
+import { TRIGGER_TYPE, SEQUENCE_STATUS, ENROLLMENT_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
 
 // =============================================================================
 // PRIVATE HELPERS — identical pattern to booking.service.js and call.service.js
@@ -365,6 +365,26 @@ export const applyResult = async (qualificationId, reqUser) => {
     temperature:      temp,
   });
 
+  // ── 7b. Real pause-on-qualified ─────────────────────────────────────────────
+  // A lead becoming qualified means they've moved to a different funnel
+  // stage -- their OTHER, unrelated active nurture enrollments should
+  // pause, regardless of which temperature they landed at (Hot leads
+  // get a direct notification above, not silence -- they shouldn't also
+  // keep receiving an unrelated drip sequence). Placed BEFORE step 8's
+  // auto-enroll so the newly-created enrollment (if any) is never
+  // accidentally paused by this same qualification event -- it doesn't
+  // exist yet at this point. Best-effort: must never fail the
+  // qualification apply itself.
+  await NurtureEnrollment.updateMany(
+    { tenantId: String(ctx.tenantId), leadId, status: ENROLLMENT_STATUS.ACTIVE },
+    {
+      $set: { status: ENROLLMENT_STATUS.PAUSED, pauseReason: 'QUALIFIED', nextExecutionAt: null },
+      $push: { auditLog: { action: 'PAUSE', performedAt: new Date(), note: `Lead qualified (${temp})` } },
+    },
+  ).catch((err) => {
+    console.error('[nurture] failed to pause enrollments on qualification for lead', String(leadId), err);
+  });
+
   // ── 8. Real auto-enroll into nurture for Cold/Warm leads ───────────────────
   // Only Cold/Warm, per the actual request -- Hot leads get a direct
   // notification above, not an automated drip sequence. Finds a real,
@@ -385,7 +405,16 @@ export const applyResult = async (qualificationId, reqUser) => {
         qualificationTemperature: temp,
       });
       if (matchingSequence) {
-        await nurturesService.enrollLead(ctx, String(matchingSequence._id), { leadId: String(leadId) });
+        // leadId here is qualification.lead_id -- populated into a full Lead
+        // document by qualRepo.findById()'s .populate('lead_id', ...), not a
+        // raw ObjectId. Every other use of leadId in this function passes it
+        // through unstringified (Mongoose's own query/create casting handles
+        // a populated Document correctly for an ObjectId-typed field/filter),
+        // but String(leadId) does NOT -- Document has no custom toString(),
+        // so String() on it produces the literal string "[object Object]",
+        // which is what was actually reaching enrollLead() and failing
+        // "Cast to ObjectId failed". Extract the real id first.
+        await nurturesService.enrollLead(ctx, String(matchingSequence._id), { leadId: String(leadId._id || leadId) });
       }
     } catch (err) {
       // Real, but non-fatal -- e.g. the lead is already enrolled (real

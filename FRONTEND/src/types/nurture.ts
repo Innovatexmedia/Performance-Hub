@@ -9,7 +9,10 @@
  * now uses these instead.
  */
 
-export type NurtureChannel = 'WHATSAPP' | 'EMAIL' | 'SMS' | 'MANUAL_TASK';
+export type NurtureChannel = 'WHATSAPP' | 'EMAIL' | 'SMS' | 'MANUAL_TASK' | 'AI' | 'API_REQUEST' | 'BOOKING' | 'PAYMENT' | 'SHOPIFY';
+export type BookingAction = 'SEND_LINK' | 'CHECK_STATUS' | 'SEND_REMINDER' | 'CREATE';
+export type PaymentAction = 'CHECK_STATUS' | 'CREATE_REQUEST';
+export type ApiMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type SequenceStatus = 'DRAFT' | 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'ARCHIVED';
 export type SequenceType = 'WELCOME' | 'BOOKING' | 'FOLLOW_UP' | 'PAYMENT' | 'ONBOARDING' | 'REACTIVATION' | 'NURTURE' | 'CUSTOM';
 export type TriggerType = 'MANUAL' | 'LEAD_CREATED' | 'LEAD_QUALIFIED' | 'BOOKING_CREATED' | 'PAYMENT_PENDING' | 'PAYMENT_FAILED' | 'CUSTOM';
@@ -17,6 +20,16 @@ export type DelayUnit = 'MINUTES' | 'HOURS' | 'DAYS' | 'WEEKS';
 export type EnrollmentStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
 export type QualificationTemperature = 'Cold' | 'Warm';
 export type PauseReason = 'MANUAL' | 'REPLY_DETECTED' | 'OPTED_OUT' | 'QUALIFIED' | 'BOOKED' | 'CONVERTED' | null;
+
+export interface WorkflowVariable {
+  path: string;
+  label: string;
+  example: string;
+}
+export interface VariableGroup {
+  group: string;
+  variables: WorkflowVariable[];
+}
 
 export interface NurtureStep {
   stepNumber: number;
@@ -29,6 +42,25 @@ export interface NurtureStep {
   emailBody?: string;
   taskDescription?: string;
   assignToUserId?: string | null;
+  // AI
+  aiGoal?: string;
+  aiTone?: string;
+  // API_REQUEST
+  apiMethod?: ApiMethod;
+  apiUrl?: string;
+  apiHeaders?: { key: string; value: string }[];
+  apiBody?: string;
+  // BOOKING
+  bookingAction?: BookingAction;
+  bookingMeetingType?: string;
+  bookingDate?: string;
+  bookingTime?: string;
+  // PAYMENT
+  paymentAction?: PaymentAction;
+  paymentAmount?: number | null;
+  paymentNote?: string;
+  // SHOPIFY
+  shopifyOrderId?: string;
   isActive: boolean;
 }
 

@@ -23,6 +23,13 @@ import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 import { NurtureEnrollment, NurtureSequence } from '../whatsapp/submodules/nurtures/nurtures.model.js';
 import { ENROLLMENT_STATUS, TRIGGER_TYPE, SEQUENCE_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
 import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.service.js';
+// Real tracking-event writer -- same import every other module that calls
+// emitTrackingEvent/createTrackingEvent already uses (lead/call/qualification/
+// payment.service.js). This was missing here, which is why calling this
+// file's own emitTrackingEvent() below threw "createTrackingEvent is not
+// defined" at runtime -- the function body referenced it but nothing ever
+// imported it into this file's scope.
+import { createTrackingEvent } from '../attribution/attribution.service.js';
 
 // =============================================================================
 // PRIVATE HELPERS

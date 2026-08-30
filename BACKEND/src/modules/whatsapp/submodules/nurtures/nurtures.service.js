@@ -19,6 +19,7 @@ import {
   ENROLLMENT_ACTION,
   ENROLLMENT_ALLOWED_TRANSITIONS,
   DELAY_UNIT_MS,
+  NURTURE_CHANNEL,
   SEARCHABLE_FIELDS,
   SORTABLE_FIELDS,
   DEFAULT_PAGE,
@@ -104,6 +105,23 @@ function paging(query = {}) {
   return { page, limit, skip: (page - 1) * limit };
 }
 
+/**
+ * stripEmptyObjectIdFields -- removes any listed key from a step object
+ * whose value is falsy (undefined/null/''), leaving every other key
+ * untouched. A genuinely absent key lets Mongoose apply this schema's own
+ * `default: null` for that field; an empty string does not (see
+ * validateSteps' real comment for why that distinction matters -- this
+ * is the fix for the real "Cast to ObjectId failed for value ''" crash
+ * class, applied generically rather than field-by-field ad hoc).
+ */
+function stripEmptyObjectIdFields(step, fields) {
+  const cleaned = { ...step };
+  for (const field of fields) {
+    if (!cleaned[field]) delete cleaned[field];
+  }
+  return cleaned;
+}
+
 // ── Service ────────────────────────────────────────────────────────────────────
 
 export const nurturesService = {
@@ -136,14 +154,41 @@ export const nurturesService = {
     }
 
     const validated = [];
-    for (const step of steps) {
-      if (!step.isActive) { validated.push(step); continue; }
-      const template = await templateApprovalService.assertUsable(ctx, String(step.templateId));
-      validated.push({
-        ...step,
-        templateName:   template.name || '',
-        approvalStatus: template.approvalStatus || 'PROVIDER_APPROVED',
-      });
+    for (const rawStep of steps) {
+      // Real normalization, applied to EVERY step -- active or not, every
+      // channel -- before anything else runs. assignToUserId (Manual
+      // Task's assignee field) has no business rule that ever requires an
+      // empty string, so it's always safe to strip outright: Mongoose's
+      // own cast/save path throws a real, ugly CastError ("Cast to
+      // ObjectId failed for value \"\"") the moment it sees one, and that
+      // used to be reachable for BOTH an inactive step (which skipped this
+      // file's own logic entirely) and an active one of any channel.
+      // templateId is handled separately below -- WHATSAPP steps still
+      // need their real, un-stripped value so an empty one is reported
+      // with the exact, already-tested "Invalid _id: " message rather
+      // than a vaguer one.
+      const step = stripEmptyObjectIdFields(rawStep, ['assignToUserId']);
+
+      if (!step.isActive) { validated.push(stripEmptyObjectIdFields(step, ['templateId'])); continue; }
+
+      // Only a real WHATSAPP step actually sends via a pre-approved
+      // WhatsApp Business template -- Email/Manual Task/AI/API Request/
+      // Booking/Payment/Shopify/SMS steps either send their own free-form
+      // content or aren't a "send" step at all, so none of them ever need
+      // a real, provider-approved WhatsApp template. Calling that lookup
+      // for them anyway is what threw the real Mongoose CastError the
+      // moment templateId was empty/absent on a non-WhatsApp step, instead
+      // of the step just being accepted.
+      if (step.channel === NURTURE_CHANNEL.WHATSAPP) {
+        const template = await templateApprovalService.assertUsable(ctx, String(step.templateId));
+        validated.push({
+          ...step,
+          templateName:   template.name || '',
+          approvalStatus: template.approvalStatus || 'PROVIDER_APPROVED',
+        });
+      } else {
+        validated.push(stripEmptyObjectIdFields(step, ['templateId']));
+      }
     }
     return validated;
   },

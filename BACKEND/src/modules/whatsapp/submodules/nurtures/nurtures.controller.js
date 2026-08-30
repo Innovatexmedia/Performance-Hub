@@ -6,6 +6,9 @@ import asyncHandler from '../../../../utils/asyncHandler.js';
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { sendSuccess, sendCreated, sendPaginated } from '../../../../utils/responses.js';
 import { nurturesService } from './nurtures.service.js';
+import { VARIABLE_REGISTRY } from './nurtureVariables.js';
+import { getOrCreateWebhookToken, regenerateWebhookToken } from './nurtureWebhookTrigger.service.js';
+import config from '../../../../config/config.js';
 
 function buildCtx(req) {
   const user     = req.user    || {};
@@ -20,6 +23,36 @@ function buildCtx(req) {
 }
 
 export const nurturesController = {
+  // GET /api/whatsapp/nurtures/variables
+  getVariables: asyncHandler(async (req, res) => {
+    return sendSuccess(res, VARIABLE_REGISTRY, 'Available workflow variables');
+  }),
+
+  /**
+   * getWebhookUrl -- GET /whatsapp/nurtures/:id/webhook-url
+   * Real, admin-facing. Returns the complete, ready-to-use URL
+   * (generating a real token on first request if the sequence doesn't
+   * have one yet), not just the raw token -- so a tenant can copy/paste
+   * it directly into whatever external tool they're configuring.
+   */
+  getWebhookUrl: asyncHandler(async (req, res) => {
+    const token = await getOrCreateWebhookToken(buildCtx(req), req.params.id);
+    const url = `${config.API_BASE_URL}/api/whatsapp/nurtures/webhook-trigger/${req.params.id}/${token}`;
+    return sendSuccess(res, { url, token }, 'Webhook URL');
+  }),
+
+  /**
+   * regenerateWebhookUrl -- POST /whatsapp/nurtures/:id/webhook-url/regenerate
+   * Real, explicit, destructive action -- invalidates the old token
+   * immediately (any external system still using it starts failing),
+   * issues a new one.
+   */
+  regenerateWebhookUrl: asyncHandler(async (req, res) => {
+    const token = await regenerateWebhookToken(buildCtx(req), req.params.id);
+    const url = `${config.API_BASE_URL}/api/whatsapp/nurtures/webhook-trigger/${req.params.id}/${token}`;
+    return sendSuccess(res, { url, token }, 'Webhook URL regenerated — the previous URL no longer works');
+  }),
+
   // ── Sequence ─────────────────────────────────────────────────────────────
 
   // POST /api/whatsapp/nurtures

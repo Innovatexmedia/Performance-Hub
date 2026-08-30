@@ -1,9 +1,11 @@
 import { apiClient, apiClientRaw } from './apiClient';
-import type { NurtureSequence, NurtureEnrollment } from '@/types/nurture';
+import type { NurtureSequence, NurtureEnrollment, VariableGroup } from '@/types/nurture';
 
 interface Paginated<T> { data: T; pagination: { page: number; limit: number; total: number; pages: number } }
 
 export const nurtureApi = {
+  getVariables: () => apiClient.get<VariableGroup[]>('/whatsapp/nurtures/variables'),
+
   list: (query?: Record<string, string>) =>
     apiClientRaw.get<Paginated<NurtureSequence[]>>('/whatsapp/nurtures', query),
 
@@ -42,4 +44,12 @@ export const nurtureApi = {
 
   cancelEnrollment: (id: string, comment?: string) =>
     apiClient.post<NurtureEnrollment>(`/whatsapp/nurtures/enrollments/${id}/cancel`, { comment }),
+
+  /** Real, admin-gated -- returns the complete, ready-to-use webhook trigger URL (generates a real token on first request if the sequence doesn't have one yet). */
+  getWebhookUrl: (id: string) =>
+    apiClient.get<{ url: string; token: string }>(`/whatsapp/nurtures/${id}/webhook-url`),
+
+  /** Real, destructive -- invalidates the previous URL immediately, issues a new one. */
+  regenerateWebhookUrl: (id: string) =>
+    apiClient.post<{ url: string; token: string }>(`/whatsapp/nurtures/${id}/webhook-url/regenerate`),
 };

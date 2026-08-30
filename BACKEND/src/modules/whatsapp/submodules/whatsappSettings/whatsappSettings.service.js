@@ -257,10 +257,21 @@ export const whatsappSettingsService = {
     let settings = await whatsappSettingsRepository.findByTenant(ctx.tenantId);
     // Auto-provision a default document on first read so other modules can rely
     // on settings always existing.
+    //
+    // BUG FIX: this used to be a plain findOne-then-create. Real callers can
+    // genuinely race each other here -- e.g. integration.service.js's
+    // listIntegrations() overlays 4 different catalog cards (meta_cloud,
+    // 360dialog, twilio_wa, interakt) concurrently via Promise.all, and each
+    // one independently calls getSettings() for the same tenant. On a brand
+    // -new tenant with no WhatsAppSettings document yet, all 4 calls can see
+    // "not found" before any of them has committed a create -- a classic
+    // TOCTOU race -- and 3 of the 4 then throw a real duplicate-key error on
+    // the unique tenantId index. findOneAndUpdate with upsert:true is atomic
+    // at the database level, so concurrent callers safely converge on the
+    // same single document instead of racing to create it.
     if (!settings) {
-      settings = await whatsappSettingsRepository.create({
+      settings = await whatsappSettingsRepository.upsertDefault(ctx.tenantId, {
         ...DEFAULT_SETTINGS,
-        tenantId:  ctx.tenantId,
         createdBy: ctx.userId,
         updatedBy: ctx.userId,
       });

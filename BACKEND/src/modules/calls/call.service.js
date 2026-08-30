@@ -70,7 +70,10 @@ const emitTrackingEvent = async (eventType, leadId, tenantId, metadata = {}) => 
 const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || process.env[AI_API_KEY_ENV];
 
 const GEMINI_URL = () =>
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY()}`;
+  // Real model id -- matches aiReplyAssistant.service.js's GEMINI_MODEL,
+  // the currently-supported Gemini model already in real use elsewhere
+  // in this codebase. gemini-1.5-flash returns 404 on the current API.
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY()}`;
 
 const callGemini = async (prompt) => {
   const response = await fetch(GEMINI_URL(), {

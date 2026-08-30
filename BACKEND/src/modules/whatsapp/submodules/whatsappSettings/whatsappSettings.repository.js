@@ -12,6 +12,21 @@ export const whatsappSettingsRepository = {
     return WhatsAppSettings.create(data);
   },
 
+  /**
+   * upsertDefault -- atomic find-or-create for the auto-provision path.
+   * $setOnInsert means an existing document is returned completely
+   * untouched (no field gets overwritten back to a default); a genuinely
+   * missing one is created exactly once even under concurrent callers,
+   * since findOneAndUpdate's upsert is atomic at the database level.
+   */
+  upsertDefault(tenantId, defaults) {
+    return WhatsAppSettings.findOneAndUpdate(
+      { tenantId },
+      { $setOnInsert: { ...defaults, tenantId } },
+      { new: true, upsert: true, setDefaultsOnInsert: true },
+    );
+  },
+
   findByTenant(tenantId) {
     return WhatsAppSettings.findOne({ tenantId });
   },

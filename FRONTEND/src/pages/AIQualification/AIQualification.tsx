@@ -58,8 +58,24 @@ export function AIQualification() {
     if (!result) return;
     setApplying(true);
     try {
-      const { qualification } = await apply(result._id);
+      const { qualification, lead: updatedLead } = await apply(result._id);
       setResult(qualification);
+      // Real refresh, not a page reload: the apply endpoint already
+      // returns the fresh lead (qualification_score/lead_temperature/status
+      // were just updated server-side by applyResult() in
+      // qualification.service.js) -- merge those exact fields into the
+      // already-loaded leads list so "current score X/10" reflects what's
+      // actually in the database immediately, without waiting for the
+      // next full page load or a separate refetch. Deterministic
+      // lead-scoring and AI-scoring logic are untouched -- this only
+      // updates what the UI displays from data the backend already sent.
+      setLeads((prev) =>
+        prev.map((l) =>
+          l.id === updatedLead.id
+            ? { ...l, qualification_score: updatedLead.qualification_score, lead_temperature: updatedLead.lead_temperature, status: updatedLead.status }
+            : l
+        )
+      );
       toast.success('Applied to lead', 'Score, temperature and status updated.');
     } catch (err) {
       toast.error('Could not apply result', err instanceof ApiError ? err.message : 'Please try again.');

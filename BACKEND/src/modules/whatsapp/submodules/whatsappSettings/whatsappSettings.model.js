@@ -255,8 +255,12 @@ const whatsappSettingsSchema = new Schema(
   { timestamps: true, versionKey: false },
 );
 
-// One settings doc per tenant.
-whatsappSettingsSchema.index({ tenantId: 1 }, { unique: true });
+// One settings doc per tenant -- already declared via `unique: true` on
+// the tenantId field itself above; a second schema.index() for the exact
+// same field/options just creates a real duplicate index definition
+// (this was the "[MONGOOSE] Warning: Duplicate schema index on
+// {"tenantId":1}" seen at boot -- not just a cosmetic message, Mongoose
+// was genuinely trying to build the same index twice).
 
 // Prevent two tenants from connecting the SAME WhatsApp Business phone
 // number -- a given phoneNumberId can only route to one tenant's inbox,

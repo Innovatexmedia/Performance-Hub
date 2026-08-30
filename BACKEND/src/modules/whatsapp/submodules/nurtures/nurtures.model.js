@@ -46,6 +46,45 @@ const stepSchema = new Schema(
     taskDescription: { type: String, default: '' },
     assignToUserId:  { type: Schema.Types.ObjectId, ref: 'User', default: null },
 
+    // AI channel -- real: generates a WhatsApp message via the connected
+    // AI provider (see aiReplyAssistant's real Claude/Gemini providers),
+    // then sends it. aiGoal mirrors generate()'s own real `goal` param.
+    aiGoal:  { type: String, default: '' },
+    aiTone:  { type: String, default: 'Professional' },
+
+    // API_REQUEST channel -- real outbound HTTP call. apiHeaders stored
+    // as an array of {key, value} pairs (not a Map) so Mongoose/JSON
+    // round-tripping stays simple and the frontend can render/edit them
+    // as ordinary rows. Real variable substitution applies to url,
+    // headers' values, and body -- see nurtureExecution.service.js.
+    apiMethod:  { type: String, enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'], default: 'POST' },
+    apiUrl:     { type: String, default: '' },
+    apiHeaders: { type: [{ key: String, value: String }], default: [] },
+    apiBody:    { type: String, default: '' },
+
+    // BOOKING channel -- real, bounded sub-actions (see BOOKING_ACTION).
+    bookingAction:   { type: String, default: '' },
+    bookingMeetingType: { type: String, default: '' },
+    // Only used by CREATE, and only if BOTH are explicitly set -- never
+    // auto-generated. Stored as plain strings matching Booking's own
+    // real meeting_date/meeting_time format, interpolated at send time
+    // so a tenant can reference a workflow variable if one resolves to
+    // a real date/time, or leave them blank for a fixed value.
+    bookingDate:     { type: String, default: '' },
+    bookingTime:     { type: String, default: '' },
+
+    // PAYMENT channel -- real, bounded sub-actions (see PAYMENT_ACTION).
+    paymentAction: { type: String, default: '' },
+    paymentAmount: { type: Number, default: null },
+    paymentNote:   { type: String, default: '' },
+
+    // SHOPIFY channel -- real, single lookup only (matches the real
+    // provider's actual capability -- getOrder(orderId), nothing broader).
+    // Supports variable interpolation, so a real order ID captured
+    // elsewhere in the workflow (or a fixed one, for a specific
+    // known-order use case) can be referenced.
+    shopifyOrderId: { type: String, default: '' },
+
     conditions:     { type: Schema.Types.Mixed, default: {} },
     isActive:       { type: Boolean, default: true },
   },
@@ -81,6 +120,13 @@ const nurtureSequenceSchema = new Schema(
     // AI Qualification's real scoring flow checks this field, it isn't a
     // hardcoded mapping invented here.
     qualificationTemperature: { type: String, enum: [...NURTURE_TRIGGER_TEMPERATURE_VALUES, null], default: null },
+
+    // Real webhook trigger auth -- a long, unguessable, per-sequence
+    // token. Generated on first request (not eagerly on every sequence),
+    // so a sequence that never uses the webhook trigger never has one
+    // sitting around. This IS the real authentication for the incoming
+    // webhook -- there's no separate user session on that request.
+    webhookToken: { type: String, default: null, index: true },
     totalSteps:  { type: Number, default: 0, min: 0 },
     steps:       { type: [stepSchema], default: [] },
 
@@ -171,11 +217,20 @@ const nurtureEnrollmentSchema = new Schema(
 
     // ── Real atomic execution lock ─────────────────────────────────────────
     // The scheduler claims an enrollment by atomically setting this
-    // before sending anything (see nurtureScheduler.service.js) -- a real
+    // before sending anything (see nurtureExecution.service.js) -- a real
     // findOneAndUpdate with this field in the filter is what guarantees
     // two concurrent scheduler ticks (or two server instances) can never
     // both send the same step, not just "unlikely to happen".
     processingLockedAt: { type: Date, default: null },
+
+    // Real persistence for variables discovered DURING execution (e.g. a
+    // Shopify order lookup's real returned fields). Necessary because
+    // steps execute asynchronously across time -- potentially days apart,
+    // on separate scheduler ticks -- so a later step referencing
+    // {{shopify.order_status}} needs this data to have survived since
+    // whenever the earlier Shopify node actually ran, not just exist
+    // in-memory during that one execution.
+    dynamicVariables: { type: Schema.Types.Mixed, default: {} },
   },
   { timestamps: true, versionKey: false },
 );

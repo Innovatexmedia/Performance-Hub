@@ -71,8 +71,46 @@ export const NURTURE_CHANNEL = Object.freeze({
   EMAIL:       'EMAIL',
   SMS:         'SMS',
   MANUAL_TASK: 'MANUAL_TASK',
+  AI:          'AI',           // real: generates a WhatsApp message via the connected AI provider (Claude/Gemini), then sends it
+  API_REQUEST: 'API_REQUEST',  // real: outbound HTTP call with configurable method/URL/headers/body, real variable substitution
+  BOOKING:     'BOOKING',      // real: send existing booking link, check status, send reminder, or create (only with an explicit date/time)
+  PAYMENT:     'PAYMENT',      // real: check existing InnovateX payment record status, or create a real pending payment record
+  SHOPIFY:     'SHOPIFY',      // real: looks up a specific Shopify order by ID (the only real lookup the provider supports), stores its real fields as workflow variables for later steps
 });
 export const NURTURE_CHANNEL_VALUES = Object.freeze(Object.values(NURTURE_CHANNEL));
+
+// Real, bounded sub-actions for the BOOKING node -- matches exactly what
+// was scoped: send the lead's real existing booking link, check real
+// status, send a real reminder, or create one but ONLY with an explicit
+// date/time configured on the node (never auto-generated).
+export const BOOKING_ACTION = Object.freeze({
+  SEND_LINK:     'SEND_LINK',
+  CHECK_STATUS:  'CHECK_STATUS',
+  SEND_REMINDER: 'SEND_REMINDER',
+  CREATE:        'CREATE',
+});
+export const BOOKING_ACTION_VALUES = Object.freeze(Object.values(BOOKING_ACTION));
+
+// Real, bounded sub-actions for the PAYMENT node. SCOPE, stated
+// honestly: there is no real Razorpay (or any) payment gateway API
+// integration anywhere in this codebase -- RAZORPAY only exists as a
+// payment-method label a rep selects when manually recording a payment
+// already received. CHECK_STATUS reads real, existing InnovateX payment
+// records. CREATE_REQUEST creates a real, pending InnovateX payment
+// record and notifies the lead of the amount -- it does NOT generate an
+// actual clickable payment gateway checkout URL, since that capability
+// does not exist yet.
+export const PAYMENT_ACTION = Object.freeze({
+  CHECK_STATUS:   'CHECK_STATUS',
+  CREATE_REQUEST: 'CREATE_REQUEST',
+});
+export const PAYMENT_ACTION_VALUES = Object.freeze(Object.values(PAYMENT_ACTION));
+
+// Real, safe defaults for the API_REQUEST node -- enforced in the
+// execution engine, not just suggested here.
+export const API_REQUEST_TIMEOUT_MS = 10_000;
+export const API_REQUEST_MAX_RESPONSE_BYTES = 100_000; // 100KB -- real cap so a runaway response can't exhaust memory
+export const API_REQUEST_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
 // ── Real qualification-triggered auto-enrollment ───────────────────────────────
 // TRIGGER_TYPE.LEAD_QUALIFIED already existed (see below) -- this adds the

@@ -55,6 +55,15 @@ router.post('/enrollments/:id/cancel',
 
 // ── Sequence CRUD ──────────────────────────────────────────────────────────────
 
+// Real, static route -- must stay before /:id, same discipline as
+// /enrollments above. Exposes VARIABLE_REGISTRY so the frontend's
+// Insert Variable picker reads from the exact same source the backend
+// interpolation actually uses, not a separately maintained duplicate.
+router.get('/variables',
+  authenticate, requireRole(ROLE_MIN.READ),
+  nurturesController.getVariables,
+);
+
 router.post('/',
   authenticate, requireRole(ROLE_MIN.CREATE),
   validateCreateSequence, nurturesController.create,
@@ -68,6 +77,17 @@ router.get('/',
 router.get('/:id',
   authenticate, requireRole(ROLE_MIN.READ),
   validateIdParam, nurturesController.get,
+);
+
+// Real, admin-only -- exposes/regenerates a real security credential
+// (the webhook token), gated higher than plain sequence viewing.
+router.get('/:id/webhook-url',
+  authenticate, requireRole(ROLE_MIN.ACTIVATE),
+  validateIdParam, nurturesController.getWebhookUrl,
+);
+router.post('/:id/webhook-url/regenerate',
+  authenticate, requireRole(ROLE_MIN.ACTIVATE),
+  validateIdParam, nurturesController.regenerateWebhookUrl,
 );
 
 router.patch('/:id',
