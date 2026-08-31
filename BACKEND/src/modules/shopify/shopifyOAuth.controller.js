@@ -21,7 +21,20 @@ export const startAuthorization = asyncHandler(async (req, res) => {
   if (!shop) {
     return res.status(400).json({ success: false, message: 'A shop domain is required (e.g. your-store.myshopify.com)' });
   }
-  const { authUrl } = shopifySettingsService.buildAuthorizationUrl({ tenantId: req.user.tenantId }, shop);
+  // buildAuthorizationUrl returns a real string directly (not an
+  // object) -- same real return shape as googleAdsSettingsService's own
+  // buildAuthorizationUrl, and consumed the same correct way there (see
+  // googleAdsOAuth.controller.js: `const authUrl = ...`). This used to
+  // destructure `{ authUrl }` from that string instead, which silently
+  // produced authUrl: undefined -- the response still succeeded (200),
+  // just with no real URL in it. The frontend then set
+  // `window.location.href = undefined`, which the browser coerces to
+  // the literal relative path "/undefined" and navigates there for
+  // real -- a full page reload landing on an unrecognized route, which
+  // is what actually produced the apparent "logout" (the session itself
+  // was never invalidated; the app just bounced to Login after landing
+  // on a route it didn't recognize).
+  const authUrl = shopifySettingsService.buildAuthorizationUrl({ tenantId: req.user.tenantId }, shop);
   return sendSuccess(res, { authUrl }, 'Authorization URL generated');
 });
 
