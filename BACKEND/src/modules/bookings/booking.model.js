@@ -112,6 +112,11 @@ const bookingSchema = new Schema(
       match:    [/^\d{2}:\d{2}$/, 'meeting_time must be HH:MM'],
     },
 
+    // Real reminder-sent tracking -- prevents bookingReminderScheduler.js
+    // from sending the same reminder twice on overlapping ticks, same
+    // real dedup principle as every other scheduler in this app.
+    reminderSentAt: { type: Date, default: null },
+
     /** duration_minutes — call length in minutes. */
     duration_minutes: {
       type:    Number,

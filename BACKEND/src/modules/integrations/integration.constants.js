@@ -89,6 +89,7 @@ export const INTEGRATION_CATALOG = Object.freeze([
   // Email (3)
   { key: 'google_workspace', name: 'Google Workspace', category: INTEGRATION_CATEGORY.EMAIL, description: 'Gmail sending and inbox sync.', logo_color: '#EA4335', available: true },
   { key: 'sendgrid',         name: 'SendGrid',         category: INTEGRATION_CATEGORY.EMAIL, description: 'Platform-level transactional email — password resets, invites, and verification for every workspace.', logo_color: '#1A82E2', available: true },
+  { key: 'sendgrid_nurture', name: 'SendGrid (Nurture Emails)', category: INTEGRATION_CATEGORY.EMAIL, description: 'Your own SendGrid account, used only for Nurture sequence emails — sent from your verified domain, tracked and billed separately from InnovateX\'s platform emails.', logo_color: '#1A82E2', available: true },
   { key: 'mailchimp',        name: 'Mailchimp',        category: INTEGRATION_CATEGORY.EMAIL, description: 'Email marketing campaigns and audiences.', logo_color: '#FFE01B', available: true },
 
   // Calls (2)

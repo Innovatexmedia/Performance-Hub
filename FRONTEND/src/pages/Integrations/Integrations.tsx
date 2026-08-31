@@ -81,6 +81,7 @@ export function Integrations() {
   const [metaAdsForm, setMetaAdsForm] = useState({ pixelId: '', accessToken: '', testEventCode: '' });
   const [googleAdsForm, setGoogleAdsForm] = useState({ measurementId: '', apiSecret: '' });
   const [calcomForm, setCalcomForm] = useState({ apiKey: '' });
+  const [sendgridNurtureForm, setSendgridNurtureForm] = useState({ apiKey: '', verifiedSenderEmail: '', fromName: '', replyTo: '' });
   const [shopifyForm, setShopifyForm] = useState({ shopDomain: '' });
   const [logsFor, setLogsFor] = useState<Integration | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -101,7 +102,7 @@ export function Integrations() {
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'shopify') && i.status === 'disconnected') {
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -143,6 +144,15 @@ export function Integrations() {
     }
     if (i.key === 'sendgrid') {
       return; // no form -- purely read-only real platform status, see JSX below
+    }
+    if (i.key === 'sendgrid_nurture') {
+      setSendgridNurtureForm({
+        apiKey: '',
+        verifiedSenderEmail: typeof i.config.verifiedSenderEmail === 'string' ? i.config.verifiedSenderEmail : '',
+        fromName: typeof i.config.fromName === 'string' ? i.config.fromName : '',
+        replyTo: typeof i.config.replyTo === 'string' ? i.config.replyTo : '',
+      });
+      return;
     }
     if (i.key === 'meta_cloud') {
       setWaForm({
@@ -245,6 +255,19 @@ export function Integrations() {
       } else if (config.key === 'calcom') {
         await updateConfig(config.id, { apiKey: calcomForm.apiKey });
         toast.success('Connected', 'API key verified against Cal.com\u2019s real API, and a real webhook was set up for automatic sync.');
+      } else if (config.key === 'sendgrid_nurture') {
+        if (!sendgridNurtureForm.verifiedSenderEmail.trim()) {
+          toast.error('A verified sender email is required');
+          setSaving(false);
+          return;
+        }
+        await updateConfig(config.id, {
+          ...(sendgridNurtureForm.apiKey ? { apiKey: sendgridNurtureForm.apiKey } : {}),
+          verifiedSenderEmail: sendgridNurtureForm.verifiedSenderEmail.trim(),
+          fromName: sendgridNurtureForm.fromName,
+          replyTo: sendgridNurtureForm.replyTo,
+        });
+        toast.success('Connected', 'API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
         toast.success('Settings saved');
@@ -369,6 +392,25 @@ export function Integrations() {
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
                   Connected, but the real webhook setup failed — new bookings won't sync automatically yet. Click Sync manually, or check that your server's API_BASE_URL is publicly reachable and reconnect.
                 </div>
+              )}
+            </div>
+          ) : config.key === 'sendgrid_nurture' ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">Your own SendGrid account, used only for Nurture sequence emails — separate from InnovateX's platform account above, which handles password resets and invites. This makes a real, live call to SendGrid's Account API to verify your key before connecting.</p>
+              <Field label="API Key" hint="SendGrid → Settings → API Keys">
+                <Input type="password" value={sendgridNurtureForm.apiKey} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'SG.xxxxxxxx...'} />
+              </Field>
+              <Field label="Verified sender email" hint="Must already be a verified single sender or domain in your SendGrid account">
+                <Input value={sendgridNurtureForm.verifiedSenderEmail} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, verifiedSenderEmail: e.target.value })} placeholder="nurture@yourcompany.com" />
+              </Field>
+              <Field label="From name (optional)">
+                <Input value={sendgridNurtureForm.fromName} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, fromName: e.target.value })} placeholder="Your Company" />
+              </Field>
+              <Field label="Reply-To (optional)" hint="Replies to nurture emails go here instead of the verified sender address">
+                <Input value={sendgridNurtureForm.replyTo} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, replyTo: e.target.value })} placeholder="support@yourcompany.com" />
+              </Field>
+              {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Verification failed:</strong> {config.config.lastSyncError}</div>
               )}
             </div>
           ) : config.key === 'shopify' ? (

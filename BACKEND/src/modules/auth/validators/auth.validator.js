@@ -145,6 +145,37 @@ export const validateResetPassword = [
   handleValidation,
 ];
 
+/**
+ * validateResetPasswordWithOtp -- real 6-digit format check
+ * (isNumeric + isLength) so a genuinely malformed OTP is rejected here,
+ * at the validator layer, before ever reaching the real hashed
+ * per-record comparison (and its attempt-limit counter) in
+ * password.service.js -- an obviously-wrong submission shouldn't burn
+ * one of the limited real attempts.
+ */
+export const validateResetPasswordWithOtp = [
+  body('email')
+    .trim()
+    .notEmpty().withMessage('Email is required')
+    .isEmail().withMessage('Please provide a valid email address')
+    .normalizeEmail(),
+
+  body('otp')
+    .trim()
+    .notEmpty().withMessage('Verification code is required')
+    .isNumeric().withMessage('Verification code must be numeric')
+    .isLength({ min: 6, max: 6 }).withMessage('Verification code must be 6 digits'),
+
+  body('password')
+    .notEmpty().withMessage('New password is required')
+    .isLength({ min: 8 }).withMessage('Password must be at least 8 characters')
+    .matches(/[A-Z]/).withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/).withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/).withMessage('Password must contain at least one number'),
+
+  handleValidation,
+];
+
 // =============================================================================
 // ACCEPT INVITATION VALIDATOR
 // =============================================================================
@@ -226,6 +257,26 @@ export const validateVerifyEmail = [
   body('token')
     .trim()
     .notEmpty().withMessage('Verification token is required'),
+
+  handleValidation,
+];
+
+/**
+ * validateVerifyEmailWithOtp -- same real format-check-before-hashing
+ * reasoning as validateResetPasswordWithOtp above.
+ */
+export const validateVerifyEmailWithOtp = [
+  body('email')
+    .trim()
+    .notEmpty().withMessage('Email is required')
+    .isEmail().withMessage('Please provide a valid email address')
+    .normalizeEmail(),
+
+  body('otp')
+    .trim()
+    .notEmpty().withMessage('Verification code is required')
+    .isNumeric().withMessage('Verification code must be numeric')
+    .isLength({ min: 6, max: 6 }).withMessage('Verification code must be 6 digits'),
 
   handleValidation,
 ];

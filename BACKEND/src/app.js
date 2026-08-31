@@ -38,6 +38,7 @@ import templateRoutes from './modules/templates/template.routes.js';
 import integrationRoutes from './modules/integrations/integration.routes.js';
 import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js';
 import shopifyWebhookRoutes from './modules/shopify/shopifyWebhook.routes.js';
+import sendgridWebhookRoutes from './modules/email/sendgridWebhook.routes.js';
 import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,

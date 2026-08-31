@@ -29,14 +29,18 @@ import { requireRole } from '../../../shared/middlewares/role.middleware.js';
 import {
   loginRateLimit,
   forgotPasswordRateLimit,
+  otpGenerationRateLimit,
+  otpVerifyRateLimit,
 } from '../../../shared/middlewares/rateLimit.middleware.js';
 import {
   validateRegister,
   validateLogin,
   validateForgotPassword,
   validateResetPassword,
+  validateResetPasswordWithOtp,
   validateChangePassword,
   validateVerifyEmail,
+  validateVerifyEmailWithOtp,
   validateAcceptInvitation,
   validateUpdateProfile,
 } from '../validators/auth.validator.js';
@@ -50,7 +54,13 @@ router.post('/login',               loginRateLimit, validateLogin, authControlle
 router.post('/refresh',             authController.refresh);
 router.post('/forgot-password',     forgotPasswordRateLimit, validateForgotPassword, authController.forgotPassword);
 router.post('/reset-password',      validateResetPassword,  authController.resetPassword);
+// Real OTP path -- issuing a NEW code (via /forgot-password, which
+// already generates one alongside the link) is generation-rate-limited
+// above; VERIFYING one is separately rate-limited here, on top of the
+// real per-record wrong-guess limit inside password.service.js itself.
+router.post('/reset-password/otp',  otpVerifyRateLimit, validateResetPasswordWithOtp, authController.resetPasswordWithOtp);
 router.post('/verify-email',        validateVerifyEmail,    authController.verifyEmail);
+router.post('/verify-email/otp',    otpVerifyRateLimit, validateVerifyEmailWithOtp, authController.verifyEmailWithOtp);
 router.post('/switch-workspace',    optionalAuthenticate, authController.switchWorkspace);
 router.get('/invitations/:token',   authController.getInvitationPreview);
 router.post('/invitations/:token/accept', validateAcceptInvitation, authController.acceptInvitation);
@@ -66,6 +76,6 @@ router.patch('/profile',            authenticate, validateUpdateProfile, authCon
 router.get('/my-workspaces',        authenticate, authController.listMyWorkspaces);
 router.post('/workspaces',          authenticate, requireRole('tenant_admin'), authController.createWorkspace);
 router.patch('/change-password',    authenticate, validateChangePassword, authController.changePassword);
-router.post('/resend-verification', authenticate, authController.resendVerification);
+router.post('/resend-verification', authenticate, otpGenerationRateLimit, authController.resendVerification);
 
 export default router;

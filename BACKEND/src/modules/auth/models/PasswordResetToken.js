@@ -45,6 +45,16 @@ const passwordResetTokenSchema = new Schema(
       type:    Date,
       default: null,
     },
+    // Real OTP support, alongside the existing link -- same document,
+    // same TTL/isUsed lifecycle, not a separate collection.
+    otpHash: {
+      type:    String,
+      default: null,
+    },
+    otpAttempts: {
+      type:    Number,
+      default: 0,
+    },
     // IP that requested the reset (for security logging)
     requestedFromIp: {
       type:    String,

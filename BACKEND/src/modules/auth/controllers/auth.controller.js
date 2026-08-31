@@ -216,6 +216,19 @@ export const resetPassword = asyncHandler(async (req, res) => {
 });
 
 /**
+ * resetPasswordWithOtp — POST /auth/reset-password/otp
+ * Real, hashed, expiring 6-digit code + real per-record attempt limiting
+ * (see password.service.js's verifyPasswordResetOtp). Sets the new
+ * password in the same call, matching a real "enter your code and new
+ * password" reset screen.
+ */
+export const resetPasswordWithOtp = asyncHandler(async (req, res) => {
+  const { email, otp, password } = req.body;
+  await passwordService.verifyPasswordResetOtp({ email, otp, newPassword: password });
+  return sendSuccess(res, null, 'Password reset successfully. Please log in with your new password.');
+});
+
+/**
  * getInvitationPreview — GET /auth/invitations/:token
  * Public, read-only -- lets the Accept Invitation page show who invited
  * them and to which workspace/role before they set a password.
@@ -249,6 +262,16 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
  */
 export const verifyEmail = asyncHandler(async (req, res) => {
   const user = await authService.verifyEmail(req.body.token);
+  return sendSuccess(res, { user }, 'Email verified successfully. Welcome to InnovateX!');
+});
+
+/**
+ * verifyEmailWithOtp — POST /auth/verify-email/otp
+ * Real, hashed, expiring 6-digit code + real per-record attempt limiting
+ * (see auth.service.js's verifyEmailOtp).
+ */
+export const verifyEmailWithOtp = asyncHandler(async (req, res) => {
+  const user = await authService.verifyEmailOtp(req.body.email, req.body.otp);
   return sendSuccess(res, { user }, 'Email verified successfully. Welcome to InnovateX!');
 });
 

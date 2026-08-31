@@ -72,6 +72,37 @@ export const forgotPasswordRateLimit = rateLimit({
 });
 
 /**
+ * otpGenerationRateLimit — real per-request-rate ceiling on ISSUING an
+ * OTP (email verification resend, password reset request). Distinct
+ * from otpVerifyRateLimit below (which limits VERIFY calls) and from
+ * the per-record otpAttempts limit inside auth.service.js/
+ * password.service.js (which limits WRONG GUESSES on one already
+ * -issued code) -- three separate, real ceilings, not one doing double
+ * duty for two different attack shapes (spamming code generation vs.
+ * brute-forcing a code that already exists).
+ */
+export const otpGenerationRateLimit = rateLimit({
+  windowMs:        RATE_LIMITS.OTP_GENERATION_WINDOW_MINUTES * 60 * 1000,
+  max:             RATE_LIMITS.OTP_GENERATION_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler:         rateLimitHandler,
+});
+
+/**
+ * otpVerifyRateLimit — real per-request-rate ceiling on the VERIFY
+ * endpoint itself, on top of (not instead of) the per-record attempt
+ * limit that invalidates a specific OTP after too many wrong guesses.
+ */
+export const otpVerifyRateLimit = rateLimit({
+  windowMs:        RATE_LIMITS.OTP_VERIFY_WINDOW_MINUTES * 60 * 1000,
+  max:             RATE_LIMITS.OTP_VERIFY_REQUESTS,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler:         rateLimitHandler,
+});
+
+/**
  * generalApiRateLimit — applied globally in app.js for all /api routes.
  * 300 requests per 1 minute per IP (see RATE_LIMITS in auth.constants.js
  * for the real reasoning: a short window with a generous cap recovers

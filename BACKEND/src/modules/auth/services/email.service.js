@@ -98,17 +98,25 @@ const sendMail = async ({ to, subject, html }) => {
 // ─── Email Templates ──────────────────────────────────────────────────────────
 
 /**
- * sendEmailVerification — sends the email verification link.
- * @param {{ email: string, firstName: string, token: string }}
+ * sendEmailVerification — sends the email verification link AND, when
+ * provided, the real OTP code alongside it (same email, two ways to
+ * verify -- the OTP is the primary path this feature adds; the link
+ * keeps working unchanged for anything still using it).
+ * @param {{ email: string, firstName: string, token: string, otp?: string }}
  */
-export const sendEmailVerification = async ({ email, firstName, token }) => {
+export const sendEmailVerification = async ({ email, firstName, token, otp }) => {
   const link = `${CLIENT_URL()}/verify-email?token=${token}`;
   await sendMail({
     to:      email,
     subject: 'Verify your InnovateX email address',
     html: `
       <h2>Welcome to InnovateX, ${firstName}!</h2>
-      <p>Please verify your email address by clicking the link below:</p>
+      ${otp ? `
+      <p>Your verification code is:</p>
+      <p style="font-size:32px;font-weight:700;letter-spacing:8px;color:#6366f1;">${otp}</p>
+      <p style="color:#94a3b8;font-size:12px;">This code expires in 10 minutes.</p>
+      <p>Or click the link below:</p>
+      ` : '<p>Please verify your email address by clicking the link below:</p>'}
       <a href="${link}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;">
         Verify Email
       </a>
@@ -119,10 +127,12 @@ export const sendEmailVerification = async ({ email, firstName, token }) => {
 };
 
 /**
- * sendPasswordReset — sends the password reset link.
- * @param {{ email: string, firstName: string, token: string }}
+ * sendPasswordReset — sends the password reset link AND, when provided,
+ * the real OTP code alongside it. Same real reasoning as
+ * sendEmailVerification above.
+ * @param {{ email: string, firstName: string, token: string, otp?: string }}
  */
-export const sendPasswordReset = async ({ email, firstName, token }) => {
+export const sendPasswordReset = async ({ email, firstName, token, otp }) => {
   const link = `${CLIENT_URL()}/reset-password?token=${token}`;
   await sendMail({
     to:      email,
@@ -130,7 +140,12 @@ export const sendPasswordReset = async ({ email, firstName, token }) => {
     html: `
       <h2>Password Reset Request</h2>
       <p>Hello ${firstName},</p>
-      <p>Click the button below to reset your password:</p>
+      ${otp ? `
+      <p>Your password reset code is:</p>
+      <p style="font-size:32px;font-weight:700;letter-spacing:8px;color:#6366f1;">${otp}</p>
+      <p style="color:#94a3b8;font-size:12px;">This code expires in 10 minutes.</p>
+      <p>Or click the button below:</p>
+      ` : '<p>Click the button below to reset your password:</p>'}
       <a href="${link}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;">
         Reset Password
       </a>
@@ -192,6 +207,85 @@ export const sendTeamInvite = async ({ to, firstName, tenantName, role, token })
       </a>
       <p style="color:#94a3b8;font-size:12px;margin-top:16px;">This invitation expires in 7 days.</p>
       <p style="color:#94a3b8;font-size:12px;margin-top:8px;">If you did not expect this invitation, you can safely ignore this email.</p>
+    `,
+  });
+};
+
+// ─── Booking & Payment Transactional Emails ────────────────────────────────────
+// Real, same platform-level sendMail() as every function above -- these
+// were never sent by anything in this codebase before (booking.service.js
+// and payment.service.js only ever created in-app notifications and
+// activity-log entries, no email). Genuinely new, not a duplicate of
+// anything.
+
+export const sendBookingConfirmation = async ({ email, leadName, meetingType, meetingDate, meetingTime, meetingLink }) => {
+  await sendMail({
+    to: email,
+    subject: `Your ${meetingType || 'meeting'} is confirmed`,
+    html: `
+      <h2>You're booked in, ${leadName}!</h2>
+      <p><strong>${meetingType || 'Meeting'}</strong> on <strong>${meetingDate}</strong> at <strong>${meetingTime}</strong>.</p>
+      ${meetingLink ? `<a href="${meetingLink}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;margin-top:16px;">Join Meeting</a>` : ''}
+      <p style="color:#94a3b8;font-size:12px;margin-top:16px;">Need to make a change? Reply to this email.</p>
+    `,
+  });
+};
+
+export const sendBookingReminder = async ({ email, leadName, meetingType, meetingDate, meetingTime, meetingLink }) => {
+  await sendMail({
+    to: email,
+    subject: `Reminder: your ${meetingType || 'meeting'} is coming up`,
+    html: `
+      <h2>Just a reminder, ${leadName}</h2>
+      <p>Your <strong>${meetingType || 'meeting'}</strong> is on <strong>${meetingDate}</strong> at <strong>${meetingTime}</strong>.</p>
+      ${meetingLink ? `<a href="${meetingLink}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;margin-top:16px;">Join Meeting</a>` : ''}
+    `,
+  });
+};
+
+export const sendBookingRescheduled = async ({ email, leadName, meetingType, meetingDate, meetingTime, meetingLink }) => {
+  await sendMail({
+    to: email,
+    subject: `Your ${meetingType || 'meeting'} has been rescheduled`,
+    html: `
+      <h2>Updated time, ${leadName}</h2>
+      <p>Your <strong>${meetingType || 'meeting'}</strong> is now on <strong>${meetingDate}</strong> at <strong>${meetingTime}</strong>.</p>
+      ${meetingLink ? `<a href="${meetingLink}" style="display:inline-block;padding:12px 24px;background:#6366f1;color:#fff;border-radius:6px;text-decoration:none;margin-top:16px;">Join Meeting</a>` : ''}
+    `,
+  });
+};
+
+export const sendBookingCancelled = async ({ email, leadName, meetingType, meetingDate }) => {
+  await sendMail({
+    to: email,
+    subject: `Your ${meetingType || 'meeting'} has been cancelled`,
+    html: `
+      <h2>Cancelled, ${leadName}</h2>
+      <p>Your <strong>${meetingType || 'meeting'}</strong> on <strong>${meetingDate}</strong> has been cancelled.</p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:16px;">Want to book a new time? Just reply to this email.</p>
+    `,
+  });
+};
+
+export const sendPaymentConfirmation = async ({ email, leadName, amount, currency }) => {
+  await sendMail({
+    to: email,
+    subject: 'Payment received — thank you!',
+    html: `
+      <h2>Thanks, ${leadName}! 🎉</h2>
+      <p>We've received your payment of <strong>${currency} ${Number(amount).toLocaleString()}</strong>.</p>
+    `,
+  });
+};
+
+export const sendPaymentFailure = async ({ email, leadName, amount, currency }) => {
+  await sendMail({
+    to: email,
+    subject: 'There was a problem with your payment',
+    html: `
+      <h2>Hi ${leadName},</h2>
+      <p>We were unable to process your payment of <strong>${currency} ${Number(amount).toLocaleString()}</strong>.</p>
+      <p>Please try again, or reply to this email if you need help.</p>
     `,
   });
 };

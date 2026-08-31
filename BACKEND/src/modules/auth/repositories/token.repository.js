@@ -88,6 +88,24 @@ export const findPasswordResetToken = (plainToken) =>
     expiresAt: { $gt: new Date() },
   });
 
+/**
+ * findLatestPasswordResetOtpRecord -- looks up by EMAIL, not by hashing a
+ * submitted value, because the real OTP-entry form only has the user's
+ * email + the 6-digit code they typed, not the original 32-byte link
+ * token this same document also stores. Returns the newest matching
+ * unused, unexpired record with an OTP actually issued on it.
+ */
+export const findLatestPasswordResetOtpRecord = (email) =>
+  PasswordResetToken.findOne({
+    email:     String(email).toLowerCase(),
+    isUsed:    false,
+    expiresAt: { $gt: new Date() },
+    otpHash:   { $ne: null },
+  }).sort({ createdAt: -1 });
+
+export const incrementPasswordResetOtpAttempts = (id) =>
+  PasswordResetToken.findByIdAndUpdate(id, { $inc: { otpAttempts: 1 } }, { new: true });
+
 export const markPasswordResetTokenUsed = (id) =>
   PasswordResetToken.findByIdAndUpdate(id, {
     $set: { isUsed: true, usedAt: new Date() },
@@ -110,6 +128,22 @@ export const findEmailVerificationToken = (plainToken) =>
     isUsed:    false,
     expiresAt: { $gt: new Date() },
   });
+
+/**
+ * findLatestEmailVerificationOtpRecord -- same real reasoning as
+ * findLatestPasswordResetOtpRecord above: looked up by email, since the
+ * OTP-entry form doesn't have the original link token to hash-match.
+ */
+export const findLatestEmailVerificationOtpRecord = (email) =>
+  EmailVerificationToken.findOne({
+    email:     String(email).toLowerCase(),
+    isUsed:    false,
+    expiresAt: { $gt: new Date() },
+    otpHash:   { $ne: null },
+  }).sort({ createdAt: -1 });
+
+export const incrementEmailVerificationOtpAttempts = (id) =>
+  EmailVerificationToken.findByIdAndUpdate(id, { $inc: { otpAttempts: 1 } }, { new: true });
 
 export const markEmailVerificationTokenUsed = (id) =>
   EmailVerificationToken.findByIdAndUpdate(id, {

@@ -17,6 +17,19 @@
  * "Manage integrations" = Super Admin / Tenant Owner / Tenant Admin only;
  * Sales User and Read-Only get view access only (no requireRole on GETs).
  *
+ * RE-FIX (previously fixed in this same conversation, then reverted by
+ * a later re-upload of an earlier codebase snapshot -- re-verified fresh
+ * against this file's actual current content, not assumed): the GET
+ * routes below had requireRole('tenant_admin') attached, which -- since
+ * requireRole is a minimum-RANK check, not a literal match (see
+ * role.middleware.js) -- genuinely blocked Sales User and Read-Only User
+ * from viewing this page at all, contradicting the comment above and
+ * MASTER_SPEC.md A4. `authenticate` + `resolveTenant` (applied to the
+ * whole router above) already require a real, tenant-scoped, logged-in
+ * user for every route here; that's the correct floor for the GETs.
+ * Only the three real mutation routes (toggle/sync/config) keep
+ * requireRole('tenant_admin').
+ *
  * Register in app.js:
  *   import integrationRoutes from './modules/integrations/integration.routes.js';
  *   app.use('/api/integrations', integrationRoutes);
@@ -39,12 +52,12 @@ const router = Router();
 router.use(authenticate);
 router.use(resolveTenant);
 
-router.get('/counts', requireRole('tenant_admin'), controller.getCounts);
+router.get('/counts', controller.getCounts);
 
-router.get('/', requireRole('tenant_admin'), validateListQuery, controller.getIntegrations);
+router.get('/', validateListQuery, controller.getIntegrations);
 
-router.get('/:id', requireRole('tenant_admin'), validateIdParam, controller.getIntegration);
-router.get('/:id/error-logs', requireRole('tenant_admin'), validateIdParam, controller.getErrorLogs);
+router.get('/:id', validateIdParam, controller.getIntegration);
+router.get('/:id/error-logs', validateIdParam, controller.getErrorLogs);
 
 router.post('/:id/toggle', requireRole('tenant_admin'), validateIdParam, controller.toggleIntegration);
 router.post('/:id/sync', requireRole('tenant_admin'), validateIdParam, controller.syncIntegration);

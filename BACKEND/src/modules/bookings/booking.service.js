@@ -30,6 +30,7 @@ import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.servic
 // defined" at runtime -- the function body referenced it but nothing ever
 // imported it into this file's scope.
 import { createTrackingEvent } from '../attribution/attribution.service.js';
+import { sendBookingConfirmation, sendBookingRescheduled, sendBookingCancelled } from '../auth/services/email.service.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -298,6 +299,18 @@ export const createBooking = async (data, reqUser) => {
     meeting_date: data.meeting_date,
   });
 
+  // ── 9. Send real booking confirmation email ────────────────────────────────
+  // Best-effort, same principle as every other non-critical side effect in
+  // this flow (pause-on-booking above, tracking event) -- a real email
+  // provider hiccup must never fail an otherwise-successful booking.
+  if (lead.email) {
+    sendBookingConfirmation({
+      email: lead.email, leadName: lead.name || 'there',
+      meetingType: data.meeting_type, meetingDate: data.meeting_date,
+      meetingTime: data.meeting_time, meetingLink: data.meeting_link,
+    }).catch((err) => console.error('[email] booking confirmation failed for booking', String(booking._id), err.message));
+  }
+
   return booking;
 };
 
@@ -357,6 +370,16 @@ export const updateBookingStatus = async (tenantId, id, status, reqUser) => {
       `${booking.meeting_type || 'Meeting'} cancelled`,
       { booking_id: id }
     );
+    // Real, best-effort cancellation email -- same non-blocking principle
+    // as booking confirmation above.
+    Lead.findOne({ _id: leadId, tenant_id: String(tenantId) }).select('email name').then((lead) => {
+      if (lead?.email) {
+        return sendBookingCancelled({
+          email: lead.email, leadName: lead.name || 'there',
+          meetingType: booking.meeting_type, meetingDate: booking.meeting_date,
+        });
+      }
+    }).catch((err) => console.error('[email] booking cancellation email failed for booking', String(id), err.message));
   }
 
   if (status === BOOKING_STATUS.NO_SHOW) {
@@ -426,6 +449,18 @@ export const rescheduleBooking = async (tenantId, originalId, newData, reqUser) 
       new_booking_id:      String(newBooking._id),
     }
   );
+
+  // Real, best-effort reschedule email -- same non-blocking principle as
+  // booking confirmation/cancellation.
+  Lead.findOne({ _id: original.lead_id, tenant_id: String(tenantId) }).select('email name').then((lead) => {
+    if (lead?.email) {
+      return sendBookingRescheduled({
+        email: lead.email, leadName: lead.name || 'there',
+        meetingType: newBooking.meeting_type, meetingDate: newBooking.meeting_date, meetingTime: newBooking.meeting_time,
+        meetingLink: newBooking.meeting_link,
+      });
+    }
+  }).catch((err) => console.error('[email] booking reschedule email failed for booking', String(newBooking._id), err.message));
 
   return newBooking;
 };

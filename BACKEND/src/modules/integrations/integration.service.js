@@ -41,6 +41,7 @@ import { googleAdsSettingsService } from '../attribution/googleAdsSettings.servi
 import { calcomSettingsService } from '../bookings/calcomSettings.service.js';
 import ShopifySettings from '../shopify/shopifySettings.model.js';
 import { shopifySettingsService } from '../shopify/shopifySettings.service.js';
+import { sendgridSettingsService } from '../email/sendgridSettings.service.js';
 import config from '../../config/config.js';
 
 // =============================================================================
@@ -59,6 +60,7 @@ const GOOGLE_ADS_KEY = 'google_ads';
 const GOOGLE_ADS_CAMPAIGNS_KEY = 'google_ads_campaigns';
 const CALCOM_KEY = 'calcom';
 const SENDGRID_KEY = 'sendgrid';
+const SENDGRID_NURTURE_KEY = 'sendgrid_nurture';
 const SHOPIFY_KEY = 'shopify';
 const TWILIO_WA_KEY = 'twilio_wa';
 const INTERAKT_KEY = 'interakt';
@@ -149,7 +151,22 @@ const overlayRealPlatformStatus = (doc) => {
 };
 
 const overlayRealAdTrackingStatus = async (tenantId, userId, doc) => {
-  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY && doc.key !== SHOPIFY_KEY)) return doc;
+  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY && doc.key !== SHOPIFY_KEY && doc.key !== SENDGRID_NURTURE_KEY)) return doc;
+
+  if (doc.key === SENDGRID_NURTURE_KEY) {
+    const settings = await sendgridSettingsService.getSettings(tenantId);
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.lastVerifiedAt || null;
+    overlaid.config = {
+      verifiedSenderEmail: settings.verifiedSenderEmail || '',
+      fromName: settings.fromName || '',
+      replyTo: settings.replyTo || '',
+      hasApiKey: settings.hasApiKey,
+      lastSyncError: settings.lastSyncError || null,
+    };
+    return overlaid;
+  }
 
   if (doc.key === SHOPIFY_KEY) {
     const settings = await ShopifySettings.findOne({ tenantId });
@@ -401,6 +418,16 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
+  if (existing.key === SENDGRID_NURTURE_KEY) {
+    const settings = await sendgridSettingsService.getSettings(tenantId);
+    if (settings.connected) {
+      await sendgridSettingsService.disconnect(tenantId);
+    } else {
+      throw AppError.badRequest('Enter your real SendGrid API key and verified sender email first — this card cannot be connected with a single click, since it requires a genuine, verified connection.');
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
   if (existing.key === CALCOM_KEY) {
     const settings = await calcomSettingsService.getSettings({ tenantId, userId });
     if (settings.connected) {
@@ -618,6 +645,17 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     // then creates a real webhook subscription -- see
     // calcomSettings.service.js's connect().
     await calcomSettingsService.connect({ tenantId, userId }, { apiKey });
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === SENDGRID_NURTURE_KEY) {
+    const { apiKey, verifiedSenderEmail, fromName, replyTo } = configPatch || {};
+    // Real connect: saves + verifies live against SendGrid's own API
+    // before ever marking this card connected -- see
+    // sendgridSettings.service.js's updateConfig(). Distinct from the
+    // platform 'sendgrid' card above -- this is the tenant's OWN account,
+    // used only for Nurture email sends.
+    await sendgridSettingsService.updateConfig(tenantId, { apiKey, verifiedSenderEmail, fromName, replyTo });
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 

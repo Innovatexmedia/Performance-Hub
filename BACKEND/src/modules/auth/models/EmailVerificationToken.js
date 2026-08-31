@@ -44,6 +44,18 @@ const emailVerificationTokenSchema = new Schema(
       type:    Date,
       default: null,
     },
+    // Real OTP support, alongside the existing link -- same document,
+    // same TTL/isUsed lifecycle, not a separate collection. SHA-256
+    // hashed (same hashToken() every other token in this file already
+    // uses), never the plain 6-digit code.
+    otpHash: {
+      type:    String,
+      default: null,
+    },
+    otpAttempts: {
+      type:    Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,

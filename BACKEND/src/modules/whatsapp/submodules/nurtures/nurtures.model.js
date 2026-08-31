@@ -38,9 +38,19 @@ const stepSchema = new Schema(
     templateName:   { type: String, default: '' },
     approvalStatus: { type: String, default: '' },   // snapshot at validation time
 
-    // Email channel (real -- sent via the existing, real SendGrid service)
-    emailSubject:   { type: String, default: '' },
-    emailBody:       { type: String, default: '' },
+    // Email channel -- real. Sent via the tenant's own connected SendGrid
+    // account (sendgridSettings) when configured, falling back to the
+    // existing platform-level SendGrid sender (auth/services/email.service.js)
+    // otherwise -- see nurtureExecution.service.js's sendStep(). emailBody/
+    // emailText are used when no sendgridTemplateId is set; when one IS
+    // set, this step sends via a real SendGrid dynamic template instead
+    // and emailBody/emailText/emailSubject are ignored (the template
+    // supplies its own subject/content).
+    emailSubject:       { type: String, default: '' },
+    emailBody:          { type: String, default: '' },
+    emailText:          { type: String, default: '' }, // optional plain-text alternative to emailBody
+    replyTo:            { type: String, default: '' },
+    sendgridTemplateId: { type: String, default: '' }, // SendGrid dynamic template id (d-xxxxxxxx)
 
     // Manual task channel (real -- creates a real task for a human, not an automated send)
     taskDescription: { type: String, default: '' },

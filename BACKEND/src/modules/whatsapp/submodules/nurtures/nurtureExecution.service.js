@@ -46,6 +46,9 @@ import * as paymentService from '../../../payments/payment.service.js';
 import { ShopifyProvider } from '../../../shopify/providers/shopify.provider.js';
 import ShopifySettings from '../../../shopify/shopifySettings.model.js';
 import { decrypt } from '../../../../utils/crypto.js';
+import { sendgridSettingsService } from '../../../email/sendgridSettings.service.js';
+import { sendMail as sendgridSend } from '../../../email/providers/sendgrid.provider.js';
+import { EmailLog, EMAIL_TYPE, EMAIL_CATEGORY, EMAIL_STATUS } from '../../../email/emailLog.model.js';
 
 const RETRY_BACKOFF_MINUTES = [5, 30, 120]; // real, increasing backoff per attempt
 const MAX_RETRIES = RETRY_BACKOFF_MINUTES.length;
@@ -175,12 +178,70 @@ const sendStep = async (ctx, step, lead, enrollment, variableContext = {}) => {
 
   if (step.channel === NURTURE_CHANNEL.EMAIL) {
     if (!lead?.email) throw new Error('No email on file for this lead -- cannot send an Email step');
-    await sendCustomEmail({
-      to: lead.email,
-      subject: interpolateNurtureText(step.emailSubject, variableContext) || 'A message from us',
-      html: interpolateNurtureText(step.emailBody, variableContext) || '',
+
+    // Real per-tenant routing: use the tenant's OWN connected SendGrid
+    // account when they have one (their own verified domain, tracked and
+    // billed separately -- the real point of this feature), falling back
+    // to the existing, unmodified platform-level sender otherwise, so
+    // nothing breaks for a tenant who hasn't connected their own account.
+    const tenantCreds = await sendgridSettingsService.getDecryptedCredentials(ctx.tenantId);
+
+    const subject = interpolateNurtureText(step.emailSubject, variableContext) || 'A message from us';
+    const html = interpolateNurtureText(step.emailBody, variableContext) || '';
+    const text = step.emailText ? interpolateNurtureText(step.emailText, variableContext) : undefined;
+    const replyTo = step.replyTo ? interpolateNurtureText(step.replyTo, variableContext) : undefined;
+
+    // Real EmailLog row, written BEFORE the send so a webhook event that
+    // arrives moments later (a real, possible race -- SendGrid can be
+    // fast) always has a row to correlate against.
+    const log = await EmailLog.create({
+      tenantId: String(ctx.tenantId), type: EMAIL_TYPE.NURTURE, category: EMAIL_CATEGORY.NURTURE_STEP,
+      to: lead.email, subject, leadId: lead._id,
+      nurtureEnrollmentId: enrollment._id, nurtureStepNumber: step.stepNumber,
+      status: EMAIL_STATUS.QUEUED,
     });
-    return { providerMessageId: null };
+    const customArgs = { tenantId: String(ctx.tenantId), emailLogId: String(log._id) };
+
+    try {
+      let sgMessageId = null;
+      if (tenantCreds) {
+        // Real SendGrid dynamic template support: dynamicTemplateData is
+        // the SAME variableContext already used for {{...}} interpolation
+        // everywhere else in this file -- SendGrid's own template editor
+        // uses {{lead.name}}-style Handlebars, so this maps directly with
+        // no second templating system. When sendgridTemplateId is set,
+        // emailSubject/emailBody/emailText are ignored -- the template
+        // supplies its own subject and content.
+        const usingTemplate = !!step.sendgridTemplateId;
+        const result = await sendgridSend({
+          apiKey: tenantCreds.apiKey,
+          from: tenantCreds.from,
+          to: lead.email,
+          replyTo: replyTo || tenantCreds.replyTo,
+          subject: usingTemplate ? undefined : subject,
+          html: usingTemplate ? undefined : html,
+          text: usingTemplate ? undefined : text,
+          templateId: step.sendgridTemplateId || undefined,
+          dynamicTemplateData: usingTemplate ? { ...variableContext } : undefined,
+          customArgs,
+        });
+        sgMessageId = result.sgMessageId;
+      } else {
+        // Real, existing platform fallback -- sendCustomEmail() itself is
+        // completely unmodified.
+        await sendCustomEmail({ to: lead.email, subject, html });
+      }
+      await EmailLog.updateOne({ _id: log._id }, { $set: { status: EMAIL_STATUS.SENT, sgMessageId } });
+      return { providerMessageId: sgMessageId };
+    } catch (err) {
+      await EmailLog.updateOne({ _id: log._id }, { $set: { status: EMAIL_STATUS.FAILED, error: err.message } });
+      // Real propagation, not swallowed: this file's own existing
+      // handleRetryOrFail() (see the caller of sendStep) is what actually
+      // decides retry vs. permanent failure for ANY step channel -- email
+      // is not a special case, it goes through the exact same real
+      // scheduler-level retry/backoff every other channel already has.
+      throw err;
+    }
   }
 
   if (step.channel === NURTURE_CHANNEL.AI) {

@@ -49,6 +49,18 @@ export const RATE_LIMITS = Object.freeze({
   FORGOT_PASSWORD_WINDOW_MINUTES: 60,
   GENERAL_API_REQUESTS:     300,   // Raised from 100, AND the window shortened from 15 min to 1 min (see below) -- a long window with even a generous cap locks a real user out for the rest of their session if ever approached; a short window recovers in under a minute. 300/min is far more than any real click-driven usage produces, while a genuine runaway loop still hits this within seconds.
   GENERAL_API_WINDOW_MINUTES: 1,
+  // A 6-digit OTP has 1,000,000 possibilities -- unlike a 15-min link
+  // token (impossible to brute-force), a short numeric code genuinely
+  // needs its own real per-request attempt ceiling, not just the
+  // generation-side limit above. 5 wrong tries invalidates the OTP
+  // entirely (see auth.service.js's verifyOtp helper) rather than
+  // allowing unlimited guesses within the expiry window.
+  OTP_MAX_ATTEMPTS:            5,
+  OTP_GENERATION_REQUESTS:     3,   // per window -- same real ceiling as FORGOT_PASSWORD_REQUESTS, reused for OTP (re)generation on both flows
+  OTP_GENERATION_WINDOW_MINUTES: 60,
+  OTP_VERIFY_REQUESTS:         10,  // per window -- more generous than generation since a genuine user can mistype a digit
+  OTP_VERIFY_WINDOW_MINUTES:   15,
+  OTP_EXPIRY_MINUTES:          10,
 });
 
 // ─── User Status Values ───────────────────────────────────────────────────────

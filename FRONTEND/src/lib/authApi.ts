@@ -45,7 +45,14 @@ export const authApi = {
   resetPassword: (token: string, password: string) =>
     apiClient.post<null>('/auth/reset-password', { token, password }),
 
+  /** OTP variant, alongside the existing link -- see password.service.js's verifyPasswordResetOtp. Sets the new password in the same call. */
+  resetPasswordWithOtp: (email: string, otp: string, password: string) =>
+    apiClient.post<null>('/auth/reset-password/otp', { email, otp, password }),
+
   verifyEmail: (token: string) => apiClient.post<{ user: AuthUser }>('/auth/verify-email', { token }),
+
+  /** OTP variant, alongside the existing link -- same backend document/lifecycle, see auth.service.js's verifyEmailOtp. */
+  verifyEmailOtp: (email: string, otp: string) => apiClient.post<{ user: AuthUser }>('/auth/verify-email/otp', { email, otp }),
 
   resendVerification: () => apiClient.post<null>('/auth/resend-verification'),
 

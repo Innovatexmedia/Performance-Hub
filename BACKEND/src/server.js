@@ -18,6 +18,7 @@ import config    from '../src/config/config.js';
 import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
 import { startNurtureScheduler } from './modules/whatsapp/submodules/nurtures/nurtureScheduler.js';
+import { startBookingReminderScheduler } from './modules/bookings/bookingReminderScheduler.js';
 import dns from 'dns';
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 
@@ -31,6 +32,10 @@ const startServer = async () => {
     // Real nurture step scheduler -- needs a real DB connection first,
     // since every tick queries NurtureEnrollment.
     startNurtureScheduler();
+
+    // Real booking reminder scheduler -- same real reasoning, needs a
+    // live DB connection first since every tick queries Booking/Lead.
+    startBookingReminderScheduler();
 
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 InnovateX Revenue OS API`);

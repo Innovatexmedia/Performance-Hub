@@ -40,6 +40,7 @@ import { createTrackingEvent }    from '../attribution/attribution.service.js';
 import { TRACKING_EVENT_TYPE }    from '../attribution/attribution.constants.js';
 import { NurtureEnrollment } from '../whatsapp/submodules/nurtures/nurtures.model.js';
 import { ENROLLMENT_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
+import { sendPaymentConfirmation, sendPaymentFailure } from '../auth/services/email.service.js';
 
 // =============================================================================
 // PRIVATE HELPERS — identical pattern to booking.service.js / call.service.js
@@ -363,6 +364,14 @@ export const markPaid = async (id, tenantId, reqUser) => {
     });
   }
 
+  // 9. Real, best-effort payment confirmation email -- same non-blocking
+  // principle as every other side effect in this flow.
+  if (lead?.email) {
+    sendPaymentConfirmation({
+      email: lead.email, leadName: lead.name || 'there', amount, currency: payment.currency,
+    }).catch((err) => console.error('[email] payment confirmation failed for payment', id, err.message));
+  }
+
   return updated;
 };
 
@@ -432,10 +441,25 @@ export const updatePayment = async (tenantId, id, patch, reqUser) => {
     throw AppError.badRequest('Use the Refund endpoint to refund a payment');
   }
 
-  return paymentRepo.updateById(tenantId, id, {
+  const updated = await paymentRepo.updateById(tenantId, id, {
     ...patch,
     updated_by: ctx.userId,
   });
+
+  // Real, best-effort payment failure email -- same non-blocking
+  // principle as every other side effect in payment.service.js.
+  if (patch.status === PAYMENT_STATUS.FAILED) {
+    const leadId = payment.lead_id?._id || payment.lead_id;
+    Lead.findOne({ _id: leadId, tenant_id: String(tenantId) }).select('email name').then((lead) => {
+      if (lead?.email) {
+        return sendPaymentFailure({
+          email: lead.email, leadName: lead.name || 'there', amount: payment.amount, currency: payment.currency,
+        });
+      }
+    }).catch((err) => console.error('[email] payment failure email failed for payment', id, err.message));
+  }
+
+  return updated;
 };
 
 // =============================================================================

@@ -5,7 +5,8 @@ import * as tenantRepo                    from '../repositories/tenant.repositor
 import * as tokenRepo                     from '../repositories/token.repository.js';
 import * as tokenSvc                      from './token.service.js';
 import { comparePassword, hashPassword }  from '../../../utils/password.js';
-import { generateSecureToken, hashToken } from '../../../utils/crypto.js';
+import { generateSecureToken, hashToken, generateOTP } from '../../../utils/crypto.js';
+import { RATE_LIMITS } from '../constants/auth.constants.js';
 import { verifyRefreshToken, signWorkspaceSelectionToken, verifyWorkspaceSelectionToken } from '../../../config/jwt.js';
 import AppError                           from '../../../utils/AppError.js';
 import LoginAudit                         from '../models/LoginAudit.js';
@@ -48,6 +49,7 @@ export const createAuditLog = (data) =>
  */
 const issueVerificationEmail = async (user) => {
   const plainToken = generateSecureToken(32);
+  const otp        = generateOTP(6);
   const expiresAt  = new Date(
     Date.now() + TOKEN_EXPIRY.EMAIL_VERIFICATION_SECONDS * 1000
   );
@@ -56,6 +58,7 @@ const issueVerificationEmail = async (user) => {
     userId:    user._id,
     email:     user.email,
     tokenHash: hashToken(plainToken),
+    otpHash:   hashToken(otp),
     expiresAt,
   });
 
@@ -63,7 +66,46 @@ const issueVerificationEmail = async (user) => {
     email:     user.email,
     firstName: user.firstName,
     token:     plainToken,
+    otp,
   });
+};
+
+/**
+ * verifyEmailOtp — verifies a real, hashed, expiring 6-digit code, with
+ * real per-record attempt limiting (RATE_LIMITS.OTP_MAX_ATTEMPTS) --
+ * distinct from the route-level rate limiter (which limits how often
+ * this ENDPOINT can be called at all); this limits how many WRONG
+ * guesses a single issued OTP tolerates before it's invalidated outright,
+ * even if the attacker keeps well under the endpoint's own request-rate
+ * ceiling. Never logs the plain OTP anywhere -- only its SHA-256 hash is
+ * ever compared or stored.
+ */
+export const verifyEmailOtp = async (email, otp) => {
+  const record = await tokenRepo.findLatestEmailVerificationOtpRecord(email);
+  if (!record) throw new AppError('Invalid or expired verification code', 400);
+
+  if (record.otpAttempts >= RATE_LIMITS.OTP_MAX_ATTEMPTS) {
+    throw new AppError('Too many incorrect attempts — request a new code', 429);
+  }
+
+  if (hashToken(otp) !== record.otpHash) {
+    await tokenRepo.incrementEmailVerificationOtpAttempts(record._id);
+    throw new AppError('Incorrect verification code', 400);
+  }
+
+  const user = await userRepo.findById(record.userId);
+  if (!user)               throw new AppError('User not found', 404);
+  if (user.isEmailVerified) throw new AppError('Email is already verified', 400);
+
+  // Matches verifyEmail() (the link-based flow) exactly, so the two entry
+  // points converge on identical real behavior -- same real user-update
+  // call, same welcome email, same public-profile response shape.
+  await userRepo.verifyEmail(user._id);
+  await tokenRepo.markEmailVerificationTokenUsed(record._id);
+
+  await sendWelcomeEmail({ email: user.email, firstName: user.firstName });
+
+  return user.getPublicProfile();
 };
 
 // =============================================================================
