@@ -66,12 +66,27 @@ export class CalcomProvider {
     };
   }
 
-  async _request(method, path, body) {
+  /**
+   * _request -- REAL FIX: Cal.com's v2 API versions cal-api-version PER
+   * ENDPOINT, not globally -- confirmed against Cal.com's own current,
+   * dated docs: /event-types requires 2024-06-14, /slots requires
+   * 2024-09-04, while /bookings, /me, and /webhooks (everything already
+   * working here) genuinely do use 2024-08-13. Sending the wrong version
+   * doesn't 401/400 -- Cal.com's router silently falls back to an older/
+   * differently-shaped version of that endpoint, which for /event-types
+   * manifests as a literal 404 "Cannot GET /v2/event-types".
+   * `apiVersion` defaults to the existing API_VERSION so every already-
+   * working call site (testConnection, listBookings, getBooking,
+   * cancelBooking, createWebhook, deleteWebhook, createBooking) is
+   * completely unaffected -- only the two new methods below pass an
+   * explicit override.
+   */
+  async _request(method, path, body, apiVersion = API_VERSION) {
     let response;
     try {
       response = await fetch(`${BASE_URL}${path}`, {
         method,
-        headers: this._headers(),
+        headers: this._headers({ 'cal-api-version': apiVersion }),
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch (networkError) {
@@ -151,7 +166,11 @@ export class CalcomProvider {
    * matches that same real behavior rather than showing everything.
    */
   async listEventTypes() {
-    const result = await this._request('GET', '/event-types');
+    // REAL FIX: this endpoint requires cal-api-version 2024-06-14, not
+    // the module-wide 2024-08-13 -- confirmed against Cal.com's current
+    // docs (get-all-event-types). Sending the wrong version is what
+    // caused the literal "Cannot GET /v2/event-types" 404.
+    const result = await this._request('GET', '/event-types', undefined, '2024-06-14');
     const items = result.data || [];
     return items
       .filter((et) => !et.hidden)
@@ -180,7 +199,11 @@ export class CalcomProvider {
     params.set('end', end);
     if (timeZone) params.set('timeZone', timeZone);
 
-    const result = await this._request('GET', `/slots?${params.toString()}`);
+    // REAL FIX: /slots requires cal-api-version 2024-09-04, confirmed
+    // against Cal.com's current docs (get-available-time-slots-for-an-
+    // event-type) -- distinct from both /event-types (2024-06-14) and
+    // /bookings (2024-08-13).
+    const result = await this._request('GET', `/slots?${params.toString()}`, undefined, '2024-09-04');
     const byDate = result.data || {};
     const slots = [];
     for (const day of Object.keys(byDate)) {

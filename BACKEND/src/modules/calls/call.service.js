@@ -5,12 +5,18 @@
  *
  * WHAT CHANGED:
  *   - generateAiSummaryMock renamed to generateAiSummary (now async)
- *   - When GEMINI_API_KEY is set → calls Gemini API with real transcript
+ *   - When a usable Gemini key is available → calls Gemini API with real transcript
  *   - Falls back to deterministic mock when key missing or transcript empty
  *   - All other logic (lead update, deal advance, activity, notification) unchanged
  *
- * ENV REQUIRED:
- *   GEMINI_API_KEY — from https://aistudio.google.com/app/apikey
+ * BUG FIX: credential resolution now matches the established, real
+ * per-tenant pattern already used by aiReplyAssistant.service.js --
+ * the tenant's OWN connected Gemini key (Integrations -> Google Gemini)
+ * is tried first, falling back to the server-wide GEMINI_API_KEY env var
+ * only if the tenant hasn't connected their own. Previously this only
+ * ever read the server-wide env var, so a tenant's own connected key was
+ * silently ignored for Call Intelligence specifically, even though it
+ * already worked for AI Reply Assistant.
  */
 
 import * as callRepo from './call.repository.js';
@@ -28,6 +34,7 @@ import { ACTIVITY_TYPE } from '../leads/activities/activity.model.js';
 import { activityService } from '../leads/activities/activity.service.js';
 import Notification      from '../leads/notifications/notification.model.js';
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
+import { findByKey as findIntegrationByKey } from '../integrations/integration.repository.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -67,16 +74,38 @@ const emitTrackingEvent = async (eventType, leadId, tenantId, metadata = {}) => 
 // GEMINI API CALL
 // =============================================================================
 
-const GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || process.env[AI_API_KEY_ENV];
+const SERVER_GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || process.env[AI_API_KEY_ENV];
 
-const GEMINI_URL = () =>
+/**
+ * resolveGeminiApiKey -- BUG FIX: same real pattern as
+ * aiReplyAssistant.service.js's resolveGeminiApiKey. Tries the tenant's
+ * own connected key first (Integrations -> Google Gemini,
+ * config.api_key, only when status === 'connected'), falls back to the
+ * server-wide env var. Never throws -- a DB hiccup looking up the
+ * integration falls through to the server key rather than failing the
+ * whole call-logging request.
+ */
+const resolveGeminiApiKey = async (ctx) => {
+  try {
+    const integration = ctx?.tenantId ? await findIntegrationByKey(ctx.tenantId, 'gemini') : null;
+    const tenantKey = integration?.config?.api_key;
+    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
+      return tenantKey.trim();
+    }
+  } catch {
+    // DB hiccup looking up the integration -- fall through to the server key.
+  }
+  return SERVER_GEMINI_API_KEY() || null;
+};
+
+const GEMINI_URL = (apiKey) =>
   // Real model id -- matches aiReplyAssistant.service.js's GEMINI_MODEL,
   // the currently-supported Gemini model already in real use elsewhere
   // in this codebase. gemini-1.5-flash returns 404 on the current API.
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${GEMINI_API_KEY()}`;
+  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
 
-const callGemini = async (prompt) => {
-  const response = await fetch(GEMINI_URL(), {
+const callGemini = async (prompt, apiKey) => {
+  const response = await fetch(GEMINI_URL(apiKey), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -148,16 +177,18 @@ const mockSummary = (lead, outcome) => {
 // =============================================================================
 
 /**
- * generateAiSummary — generates call summary using Gemini when API key is set.
- * Falls back to mock when key missing or transcript is empty.
- * NOW ASYNC — all callers use await.
+ * generateAiSummary — generates call summary using Gemini when a usable
+ * key is available (tenant's own connected key, or server fallback).
+ * Falls back to mock when no key resolves or transcript is empty.
+ * NOW ASYNC — all callers use await, and now take `ctx` to resolve the
+ * right tenant's credentials.
  */
-const generateAiSummary = async (lead, transcript, outcome) => {
-  const hasKey        = Boolean(GEMINI_API_KEY());
-  const hasTranscript = transcript && transcript.trim().length > 10;
+const generateAiSummary = async (ctx, lead, transcript, outcome) => {
+  const apiKey         = await resolveGeminiApiKey(ctx);
+  const hasTranscript  = transcript && transcript.trim().length > 10;
 
-  // Use mock if no API key or no real transcript to analyse
-  if (!hasKey || !hasTranscript) {
+  // Use mock if no usable key or no real transcript to analyse
+  if (!apiKey || !hasTranscript) {
     return mockSummary(lead, outcome);
   }
 
@@ -186,7 +217,7 @@ Scoring guide for score field:
 - 1-4:  Poor call, objections unresolved, low engagement or no-show`;
 
   try {
-    const result = await callGemini(prompt);
+    const result = await callGemini(prompt, apiKey);
 
     if (!result.summary) throw new Error('Invalid response from Gemini');
 
@@ -263,7 +294,7 @@ export const createCall = async (data, reqUser) => {
   if (!lead) throw AppError.notFound('Lead not found in this workspace');
 
   // 2. Generate AI summary (Gemini or mock)
-  const aiResult = await generateAiSummary(lead, data.transcript || '', data.outcome);
+  const aiResult = await generateAiSummary(ctx, lead, data.transcript || '', data.outcome);
 
   // 3. Create call document
   const call = await callRepo.create({
@@ -395,7 +426,7 @@ export const regenerateAiSummary = async (tenantId, id, reqUser) => {
   });
 
   // Use current transcript from DB for regeneration
-  const aiResult = await generateAiSummary(lead, call.transcript || '', call.outcome);
+  const aiResult = await generateAiSummary(ctx, lead, call.transcript || '', call.outcome);
 
   return callRepo.updateById(tenantId, id, {
     summary:          aiResult.summary,

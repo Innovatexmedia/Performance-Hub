@@ -26,6 +26,13 @@ export const ACTIVITY_TYPE = Object.freeze({
   BOOKING_CANCELLED: 'Booking Cancelled',
   BOOKING_NO_SHOW: 'Booking No Show',
   BOOKING_RESCHEDULED: 'Booking Rescheduled',
+  // Call Intelligence module (call.service.js) -- same bug class as
+  // Bookings above: call.service.js calls ACTIVITY_TYPE.CALL_COMPLETED
+  // but this key was never defined here, so every logged call has
+  // silently failed to write a lead-timeline entry (required `type`
+  // field -> Mongoose validation error -> swallowed by logActivity's
+  // try/catch). Adding the real key is the actual fix.
+  CALL_COMPLETED: 'Call Completed',
   // WhatsApp Inbox module
   WHATSAPP_ASSIGNED: 'WhatsApp Conversation Assigned',
   WHATSAPP_STATUS_CHANGED: 'WhatsApp Status Changed',

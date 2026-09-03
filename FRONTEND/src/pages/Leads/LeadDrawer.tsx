@@ -172,13 +172,13 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
               </div>
             </Section>
 
-            {/* Linked records -- deals/calls are backend stubs (always 0) until
-                the Pipeline and Calls modules are cross-wired into this
-                endpoint server-side; bookings/payments/qualifications are real. */}
+            {/* Linked records -- deals is still a backend stub (always 0)
+                until the Pipeline module is cross-wired into this endpoint
+                server-side; bookings/calls/payments/qualifications are real. */}
             <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
               <Stat label="Deals" value={counts.deals} stub />
               <Stat label="Bookings" value={counts.bookings} />
-              <Stat label="Calls" value={counts.calls} stub />
+              <Stat label="Calls" value={counts.calls} />
               <Stat label="Qualifications" value={counts.qualifications} />
               <Stat label="Payments" value={counts.payments} />
             </div>

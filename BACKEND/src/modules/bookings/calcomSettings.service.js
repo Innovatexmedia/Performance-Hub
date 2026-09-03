@@ -365,13 +365,23 @@ export const calcomSettingsService = {
     const calcomTitle = calBooking.title || calBooking.eventType?.title || null;
     const meetingType = MEETING_TYPE_VALUES.includes(calcomTitle) ? calcomTitle : undefined;
 
+    // REAL FIX: Cal.com's actual create-booking response schema has
+    // `location` as a STRUCTURED OBJECT (e.g. {"type":"address"} or a
+    // video-integration object), not a plain string -- confirmed from
+    // Cal.com's own current docs. meeting_link on Booking.model.js is
+    // `type: String`; passing an object into it throws a Mongoose
+    // CastError. `meetingUrl` is the only field in the real response
+    // that's ever actually a plain URL string, so location must never
+    // be used as a fallback here.
+    const meetingLink = typeof calBooking.meetingUrl === 'string' ? calBooking.meetingUrl : null;
+
     const created = await bookingService.createBooking({
       lead_id:          lead._id,
       meeting_type:      meetingType, // undefined -> createBooking's own 'Discovery Call' default
       meeting_date:      meetingDate,
       meeting_time:      meetingTime,
       duration_minutes:  durationMinutes,
-      meeting_link:      calBooking.meetingUrl || calBooking.location || null,
+      meeting_link:      meetingLink,
       notes:             `Synced from Cal.com: "${calcomTitle || 'booking'}"`,
     }, reqUser);
 

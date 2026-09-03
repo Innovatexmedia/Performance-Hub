@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Sparkles, Phone, FileText, Copy, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { Plus, Sparkles, Phone, FileText, Copy, ChevronLeft, ChevronRight, RefreshCw, Pencil } from 'lucide-react';
 import {
   PageHeader, Card, Button, Badge, StatusBadge, Modal, Field, Select, Input,
   Textarea, Avatar, EmptyState,
@@ -13,7 +13,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { leadsApi } from '@/lib/leadsApi';
 import { ApiError } from '@/lib/apiClient';
 import { CALL_OUTCOME_VALUES } from '@/types/call';
-import type { Call, CallOutcome } from '@/types/call';
+import type { Call, CallOutcome, CallUpdateInput } from '@/types/call';
 import type { LeadListItem } from '@/types/lead';
 
 export function Calls() {
@@ -28,12 +28,13 @@ export function Calls() {
     limit: 20,
   }), [outcomeFilter, page]);
 
-  const { calls, pagination, kpis, loading, error, refetch, createCall, regenerateAiSummary } = useCalls(query);
+  const { calls, pagination, kpis, loading, error, refetch, createCall, updateCall, regenerateAiSummary } = useCalls(query);
 
   useEffect(() => setPage(1), [outcomeFilter]);
 
   const [showLog, setShowLog] = useState(false);
   const [detail, setDetail] = useState<Call | null>(null);
+  const [editing, setEditing] = useState<Call | null>(null);
   const [regenerating, setRegenerating] = useState(false);
 
   const handleRegenerate = async () => {
@@ -130,6 +131,15 @@ export function Calls() {
         />
       )}
 
+      {editing && (
+        <EditCallModal
+          call={editing}
+          onClose={() => setEditing(null)}
+          onSaved={(call) => { refetch(); setEditing(null); setDetail(call); }}
+          updateCall={updateCall}
+        />
+      )}
+
       {detail && (
         <Modal open onClose={() => setDetail(null)} title="Call Detail" size="lg">
           <div className="space-y-4">
@@ -141,15 +151,25 @@ export function Calls() {
 
             <div className="flex items-center justify-between">
               <p className="label">AI Summary</p>
-              {permissions.calls.canRegenerateAiSummary && (
-                <button
-                  onClick={() => void handleRegenerate()}
-                  disabled={regenerating}
-                  className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
-                >
-                  <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} /> {regenerating ? 'Regenerating…' : 'Regenerate'}
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {permissions.calls.canUpdate && (
+                  <button
+                    onClick={() => setEditing(detail)}
+                    className="flex items-center gap-1 text-xs font-medium text-ink-600 hover:text-ink-800"
+                  >
+                    <Pencil size={12} /> Edit
+                  </button>
+                )}
+                {permissions.calls.canRegenerateAiSummary && (
+                  <button
+                    onClick={() => void handleRegenerate()}
+                    disabled={regenerating}
+                    className="flex items-center gap-1 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
+                  >
+                    <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} /> {regenerating ? 'Regenerating…' : 'Regenerate'}
+                  </button>
+                )}
+              </div>
             </div>
             <p className="text-sm text-ink-700">{detail.summary || 'No summary generated yet.'}</p>
 
@@ -203,6 +223,85 @@ function MiniStat({ label, value }: { label: string; value: string }) {
       <p className="text-[11px] text-ink-400">{label}</p>
       <p className="text-sm font-semibold text-ink-900">{value}</p>
     </div>
+  );
+}
+
+/**
+ * EditCallModal -- real PATCH /api/calls/:id (call.controller.js's
+ * updateCall / call.validator.js's validateUpdateCall). This existed
+ * fully on the backend for manual corrections after logging a call, but
+ * had no UI entry point at all -- this wires it up. Deliberately keeps
+ * to the exact fields the validator accepts (outcome, call_date,
+ * duration_minutes, transcript, summary, score) rather than exposing
+ * the AI-generated arrays (objections/next_steps/follow_up_draft),
+ * which aren't part of the update contract and are better corrected via
+ * Regenerate against an edited transcript instead.
+ */
+function EditCallModal({ call, onClose, onSaved, updateCall }: {
+  call: Call;
+  onClose: () => void;
+  onSaved: (call: Call) => void;
+  updateCall: ReturnType<typeof useCalls>['updateCall'];
+}) {
+  const [outcome, setOutcome] = useState<CallOutcome>(call.outcome);
+  const [callDate, setCallDate] = useState(call.call_date);
+  const [durationMinutes, setDurationMinutes] = useState(call.duration_minutes);
+  const [transcript, setTranscript] = useState(call.transcript);
+  const [summary, setSummary] = useState(call.summary);
+  const [score, setScore] = useState(call.score);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      const patch: CallUpdateInput = {
+        outcome, call_date: callDate, duration_minutes: durationMinutes, transcript, summary, score,
+      };
+      const updated = await updateCall(call._id, patch);
+      toast.success('Call updated');
+      onSaved(updated);
+    } catch (err) {
+      toast.error('Could not update call', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Edit Call"
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={() => void submit()} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Outcome">
+            <Select value={outcome} onChange={(e) => setOutcome(e.target.value as CallOutcome)}>
+              {CALL_OUTCOME_VALUES.map((o) => <option key={o}>{o}</option>)}
+            </Select>
+          </Field>
+          <Field label="Call date"><Input type="date" value={callDate} onChange={(e) => setCallDate(e.target.value)} /></Field>
+          <Field label="Duration (min)"><Input type="number" min={0} value={durationMinutes} onChange={(e) => setDurationMinutes(Number(e.target.value))} /></Field>
+        </div>
+        <Field label="Score (0-10)">
+          <Input type="number" min={0} max={10} value={score} onChange={(e) => setScore(Number(e.target.value))} />
+        </Field>
+        <Field label="Summary">
+          <Textarea rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} />
+        </Field>
+        <Field label="Transcript">
+          <Textarea rows={6} value={transcript} onChange={(e) => setTranscript(e.target.value)} />
+        </Field>
+        <p className="text-xs text-ink-400">To regenerate objections, next steps, and the follow-up draft from an edited transcript, save here first, then use Regenerate in the call detail view.</p>
+      </div>
+    </Modal>
   );
 }
 
