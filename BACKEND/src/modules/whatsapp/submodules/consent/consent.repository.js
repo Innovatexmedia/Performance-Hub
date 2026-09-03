@@ -6,6 +6,7 @@
  * History is always pushed (never overwritten).
  */
 import { Consent } from './consent.model.js';
+import { normalizePhoneNumber } from '../../../../shared/helpers/phone.helpers.js';
 
 export const consentRepository = {
   createConsent(data) {
@@ -17,7 +18,7 @@ export const consentRepository = {
   },
 
   findByPhone(tenantId, phoneNumber) {
-    return Consent.findOne({ tenantId, phoneNumber });
+    return Consent.findOne({ tenantId, phoneNumber: normalizePhoneNumber(phoneNumber) });
   },
 
   listConsents(tenantId, filter = {}, { sort = { createdAt: -1 }, skip = 0, limit = 20 } = {}) {

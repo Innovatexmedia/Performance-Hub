@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
@@ -44,6 +44,7 @@ import type {
 import { TRIGGER_TYPE_VALUES, ACTION_TYPE_VALUES, CONDITION_OPERATOR_VALUES } from '@/types/automationRule';
 import type { Group } from '@/types/group';
 import { useWhatsAppSettings } from '@/hooks/useWhatsAppSettings';
+import { whatsappSettingsApi } from '@/lib/whatsappSettingsApi';
 import { useWhatsAppTemplates } from '@/hooks/useWhatsAppTemplates';
 import type { WhatsAppTemplate as WhatsAppTemplateReal } from '@/types/whatsappTemplate';
 import { USABLE_APPROVAL_STATUS } from '@/types/whatsappTemplate';
@@ -3214,7 +3215,7 @@ function AnalyticsTab() {
 
 // ---- Settings --------------------------------------------------------------
 function SettingsTab() {
-  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect, syncTemplates } = useWhatsAppSettings();
+  const { settings, loading, error, updateProvider, updateSync, testConnection, disconnect, syncTemplates, refetch } = useWhatsAppSettings();
 
   const [provider, setProvider] = useState<WhatsAppProviderReal>(NATIVE_PROVIDER);
   const [panelMode, setPanelMode] = useState<PanelMode>('NATIVE');
@@ -3229,6 +3230,7 @@ function SettingsTab() {
   const [syncingTemplates, setSyncingTemplates] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [attemptedSave, setAttemptedSave] = useState(false);
+  const [embeddedSignupBusy, setEmbeddedSignupBusy] = useState(false);
 
   const [testResult, setTestResult] = useState<{ displayPhoneNumber?: string; verifiedName?: string; message: string } | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -3241,6 +3243,142 @@ function SettingsTab() {
     setPhoneNumberId(settings.meta.phoneNumberId);
     setAppId(settings.meta.appId || '');
   }, [settings]);
+
+  // FB.login's own callback gives us the `code`; the postMessage listener
+  // below gives us the waba_id/phone_number_id -- they arrive as two
+  // separate async events, so the code is stashed here until both exist.
+  const pendingSignupCodeRef = useRef<string | null>(null);
+  const embeddedSignupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Meta Embedded Signup ("Continue with Facebook") ──────────────────
+  // App-level feature (see BACKEND config.js's comment) -- hidden
+  // entirely until settings.embeddedSignupAvailable is true, which only
+  // happens once InnovateX's own Meta Tech Provider approval is done and
+  // the resulting App ID / Config ID are configured server-side. Manual
+  // connect (the form below) remains the only path until then.
+  //
+  // NOTE: implemented against Meta's documented Embedded Signup v4 flow
+  // (FB.login with config_id + the WA_EMBEDDED_SIGNUP postMessage
+  // contract) but NOT exercised against a real flow -- there is no way
+  // to test this without actual Tech Provider approval, which doesn't
+  // exist yet. The exact postMessage event shape is Meta's documented
+  // pattern; worth a close look at the real payload the first time this
+  // actually runs, in case Meta's exact field names differ slightly.
+  useEffect(() => {
+    if (!settings?.embeddedSignupAvailable || !settings.embeddedSignupAppId) return;
+    if (document.getElementById('facebook-jssdk')) return;
+
+    (window as any).fbAsyncInit = function fbAsyncInit() {
+      (window as any).FB.init({
+        appId: settings.embeddedSignupAppId,
+        autoLogAppEvents: true,
+        xfbml: false,
+        version: 'v21.0',
+      });
+    };
+
+    const script = document.createElement('script');
+    script.id = 'facebook-jssdk';
+    script.src = 'https://connect.facebook.net/en_US/sdk.js';
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+  }, [settings?.embeddedSignupAvailable, settings?.embeddedSignupAppId]);
+
+  useEffect(() => {
+    function handleEmbeddedSignupMessage(event: MessageEvent) {
+      // Meta's Embedded Signup popup only ever posts from facebook.com --
+      // reject anything else outright rather than trusting message shape
+      // alone to distinguish it from unrelated postMessage traffic.
+      if (event.origin !== 'https://www.facebook.com' && event.origin !== 'https://web.facebook.com') return;
+      let data: any;
+      try {
+        data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+      } catch {
+        return;
+      }
+      if (data?.type !== 'WA_EMBEDDED_SIGNUP') return;
+
+      if (data.event === 'FINISH' || data.event === 'FINISH_ONLY_WABA') {
+        const wabaId = data.data?.waba_id;
+        const phoneNumberId2 = data.data?.phone_number_id;
+        if (wabaId && phoneNumberId2 && pendingSignupCodeRef.current) {
+          void completeEmbeddedSignup(pendingSignupCodeRef.current, wabaId, phoneNumberId2);
+        }
+      } else if (data.event === 'CANCEL' || data.event === 'ERROR') {
+        if (embeddedSignupTimeoutRef.current) clearTimeout(embeddedSignupTimeoutRef.current);
+        setEmbeddedSignupBusy(false);
+        if (data.event === 'ERROR') {
+          toast.error('Embedded Signup failed', data.data?.error_message || 'Please try again or use manual connect below.');
+        }
+      }
+    }
+    window.addEventListener('message', handleEmbeddedSignupMessage);
+    return () => window.removeEventListener('message', handleEmbeddedSignupMessage);
+  }, []);
+
+  // FB.login's own callback gives us the `code`; the postMessage listener
+  // above gives us the waba_id/phone_number_id -- they arrive as two
+  // separate async events, so the code is stashed here until both exist.
+  const completeEmbeddedSignup = async (code: string, wabaId: string, phoneNumberId2: string) => {
+    if (embeddedSignupTimeoutRef.current) clearTimeout(embeddedSignupTimeoutRef.current);
+    setEmbeddedSignupBusy(true);
+    try {
+      await whatsappSettingsApi.exchangeEmbeddedSignup({ code, wabaId, phoneNumberId: phoneNumberId2 });
+      toast.success('WhatsApp connected via Facebook');
+      pendingSignupCodeRef.current = null;
+      refetch();
+    } catch (err) {
+      toast.error('Could not complete connection', err instanceof ApiError ? err.message : 'Please try again or use manual connect below.');
+    } finally {
+      setEmbeddedSignupBusy(false);
+    }
+  };
+
+  const launchEmbeddedSignup = () => {
+    const FB = (window as any).FB;
+    if (!FB || !settings?.embeddedSignupConfigId) {
+      toast.error('Not ready yet', 'Still loading Facebook -- try again in a moment.');
+      return;
+    }
+    setEmbeddedSignupBusy(true);
+    // Safety timeout -- without this, if Meta's popup never posts back a
+    // WA_EMBEDDED_SIGNUP FINISH message (e.g. the flow can't actually
+    // complete server-side, which is expected before real Tech Provider
+    // approval is granted -- the popup UI can load fine while the
+    // underlying WABA-sharing permission still isn't there), the button
+    // would stay stuck on "Connecting..." forever with zero feedback.
+    const timeoutId = setTimeout(() => {
+      setEmbeddedSignupBusy(false);
+      pendingSignupCodeRef.current = null;
+      toast.error('Connection timed out', 'Facebook did not complete the signup. If this keeps happening, it likely means Tech Provider approval isn\u2019t finalized yet -- manual connect below still works.');
+    }, 45000);
+    embeddedSignupTimeoutRef.current = timeoutId;
+    FB.login(
+      (response: any) => {
+        const code = response?.authResponse?.code;
+        if (code) {
+          pendingSignupCodeRef.current = code;
+          // Actual completion happens in the postMessage listener above,
+          // once it also has the waba_id/phone_number_id -- this callback
+          // alone doesn't carry those. The timeout above is cleared there
+          // (or on CANCEL/ERROR) -- not here, since success isn't known yet.
+        } else {
+          if (embeddedSignupTimeoutRef.current) clearTimeout(embeddedSignupTimeoutRef.current);
+          setEmbeddedSignupBusy(false);
+          if (response?.status !== 'unknown') {
+            toast.error('Facebook login was cancelled or did not complete');
+          }
+        }
+      },
+      {
+        config_id: settings.embeddedSignupConfigId,
+        response_type: 'code',
+        override_default_response_type: true,
+        extras: { setup: {}, sessionInfoVersion: '3' },
+      },
+    );
+  };
 
   const clearTestFeedback = () => { setTestResult(null); setTestError(null); };
 
@@ -3384,6 +3522,26 @@ function SettingsTab() {
           />
         }
       />
+
+      {/* Meta Embedded Signup -- shown ONLY once InnovateX's own Meta
+          Tech Provider approval is complete (see BACKEND config.js's
+          comment on why this is app-level, not per-tenant). Manual
+          connect below remains fully functional and unaffected either
+          way -- this is a faster alternative on top, not a replacement. */}
+      {settings.embeddedSignupAvailable && !settings.meta.connected && (
+        <div className="border-b border-ink-100 bg-gradient-to-b from-brand-50/60 to-transparent px-6 py-5">
+          <p className="mb-1 text-sm font-semibold text-ink-800">Quickest way to connect</p>
+          <p className="mb-3 text-xs text-ink-500">Sign in with Facebook to link your WhatsApp Business number in a few clicks -- no copying credentials.</p>
+          <Button onClick={launchEmbeddedSignup} disabled={embeddedSignupBusy} className="bg-[#1877F2] hover:bg-[#166FE5]">
+            {embeddedSignupBusy ? 'Connecting…' : 'Continue with Facebook'}
+          </Button>
+          <div className="my-4 flex items-center gap-3">
+            <div className="h-px flex-1 bg-ink-100" />
+            <span className="text-xs font-medium text-ink-400">OR CONNECT MANUALLY</span>
+            <div className="h-px flex-1 bg-ink-100" />
+          </div>
+        </div>
+      )}
 
       <div className="p-6">
         <div className="grid gap-5 sm:grid-cols-2">

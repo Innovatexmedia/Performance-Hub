@@ -1,26 +1,6 @@
-/**
- * Meta WhatsApp Cloud API provider -- the REAL adapter, using native fetch
- * (Node 18+, no new HTTP client dependency) against Meta's Graph API.
- *
- * Implements the same WhatsAppProvider interface as SimulationProvider
- * (see provider.interface.js) -- message.service.js doesn't know or care
- * which concrete provider it's talking to.
- *
- * IMPORTANT -- unlike SimulationProvider, this is NOT a stateless singleton.
- * Credentials (accessToken, phoneNumberId, graphApiVersion) are per-tenant,
- * stored in WhatsAppSettings, so a new instance is constructed per call with
- * that tenant's real config -- see resolveProvider() in provider.factory.js.
- *
- * SCOPE: sendMessage() is text-only -- passing type='image'/'document' to
- * it still throws, since Meta's text-send endpoint shape is genuinely
- * different from its media-send shape. Real media (image/document/audio)
- * goes through the separate sendMedia() method below instead, sent "by
- * link" against a durable Cloudinary URL -- see provider.interface.js's
- * sendMedia() doc comment for why no separate Meta-side upload step is
- * needed.
- */
 
 import { WhatsAppProvider } from './provider.interface.js';
+import { normalizePhoneNumber } from '../../../shared/helpers/phone.helpers.js';
 
 export class MetaProvider extends WhatsAppProvider {
   /**
@@ -41,11 +21,15 @@ export class MetaProvider extends WhatsAppProvider {
   }
 
   /**
-   * Normalizes a phone number for the Cloud API: digits only, no leading
-   * '+' (Meta's documented format for the `to` field).
+   * Normalizes a phone number for the Cloud API: digits only, WITH
+   * country code (Meta's documented format for the `to` field).
+   * Delegates to the shared normalizer -- see phone.helpers.js for why
+   * this used to silently send bare 10-digit numbers with no country
+   * code at all, which is one half of the duplicate-contact/wrong-number
+   * bug this fixes.
    */
   static normalizePhone(phone) {
-    return String(phone || '').replace(/[^\d]/g, '');
+    return normalizePhoneNumber(phone);
   }
 
   /**

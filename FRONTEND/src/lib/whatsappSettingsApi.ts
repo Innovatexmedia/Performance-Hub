@@ -20,6 +20,12 @@ export const whatsappSettingsApi = {
 
   testConnection: () => apiClient.post<TestConnectionResult>('/whatsapp/settings/test-connection'),
 
+  /** Completes Meta Embedded Signup after the JS SDK popup hands back a
+   * code + WABA/phone number id -- see WhatsAppSettings tab's message
+   * listener for where these come from. */
+  exchangeEmbeddedSignup: (data: { code: string; wabaId: string; phoneNumberId: string }) =>
+    apiClient.post<WhatsAppSettings>('/whatsapp/settings/embedded-signup/exchange', data),
+
   /**
    * The only one of these four with a REAL implementation -- calls Meta's
    * actual template list API and reconciles our DB (see

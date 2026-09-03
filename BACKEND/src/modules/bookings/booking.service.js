@@ -31,6 +31,8 @@ import { nurturesService } from '../whatsapp/submodules/nurtures/nurtures.servic
 // imported it into this file's scope.
 import { createTrackingEvent } from '../attribution/attribution.service.js';
 import { sendBookingConfirmation, sendBookingRescheduled, sendBookingCancelled } from '../auth/services/email.service.js';
+import { automationRulesService } from '../whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../whatsapp/submodules/automationRules/automationRules.constants.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -216,6 +218,18 @@ export const createBooking = async (data, reqUser) => {
       console.warn(`[nurture] BOOKING_CREATED auto-enroll lookup failed for lead ${data.lead_id}: ${err.message}`);
     }
   })();
+
+  // Real Automation Rules dispatch for BOOKING_CREATED -- same
+  // previously-idle dispatch() as the other real trigger sites.
+  automationRulesService
+    .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.BOOKING_CREATED, {
+      leadId: String(data.lead_id),
+      lead,
+      bookingId: String(booking._id),
+    })
+    .catch((err) => {
+      console.warn(`[automation] BOOKING_CREATED dispatch failed for booking ${booking._id}: ${err.message}`);
+    });
 
   // ── 4. Create or advance pipeline deal → 'Booked Call' ───────────────────
   // Deal uses: tenant_id (String), lead_id (ObjectId), assigned_user_id (String)

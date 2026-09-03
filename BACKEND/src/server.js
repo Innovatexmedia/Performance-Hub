@@ -19,6 +19,7 @@ import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
 import { startNurtureScheduler } from './modules/whatsapp/submodules/nurtures/nurtureScheduler.js';
 import { startBookingReminderScheduler } from './modules/bookings/bookingReminderScheduler.js';
+import { startConsentReconciliationJob } from './modules/whatsapp/submodules/consent/consentReconciliation.job.js';
 import { ensureSeeded as ensurePlansSeeded, backfillTenantPlans, migratePlansToInr, backfillAccounts } from './modules/plans/plan.service.js';
 import dns from 'dns';
 dns.setServers(['1.1.1.1', '8.8.8.8']);
@@ -67,6 +68,19 @@ const startServer = async () => {
     // Real booking reminder scheduler -- same real reasoning, needs a
     // live DB connection first since every tick queries Booking/Lead.
     startBookingReminderScheduler();
+
+    // Nurture scheduler -- drives every multi-day Nurture sequence's
+    // step execution (see nurtureExecution.service.js). This was
+    // imported here but never actually called, meaning no enrollment's
+    // step ever fired on its own in this deployment; every "Active"
+    // sequence sat completely idle regardless of due dates. See
+    // nurtureScheduler.js for the interval/config.
+    startNurtureScheduler();
+
+    // Consent reconciliation safety net -- see consentReconciliation.job.js
+    // for why this exists (real-time sync is best-effort, this guarantees
+    // eventual consistency between WhatsAppConsent and Lead).
+    startConsentReconciliationJob();
 
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 InnovateX Revenue OS API`);

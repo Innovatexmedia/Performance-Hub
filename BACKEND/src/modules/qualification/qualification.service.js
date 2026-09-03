@@ -26,6 +26,8 @@
  */
 
 import * as qualRepo from './qualification.repository.js';
+import { automationRulesService } from '../whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../whatsapp/submodules/automationRules/automationRules.constants.js';
 import {
   QUALIFICATION_ROUTE,
   TRACKING_EVENT_ON_QUALIFY,
@@ -364,6 +366,19 @@ export const applyResult = async (qualificationId, reqUser) => {
     fit_score:        score,
     temperature:      temp,
   });
+
+  // Real Automation Rules dispatch for LEAD_QUALIFIED -- same
+  // previously-idle dispatch() as LEAD_CREATED/MESSAGE_RECEIVED.
+  // leadId here may be a populated Document (see the comment below on
+  // String(leadId) for why) -- normalize to a plain id string.
+  automationRulesService
+    .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.LEAD_QUALIFIED, {
+      leadId: String(leadId._id || leadId),
+      lead: updatedLead,
+    })
+    .catch((err) => {
+      console.warn(`[automation] LEAD_QUALIFIED dispatch failed for lead ${leadId}: ${err.message}`);
+    });
 
   // ── 7b. Real pause-on-qualified ─────────────────────────────────────────────
   // A lead becoming qualified means they've moved to a different funnel

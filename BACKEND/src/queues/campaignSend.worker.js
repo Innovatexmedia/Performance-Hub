@@ -8,6 +8,8 @@ import { templatesRepository } from '../modules/whatsapp/submodules/templates/te
 import { APPROVAL_STATUS } from '../modules/whatsapp/submodules/templates/templates.constants.js';
 import { emitToTenant } from '../realtime/socket.js';
 import { KIND_CONFIG, sendToOneRecipient, toDTO } from '../modules/whatsapp/messageSender.js';
+import { automationRulesService } from '../modules/whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE } from '../modules/whatsapp/submodules/automationRules/automationRules.constants.js';
 
 async function maybeFinalize(ctx, cfg, updated) {
   if (!updated) return;
@@ -40,6 +42,21 @@ async function maybeFinalize(ctx, cfg, updated) {
   // outcome of the guard, not an error.
   if (finalDoc) {
     emitToTenant(ctx.tenantId, cfg.socketEvent, { [`${cfg.payloadKey}Id`]: String(updated._id), [cfg.payloadKey]: toDTO(finalDoc) });
+
+    // Real Automation Rules dispatch for CAMPAIGN_COMPLETED/CAMPAIGN_FAILED
+    // -- same previously-idle dispatch() as the other real trigger sites.
+    // No single leadId here since a campaign/broadcast targets a whole
+    // audience, not one lead -- lead-specific actions (ADD_TAG, etc.)
+    // will correctly report "no lead in context" rather than guessing one.
+    automationRulesService
+      .dispatch(ctx, wasSuccessful ? TRIGGER_TYPE.CAMPAIGN_COMPLETED : TRIGGER_TYPE.CAMPAIGN_FAILED, {
+        campaignId: cfg.payloadKey === 'campaign' ? String(updated._id) : null,
+        broadcastId: cfg.payloadKey === 'broadcast' ? String(updated._id) : null,
+        metrics: m,
+      })
+      .catch((err) => {
+        console.warn(`[automation] ${wasSuccessful ? 'CAMPAIGN_COMPLETED' : 'CAMPAIGN_FAILED'} dispatch failed for ${cfg.payloadKey} ${updated._id}: ${err.message}`);
+      });
   }
 }
 

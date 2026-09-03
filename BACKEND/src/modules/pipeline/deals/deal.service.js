@@ -13,6 +13,8 @@ import { activityService } from '../../leads/activities/activity.service.js';
 // ── Pipeline-local ───────────────────────────────────────────────────────────
 import { dealRepository } from './deal.repository.js';
 import { pipelineEvents } from '../../../shared/events/pipeline.events.js';
+import { automationRulesService } from '../../whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../../whatsapp/submodules/automationRules/automationRules.constants.js';
 import {
   DEAL_STAGE,
   DEAL_STAGE_VALUES,
@@ -249,6 +251,22 @@ export const dealService = {
       deal: toDealDTO(deal),
       actor: ctx.userId,
     });
+
+    // Real Automation Rules dispatch for PIPELINE_STAGE_CHANGED -- same
+    // previously-idle dispatch() as the other real trigger sites. dealId
+    // is included so a rule's CHANGE_PIPELINE_STAGE action (or any future
+    // deal-aware action) has something real to act on.
+    automationRulesService
+      .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.PIPELINE_STAGE_CHANGED, {
+        leadId: String(deal.lead_id),
+        dealId: String(deal._id),
+        deal: toDealDTO(deal),
+        fromStage,
+        toStage,
+      })
+      .catch((err) => {
+        console.warn(`[automation] PIPELINE_STAGE_CHANGED dispatch failed for deal ${deal._id}: ${err.message}`);
+      });
 
     // 4. Sync the linked lead's status where a mapping exists.
     const leadStatus = STAGE_TO_LEAD_STATUS[toStage];

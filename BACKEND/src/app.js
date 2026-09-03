@@ -16,6 +16,7 @@ import cookieParser from 'cookie-parser';
 
 // ── Route Imports ─────────────────────────────────────────────────────────────
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
+import notificationRoutes from './modules/leads/notifications/notification.routes.js';
 import settingsRoutes from './modules/settings/settings.routes.js';
 import authRoutes     from './modules/auth/routes/auth.routes.js';
 import leadRoutes     from './modules/leads/lead/lead.routes.js';
@@ -41,8 +42,6 @@ import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js
 import shopifyWebhookRoutes from './modules/shopify/shopifyWebhook.routes.js';
 import sendgridWebhookRoutes from './modules/email/sendgridWebhook.routes.js';
 import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
-import planRoutes from './modules/plans/plan.routes.js';
-import razorpayWebhookRoutes from './modules/plans/razorpayWebhook.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
 // analytics, settings) are composed entirely inside whatsappRouter --
@@ -66,9 +65,31 @@ app.use(
   })
 );
 
+// Allowed origins: the real configured CLIENT_URL, plus (in
+// development only) any ngrok tunnel domain -- needed for testing
+// things that genuinely require a real HTTPS origin (e.g. Meta
+// Embedded Signup), since ngrok's free-tier subdomain changes every
+// time you restart it and can't be hardcoded into CLIENT_URL. A
+// function (not a static string/array) so this dynamic ngrok check
+// only ever applies outside production -- production stays locked to
+// exactly CLIENT_URL, nothing broader.
+const ALLOWED_ORIGIN_PATTERNS = [
+  /\.ngrok-free\.dev$/,
+  /\.ngrok-free\.app$/,
+  /\.ngrok\.io$/,
+];
+function corsOriginCheck(origin, callback) {
+  if (!origin) return callback(null, true); // same-origin / non-browser requests (curl, server-to-server) send no Origin header at all
+  if (origin === process.env.CLIENT_URL) return callback(null, true);
+  if (process.env.NODE_ENV !== 'production' && ALLOWED_ORIGIN_PATTERNS.some((re) => re.test(origin))) {
+    return callback(null, true);
+  }
+  callback(new Error(`CORS: origin "${origin}" is not allowed`));
+}
+
 app.use(
   cors({
-    origin:      process.env.CLIENT_URL || '*',
+    origin:      process.env.CLIENT_URL ? corsOriginCheck : '*',
     credentials: true, // Required for HttpOnly cookies
   })
 );
@@ -141,6 +162,7 @@ app.use('/api', generalApiRateLimit);
 
 */
 app.use('/api/dashboard', dashboardRoutes);
+app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings',   settingsRoutes);
 app.use('/api/auth',      authRoutes);
 app.use('/api/leads',     leadRoutes);
@@ -168,12 +190,6 @@ app.use('/api/integrations/google-ads/oauth', googleAdsOAuthRoutes);
 app.use('/api/shopify/webhook', shopifyWebhookRoutes);
 app.use('/api/shopify/oauth', shopifyOAuthRoutes);
 app.use('/api/integrations', integrationRoutes);
-app.use('/api/plans', planRoutes);
-// Mounted at its own unauthenticated path -- Razorpay's own server calls
-// this, not a logged-in user (same precedent as the Cal.com/Shopify
-// webhooks above). Signature-verified inside the handler instead of
-// sitting behind `authenticate`.
-app.use('/api/webhooks/razorpay', razorpayWebhookRoutes);
 
 // NOTE: the WhatsApp submodules (contacts, templates, template-approval,
 // campaigns, broadcasts, nurtures, ai, automation-rules, delivery-logs,

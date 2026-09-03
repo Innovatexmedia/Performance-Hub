@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import { Menu, Search, Bell, ChevronDown, LogOut, RefreshCw, Check, Plus } from 'lucide-react';
@@ -8,6 +8,7 @@ import { Avatar, cn, Modal, Button, Field, Input } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { ApiError, apiErrorMessage } from '@/lib/apiClient';
+import { notificationsApi, type NotificationItem } from '@/lib/notificationsApi';
 import { ROLE_LABELS } from '@/types/auth';
 
 function useClickOutside(onClose: () => void) {
@@ -41,10 +42,52 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   const loadWorkspaces = useAuthStore((s) => s.loadWorkspaces);
   const switchWorkspace = useAuthStore((s) => s.switchWorkspace);
   const createWorkspace = useAuthStore((s) => s.createWorkspace);
-  const notificationsAll = useStore((s) => s.db.notifications);
-  const activeTenantId = useStore((s) => s.activeTenantId);
-  const notifications = notificationsAll.filter((n) => n.tenant_id === activeTenantId);
-  const { markNotificationRead, markAllNotificationsRead } = useStore();
+  // Real, backend-backed notifications -- previously this whole panel
+  // read from a local, client-only mock store (db.notifications) that
+  // had zero connection to the real Notification collection, so nothing
+  // that ever actually wrote a real notification (qualification,
+  // payments, Automation Rules' Notify User action, etc.) could ever be
+  // seen here. Polled every 20s rather than real-time-pushed -- good
+  // enough for a notification bell, and far simpler than wiring a new
+  // socket event for this one panel.
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [unread, setUnread] = useState(0);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const result = await notificationsApi.list({ limit: 12 });
+      setNotifications(result.notifications);
+      setUnread(result.unreadCount);
+    } catch {
+      // Non-critical -- the bell just shows stale/empty data if this fails, no need for a toast.
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchNotifications();
+    const interval = setInterval(fetchNotifications, 20_000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
+
+  const markNotificationRead = async (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, isRead: true } : n)));
+    setUnread((prev) => Math.max(0, prev - 1));
+    try {
+      await notificationsApi.markRead(id);
+    } catch {
+      void fetchNotifications(); // resync on failure rather than leave optimistic state wrong
+    }
+  };
+
+  const markAllNotificationsRead = async () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    setUnread(0);
+    try {
+      await notificationsApi.markAllRead();
+    } catch {
+      void fetchNotifications();
+    }
+  };
 
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -67,7 +110,6 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   }, [user?.id]);
 
   const activeWorkspace = workspaces.find((w) => w.tenantId === user?.tenantId);
-  const unread = notifications.filter((n) => !n.read).length;
   if (!user) return null;
 
   const handleSwitchWorkspace = async (tenantId: string) => {
@@ -208,19 +250,19 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
                 {notifications.length === 0 && <p className="px-4 py-8 text-center text-sm text-ink-400">No notifications</p>}
                 {notifications.slice(0, 12).map((n) => (
                   <button
-                    key={n.id}
-                    onClick={() => { markNotificationRead(n.id); setNotifOpen(false); navigate(n.link); }}
-                    className={cn('flex w-full gap-3 border-b border-ink-50 px-4 py-3 text-left hover:bg-ink-50', !n.read && 'bg-brand-50/40')}
+                    key={n._id}
+                    onClick={() => { void markNotificationRead(n._id); setNotifOpen(false); }}
+                    className={cn('flex w-full gap-3 border-b border-ink-50 px-4 py-3 text-left hover:bg-ink-50', !n.isRead && 'bg-brand-50/40')}
                   >
-                    <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full', n.read ? 'bg-ink-100 text-ink-500' : 'bg-brand-100 text-brand-600')}>
-                      <NotifIcon name={n.icon} />
+                    <span className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full', n.isRead ? 'bg-ink-100 text-ink-500' : 'bg-brand-100 text-brand-600')}>
+                      <NotifIcon name="bell" />
                     </span>
                     <span className="flex-1">
                       <span className="block text-sm font-medium text-ink-800">{n.title}</span>
-                      <span className="block text-xs text-ink-500">{n.message}</span>
+                      <span className="block text-xs text-ink-500">{n.body}</span>
                       <span className="mt-0.5 block text-[11px] text-ink-400">{timeAgo(n.created_at)}</span>
                     </span>
-                    {!n.read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />}
+                    {!n.isRead && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-brand-500" />}
                   </button>
                 ))}
               </div>

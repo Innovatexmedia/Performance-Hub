@@ -1,14 +1,4 @@
-/**
- * WhatsApp Settings — routes.
- *
- * Mounted at: whatsappRouter.use('/settings', whatsappSettingsRoutes)
- * → all endpoints live under /api/whatsapp/settings/...
- *
- * The parent whatsappRouter already applies authenticate + resolveTenant +
- * withContext, so these routes only add requireRole for granular permissions.
- * Static sub-paths are declared before none-conflicting; there are no :id
- * params here (settings is a tenant singleton).
- */
+
 import { Router } from 'express';
 import { requireRole } from '../../../../shared/middlewares/role.middleware.js';
 import { ROLE_MIN }    from './whatsappSettings.constants.js';
@@ -101,6 +91,15 @@ router.patch('/limits',
 router.post('/test-connection',
   requireRole(ROLE_MIN.TEST),
   whatsappSettingsController.testConnection,
+);
+
+// POST /api/whatsapp/settings/embedded-signup/exchange -- same permission
+// as the manual connect form (updateProvider), since this achieves the
+// exact same end state (a connected WhatsApp), just via Meta's flow
+// instead of pasted credentials.
+router.post('/embedded-signup/exchange',
+  requireRole(ROLE_MIN.UPDATE),
+  whatsappSettingsController.exchangeEmbeddedSignup,
 );
 
 router.post('/sync/templates',

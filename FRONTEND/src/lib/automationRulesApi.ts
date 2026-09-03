@@ -18,6 +18,16 @@ export interface RunRuleInput {
   campaignId?: string;
   lead?: Record<string, unknown>;
   contact?: Record<string, unknown>;
+  /**
+   * Real actions (SEND_TEMPLATE, START_NURTURE, ASSIGN_USER, etc.) now
+   * actually execute -- send a real WhatsApp message, enroll a real
+   * lead, etc. Defaults to a safe dry-run (simulated) unless this is
+   * explicitly set to true. There is currently no UI to set this --
+   * the "Run now" button always runs a dry-run. A real single-lead
+   * test run needs a lead picker + an explicit confirmation step
+   * before this should ever be wired to true from the UI.
+   */
+  live?: boolean;
 }
 
 export interface RunRuleResult {

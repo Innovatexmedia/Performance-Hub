@@ -1,28 +1,7 @@
-/**
- * 360Dialog WhatsApp provider -- the REAL adapter, using native fetch
- * against 360Dialog's real Messaging API.
- *
- * SOURCE: docs.360dialog.com (Messaging API reference). 360Dialog is a
- * WhatsApp Business Solution Provider (BSP) reselling the same underlying
- * Meta Cloud API infrastructure, which is why the request/response body
- * shape below matches MetaProvider's almost exactly. The real difference
- * is authentication and the base URL:
- *   - Meta:      Authorization: Bearer <token>, URL includes /{phoneNumberId}/messages
- *   - 360Dialog: D360-API-KEY: <key> header only, URL is just /messages --
- *     360Dialog already knows which phone number the key belongs to, so
- *     including a phone number ID in the request is unnecessary (and,
- *     per their own docs, can cause errors if you try).
- *
- * Implements the same WhatsAppProvider interface as MetaProvider/
- * SimulationProvider (see provider.interface.js) -- message.service.js
- * doesn't know or care which concrete provider it's talking to.
- *
- * SCOPE: text messages only, same limitation as MetaProvider and for the
- * same reason -- image/document/template require a different request
- * shape (media handles, template components) not built yet.
- */
+
 
 import { WhatsAppProvider } from './provider.interface.js';
+import { normalizePhoneNumber } from '../../../shared/helpers/phone.helpers.js';
 
 const BASE_URL = 'https://waba-v2.360dialog.io';
 
@@ -40,9 +19,9 @@ export class Dialog360Provider extends WhatsAppProvider {
     return 'dialog360';
   }
 
-  /** Same normalization Meta's Cloud API expects -- digits only, no leading '+'. */
+  /** Delegates to the shared normalizer -- see phone.helpers.js. Same fix as MetaProvider: this used to strip non-digits but never add a missing country code. */
   static normalizePhone(phone) {
-    return String(phone || '').replace(/[^\d]/g, '');
+    return normalizePhoneNumber(phone);
   }
 
   async sendMessage({ to, content, type = 'text' }) {

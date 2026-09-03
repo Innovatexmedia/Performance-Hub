@@ -41,6 +41,8 @@ import { TRACKING_EVENT_TYPE }    from '../attribution/attribution.constants.js'
 import { NurtureEnrollment } from '../whatsapp/submodules/nurtures/nurtures.model.js';
 import { ENROLLMENT_STATUS } from '../whatsapp/submodules/nurtures/nurtures.constants.js';
 import { sendPaymentConfirmation, sendPaymentFailure } from '../auth/services/email.service.js';
+import { automationRulesService } from '../whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../whatsapp/submodules/automationRules/automationRules.constants.js';
 
 // =============================================================================
 // PRIVATE HELPERS — identical pattern to booking.service.js / call.service.js
@@ -337,6 +339,19 @@ export const markPaid = async (id, tenantId, reqUser) => {
     `Payment of ${payment.currency} ${amount.toLocaleString()} received from ${lead?.name || 'Lead'}. Deal closed Won!`,
     { payment_id: id, lead_id: String(leadId), amount }
   );
+
+  // Real Automation Rules dispatch for PAYMENT_RECEIVED -- same
+  // previously-idle dispatch() as the other real trigger sites.
+  automationRulesService
+    .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.PAYMENT_RECEIVED, {
+      leadId: String(leadId),
+      lead,
+      dealId: deal ? String(deal._id) : null,
+      payment: { id, amount, currency: payment.currency },
+    })
+    .catch((err) => {
+      console.warn(`[automation] PAYMENT_RECEIVED dispatch failed for payment ${id}: ${err.message}`);
+    });
 
   // 7. PAYMENT_COMPLETED tracking event (with revenue for attribution)
   await createTrackingEvent({

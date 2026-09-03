@@ -87,9 +87,23 @@ export function initSocketServer(httpServer) {
     return io;
   }
 
+  // Same allowed-origin logic as app.js's HTTP CORS -- Socket.IO has its
+  // OWN separate CORS config, missed when app.js's was fixed for ngrok
+  // testing (confirmed live via a real "CORS error" on socket.io's
+  // polling handshake when accessed through an ngrok tunnel).
+  const ALLOWED_ORIGIN_PATTERNS = [/\.ngrok-free\.dev$/, /\.ngrok-free\.app$/, /\.ngrok\.io$/];
+  function corsOriginCheck(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (origin === process.env.CLIENT_URL) return callback(null, true);
+    if (process.env.NODE_ENV !== 'production' && ALLOWED_ORIGIN_PATTERNS.some((re) => re.test(origin))) {
+      return callback(null, true);
+    }
+    callback(new Error(`Socket.IO CORS: origin "${origin}" is not allowed`));
+  }
+
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_URL || '*',
+      origin: process.env.CLIENT_URL ? corsOriginCheck : '*',
       credentials: true,
     },
   });

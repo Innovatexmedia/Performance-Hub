@@ -40,6 +40,22 @@ export const leadRepository = {
     );
   },
 
+  addTag(tenantId, id, tag) {
+    return Lead.findOneAndUpdate(
+      { _id: id, tenant_id: tenantId },
+      { $addToSet: { tags: tag } },
+      { new: true },
+    );
+  },
+
+  removeTag(tenantId, id, tag) {
+    return Lead.findOneAndUpdate(
+      { _id: id, tenant_id: tenantId },
+      { $pull: { tags: tag } },
+      { new: true },
+    );
+  },
+
   archiveById(tenantId, id) {
     return Lead.findOneAndUpdate(
       { _id: id, tenant_id: tenantId },

@@ -34,8 +34,7 @@ import { conversationService } from '../../conversations/conversation.service.js
 import { messageService } from '../../messages/message.service.js';
 import { MESSAGE_TYPE } from '../../messages/message.model.js';
 import { sendCustomEmail } from '../../../auth/services/email.service.js';
-import { consentRepository } from '../consent/consent.repository.js';
-import { CONSENT_STATUS } from '../consent/consent.constants.js';
+import { assertSendAllowed } from '../consent/consentGuard.service.js';
 import { Lead } from '../../../leads/lead/lead.model.js';
 import { interpolateNurtureText, buildVariableContext } from './nurtureVariables.js';
 import { createNotification } from '../../../leads/notifications/notification.service.js';
@@ -124,12 +123,15 @@ const executeEnrollmentStep = async (enrollment) => {
 
   // Real opt-out enforcement -- checked before ANY channel's send, not
   // just WhatsApp's own built-in guard, so Email/SMS/Manual Task steps
-  // are also genuinely blocked for an opted-out lead.
+  // are also genuinely blocked for an opted-out lead. Shared with
+  // messageSender.js's Campaign/Broadcast/manual-send path, so both go
+  // through the exact same retried, fail-closed check against
+  // WhatsAppConsent (never the denormalised lead.opt_out_status boolean).
   const phoneForConsent = lead?.whatsapp_number || lead?.phone;
   if (phoneForConsent) {
-    const consent = await consentRepository.findByPhone(enrollment.tenantId, phoneForConsent);
-    if (consent?.status === CONSENT_STATUS.OPTED_OUT) {
-      await pauseEnrollment(enrollment, 'OPTED_OUT', `Lead opted out (checked before step ${step.stepNumber})`);
+    const consentCheck = await assertSendAllowed(enrollment.tenantId, phoneForConsent);
+    if (!consentCheck.allowed) {
+      await pauseEnrollment(enrollment, 'OPTED_OUT', `Lead not sendable (checked before step ${step.stepNumber}): ${consentCheck.reason}`);
       return;
     }
   }

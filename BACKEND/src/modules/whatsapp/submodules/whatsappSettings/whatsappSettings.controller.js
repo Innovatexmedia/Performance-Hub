@@ -112,6 +112,12 @@ export const whatsappSettingsController = {
     return sendSuccess(res, data, 'Connection test completed');
   }),
 
+  // POST /api/whatsapp/settings/embedded-signup/exchange
+  exchangeEmbeddedSignup: asyncHandler(async (req, res) => {
+    const data = await whatsappSettingsService.exchangeEmbeddedSignupCode(buildCtx(req), req.body);
+    return sendSuccess(res, data, 'WhatsApp connected via Embedded Signup');
+  }),
+
   // POST /api/whatsapp/settings/sync/templates
   syncTemplates: asyncHandler(async (req, res) => {
     const data = await whatsappSettingsService.sync(buildCtx(req), SYNC_ENTITY.TEMPLATES);

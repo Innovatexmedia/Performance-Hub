@@ -23,6 +23,9 @@ import { TRACKING_EVENT_TYPE }          from '../../attribution/attribution.cons
 import { countBookingsByLead }        from '../../bookings/booking.service.js';
 import { countQualificationsByLead } from '../../qualification/qualification.service.js';
 import { countCallsByLead }            from '../../calls/call.service.js';
+import { ensureConsentForLead } from '../../whatsapp/submodules/consent/consentSync.service.js';
+import { automationRulesService } from '../../whatsapp/submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../../whatsapp/submodules/automationRules/automationRules.constants.js';
 
 /**
  * A sales_user may only read/edit/archive/restore leads assigned to THEM,
@@ -74,6 +77,15 @@ export const leadService = {
 
     const lead = await leadRepository.create(payload);
 
+    // Every new lead is immediately sendable, same as AiSensy/WATI-style
+    // platforms -- see ensureConsentForLead's own comment for why this
+    // trusts the business rather than gatekeeping opt-in here. Awaited
+    // (not fire-and-forget) since a lead created via a bulk import or an
+    // ad campaign's webhook may be messaged within seconds of creation.
+    await ensureConsentForLead(ctx.tenantId, lead, {
+      source: data.source === 'WhatsApp' ? 'WHATSAPP' : 'CRM',
+    });
+
     await activityService.log(ctx, lead._id, ACTIVITY_TYPE.LEAD_CREATED, {
       message: `Lead "${lead.name || lead.email || lead.phone}" created`,
     });
@@ -111,6 +123,19 @@ export const leadService = {
         console.warn(`[nurture] LEAD_CREATED auto-enroll lookup failed for lead ${lead._id}: ${err.message}`);
       }
     })();
+
+    // Real Automation Rules dispatch for LEAD_CREATED -- previously
+    // dispatch() existed and worked perfectly but was never called from
+    // anywhere, so every "Active" rule with this trigger sat completely
+    // idle no matter what happened in the system. Best-effort and
+    // fire-and-forget, same reasoning as the nurture auto-enroll right
+    // above: a failure or a slow rule must never fail or delay lead
+    // creation itself.
+    automationRulesService
+      .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.LEAD_CREATED, { leadId: String(lead._id), lead: toLeadDTO(lead) })
+      .catch((err) => {
+        console.warn(`[automation] LEAD_CREATED dispatch failed for lead ${lead._id}: ${err.message}`);
+      });
 
     leadEvents.created({
       tenantId: ctx.tenantId,
@@ -205,6 +230,34 @@ export const leadService = {
       actor:    ctx.userId,
       changed:  Object.keys(patch),
     });
+
+    // Real Automation Rules dispatch for LEAD_UPDATED, plus TAG_ADDED/
+    // TAG_REMOVED when this specific update changed the tags array.
+    // Safe from the obvious loop risk: Automation Rules' own ADD_TAG/
+    // REMOVE_TAG action handlers call leadRepository.addTag/removeTag
+    // DIRECTLY, bypassing this updateLead() path entirely -- so a rule's
+    // own tag action never re-enters here and re-fires TAG_ADDED itself.
+    automationRulesService
+      .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.LEAD_UPDATED, { leadId: id, lead: toLeadDTO(updated), changed: Object.keys(patch) })
+      .catch((err) => console.warn(`[automation] LEAD_UPDATED dispatch failed for lead ${id}: ${err.message}`));
+
+    if (patch.tags !== undefined) {
+      const before = new Set(existing.tags || []);
+      const after  = new Set(patch.tags || []);
+      const added   = [...after].filter((t) => !before.has(t));
+      const removed = [...before].filter((t) => !after.has(t));
+
+      for (const tag of added) {
+        automationRulesService
+          .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.TAG_ADDED, { leadId: id, lead: toLeadDTO(updated), tag })
+          .catch((err) => console.warn(`[automation] TAG_ADDED dispatch failed for lead ${id}, tag "${tag}": ${err.message}`));
+      }
+      for (const tag of removed) {
+        automationRulesService
+          .dispatch(ctx, AUTOMATION_TRIGGER_TYPE.TAG_REMOVED, { leadId: id, lead: toLeadDTO(updated), tag })
+          .catch((err) => console.warn(`[automation] TAG_REMOVED dispatch failed for lead ${id}, tag "${tag}": ${err.message}`));
+      }
+    }
 
     return updated;
   },

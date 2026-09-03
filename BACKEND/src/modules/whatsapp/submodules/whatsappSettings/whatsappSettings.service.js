@@ -1,31 +1,4 @@
-/**
- * WhatsApp Settings — service.
- *
- * Contains ALL business logic:
- *   • Create / get / update settings (one document per tenant)
- *   • Section-specific updates (provider, business-profile, messaging, …)
- *   • Provider configuration validation
- *   • WhatsApp Mode (panelMode) governance:
- *       - NATIVE      -> provider is locked server-side to META_CLOUD.
- *       - THIRD_PARTY -> provider is a user choice among THIRD_PARTY_PROVIDER_VALUES
- *                        (architecture only -- no working adapter yet).
- *   • providerMode governance: NEVER accepted from a client request. It is
- *     derived exclusively by the backend --
- *       - reset to SIMULATION ("unverified") whenever `provider` changes
- *       - flipped to LIVE only inside testConnection(), only after a real
- *         successful Meta Graph API response
- *     This is what templateApproval.service.js's submit-to-provider gate
- *     relies on to decide whether to actually call Meta -- see
- *     `provider === META_CLOUD && providerMode !== 'SIMULATION'` there.
- *   • Connection test (real Graph API call for META_CLOUD; "coming soon"
- *     for every other provider, which has no adapter implemented yet)
- *   • Synchronisation stamps
- *   • Reset to defaults
- *   • Credential stripping — accessToken / appSecret / verifyToken are NEVER
- *     returned to a client
- *   • getProviderConfig() — the integration helper other modules call to
- *     obtain credentials WITHOUT going through the HTTP layer
- */
+
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import config from '../../../../config/config.js';
 import { whatsappSettingsRepository } from './whatsappSettings.repository.js';
@@ -283,6 +256,16 @@ export const whatsappSettingsService = {
     // so it can't go stale if the backend's public URL changes (e.g. a new
     // ngrok tunnel after a restart).
     safe.meta.webhookUrl = `${config.API_BASE_URL}/api/whatsapp/webhooks/meta/${ctx.tenantId}`;
+    // App-level config the frontend's Meta JS SDK needs to actually render
+    // the "Continue with Facebook" button -- the App ID and Config ID are
+    // safe to expose client-side (Meta's own JS SDK requires them in the
+    // browser); the App SECRET never leaves the backend. Omitted entirely
+    // (embeddedSignupAvailable: false) until Tech Provider approval is
+    // done and these are set -- the frontend uses this to hide the button
+    // rather than show a broken one.
+    safe.embeddedSignupAvailable = Boolean(config.META_TECH_PROVIDER_APP_ID && config.META_TECH_PROVIDER_APP_SECRET && config.META_EMBEDDED_SIGNUP_CONFIG_ID);
+    safe.embeddedSignupAppId = config.META_TECH_PROVIDER_APP_ID || null;
+    safe.embeddedSignupConfigId = config.META_EMBEDDED_SIGNUP_CONFIG_ID || null;
     return safe;
   },
 
@@ -363,6 +346,83 @@ export const whatsappSettingsService = {
   },
 
   // ── Connection test ────────────────────────────────────────────────────────
+
+  /**
+   * exchangeEmbeddedSignupCode -- completes the Meta Embedded Signup flow
+   * for THIS tenant. Called after the frontend's Facebook JS SDK popup
+   * hands back a short-lived `code` (plus the WABA id and phone number id
+   * the tenant picked during the flow).
+   *
+   * Uses InnovateX's OWN app-level credentials (config.META_TECH_PROVIDER_APP_ID/
+   * _APP_SECRET -- see config.js's comment for why these are app-level,
+   * not per-tenant) to exchange that code for a real access token scoped
+   * to this specific tenant's WABA, subscribes InnovateX's app to receive
+   * that WABA's webhooks (required for inbound messages/status updates to
+   * ever reach us), then delegates to the EXACT SAME updateSection +
+   * testConnection methods the manual-connect form already uses --
+   * meaning duplicate-phoneNumberId prevention, connected-flag setting,
+   * providerMode->LIVE, and display-name verification all come for free,
+   * already tested, not reimplemented here.
+   *
+   * NOTE: implemented against Meta's documented Embedded Signup v4 flow
+   * but NOT exercised against a live flow in this environment -- there is
+   * no way to test this without real Tech Provider approval and a real
+   * config_id, neither of which exist yet. Flagging this honestly, same
+   * as the Resumable Upload API implementation earlier.
+   */
+  async exchangeEmbeddedSignupCode(ctx, { code, wabaId, phoneNumberId }) {
+    if (!config.META_TECH_PROVIDER_APP_ID || !config.META_TECH_PROVIDER_APP_SECRET) {
+      throw new AppError(400, 'Embedded Signup is not configured on this server yet -- set META_TECH_PROVIDER_APP_ID and META_TECH_PROVIDER_APP_SECRET once Meta Tech Provider approval is complete.');
+    }
+    if (!code || !wabaId || !phoneNumberId) {
+      throw new AppError(400, 'Missing code, wabaId, or phoneNumberId from the Embedded Signup flow.');
+    }
+
+    // Step 1: exchange the short-lived code for a real access token.
+    const tokenUrl = `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${config.META_TECH_PROVIDER_APP_ID}&client_secret=${config.META_TECH_PROVIDER_APP_SECRET}&code=${encodeURIComponent(code)}`;
+    let tokenJson;
+    try {
+      const tokenRes = await fetch(tokenUrl);
+      tokenJson = await tokenRes.json().catch(() => ({}));
+      if (!tokenRes.ok || !tokenJson.access_token) {
+        throw new Error(tokenJson?.error?.message || `status ${tokenRes.status}`);
+      }
+    } catch (err) {
+      throw new AppError(502, `Meta rejected the Embedded Signup code exchange -- ${err.message}`);
+    }
+    const accessToken = tokenJson.access_token;
+
+    // Step 2: subscribe InnovateX's app to this WABA's webhooks -- without
+    // this, the connection succeeds but inbound messages/status updates
+    // never arrive, since Meta only sends webhooks for WABAs the app has
+    // explicitly subscribed to.
+    try {
+      const subRes = await fetch(`https://graph.facebook.com/v21.0/${wabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!subRes.ok) {
+        const subJson = await subRes.json().catch(() => ({}));
+        console.error(`[EMBEDDED_SIGNUP] Failed to subscribe app to WABA ${wabaId} for tenant ${ctx.tenantId}: ${subJson?.error?.message || subRes.status}`);
+        // Not fatal -- the tenant is still connected, but flagged loudly
+        // since webhooks silently not arriving is a hard-to-diagnose
+        // failure mode otherwise.
+      }
+    } catch (err) {
+      console.error(`[EMBEDDED_SIGNUP] Could not reach Meta to subscribe app to WABA ${wabaId}:`, err.message);
+    }
+
+    // Step 3: save via the exact same path manual connect uses.
+    await this.updateSection(ctx, 'provider', {
+      provider: PROVIDER.META_CLOUD,
+      panelMode: 'NATIVE',
+      meta: { businessAccountId: wabaId, phoneNumberId, accessToken },
+    });
+
+    // Step 4: verify + mark connected, same real Graph API ping manual
+    // connect's "Test connection" button triggers.
+    return this.testConnection(ctx);
+  },
 
   /**
    * Real Graph API ping for META_CLOUD -- the only implemented provider.

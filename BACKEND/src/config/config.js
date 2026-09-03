@@ -1,11 +1,4 @@
-/**
- * App configuration.
- * FILE: src/config/config.js
- *
- * WHAT CHANGED:
- *   - Removed JWT_SECRET check (old — never existed in this project)
- *   - JWT is validated by env.js using JWT_ACCESS_SECRET + JWT_REFRESH_SECRET
- */
+
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -59,6 +52,30 @@ const config = {
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
+  // WhatsApp Embedded Signup (Meta's "Continue with Facebook" onboarding
+  // flow) -- these are APP-LEVEL, shared across every tenant, NOT
+  // per-tenant like the manual-connect fields in WhatsAppSettings. That's
+  // a real architectural difference, not an oversight: manual connect
+  // lets each tenant use their OWN independent Meta app; Embedded Signup
+  // works the opposite way -- ONE Meta app (InnovateX's own, approved as
+  // a Meta Tech Provider) drives onboarding for ALL tenants, and Meta
+  // hands back per-tenant results (a WABA id, phone number id, and a
+  // short-lived code) that get exchanged and stored into that specific
+  // tenant's WhatsAppSettings -- same fields the manual flow already
+  // uses, just filled in a different way.
+  //
+  // Genuinely optional -- Meta gates the whole flow behind Tech Provider
+  // approval (a real business-verification + App Review process with
+  // Meta, not something achievable by writing code alone). Until these
+  // are set, the feature stays hidden/disabled in the UI and manual
+  // connect remains the only path -- nothing breaks by leaving these
+  // blank.
+  META_TECH_PROVIDER_APP_ID: process.env.META_TECH_PROVIDER_APP_ID || '',
+  META_TECH_PROVIDER_APP_SECRET: process.env.META_TECH_PROVIDER_APP_SECRET || '',
+  // From a Facebook Login for Business Configuration (Meta App Dashboard
+  // > Facebook Login for Business > Configurations) -- created from the
+  // "WhatsApp Embedded Signup Configuration" template, per Meta's docs.
+  META_EMBEDDED_SIGNUP_CONFIG_ID: process.env.META_EMBEDDED_SIGNUP_CONFIG_ID || '',
   // Required to create a super_admin account via /auth/register -- without
   // this set, super_admin registration is permanently blocked (fails
   // closed, not open). Set this to a real, private secret and share it

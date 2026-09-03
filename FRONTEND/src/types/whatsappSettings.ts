@@ -79,6 +79,14 @@ export interface WhatsAppSettings {
   sync: WhatsAppSettingsSync;
   createdBy: string | null;
   updatedBy: string | null;
+  /** App-level (shared across every tenant, not per-tenant) -- whether
+   * Meta Embedded Signup ("Continue with Facebook") is available yet.
+   * False until InnovateX's own Meta Tech Provider approval is complete
+   * and the resulting App ID / Config ID are set server-side -- manual
+   * connect (the `meta` fields above) remains the only path until then. */
+  embeddedSignupAvailable: boolean;
+  embeddedSignupAppId: string | null;
+  embeddedSignupConfigId: string | null;
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   OPT_OUT_METHOD_VALUES,
   CONSENT_SOURCE_VALUES,
 } from './consent.constants.js';
+import { normalizePhoneNumber } from '../../../../shared/helpers/phone.helpers.js';
 
 const { Schema } = mongoose;
 
@@ -35,7 +36,7 @@ const consentSchema = new Schema(
     tenantId:    { type: String, required: true },
     contactId:   { type: Schema.Types.ObjectId, ref: 'WhatsAppContact', default: null },
     leadId:      { type: Schema.Types.ObjectId, ref: 'Lead', default: null },
-    phoneNumber: { type: String, required: true, trim: true },
+    phoneNumber: { type: String, required: true, trim: true, set: normalizePhoneNumber },
 
     // Denormalised for search (contact/lead name).
     contactName: { type: String, default: '' },

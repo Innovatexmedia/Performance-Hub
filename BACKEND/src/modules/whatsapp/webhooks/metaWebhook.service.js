@@ -1,5 +1,3 @@
-
-
 import crypto from 'crypto';
 import { AppError } from '../../../shared/helpers/lead.helpers.js';
 import { whatsappSettingsService } from '../submodules/whatsappSettings/whatsappSettings.service.js';
@@ -17,6 +15,9 @@ import { leadService } from '../../leads/lead/lead.service.js';
 import { campaignsRepository } from '../submodules/campaigns/campaigns.repository.js';
 import { broadcastsRepository } from '../submodules/broadcasts/broadcasts.repository.js';
 import { emitToTenant } from '../../../realtime/socket.js';
+import { handleInboundKeyword } from '../submodules/consent/consentGuard.service.js';
+import { automationRulesService } from '../submodules/automationRules/automationRules.service.js';
+import { TRIGGER_TYPE } from '../submodules/automationRules/automationRules.constants.js';
 
 const META_STATUS_MAP = {
   sent: MESSAGE_STATUS.SENT,
@@ -219,6 +220,22 @@ export const metaWebhookService = {
       return { content: msg.text?.body || '', type: 'text', media: null };
     }
 
+    // Button/interactive replies -- a customer tapping a Quick Reply
+    // button on a template we sent, or a button/list reply on an actual
+    // interactive message, arrives with NO text at msg.text at all, the
+    // reply's label lives in a completely different shape per Meta's
+    // webhook payload. Treated as a real text message (what the customer
+    // effectively "said" is the button's label) rather than the generic
+    // "not yet supported" placeholder -- an agent needs to see "Yes" or
+    // "Book a call" in the thread, not an opaque type name.
+    if (msg.type === 'button') {
+      return { content: msg.button?.text || '[button reply]', type: 'text', media: null };
+    }
+    if (msg.type === 'interactive') {
+      const reply = msg.interactive?.button_reply || msg.interactive?.list_reply;
+      return { content: reply?.title || '[interactive reply]', type: 'text', media: null };
+    }
+
     // WhatsApp stickers are static/animated WEBP images -- Meta's webhook
     // shape for them (msg.sticker.id, .mime_type) is structurally
     // identical to msg.image, so they're treated as regular images here
@@ -227,7 +244,7 @@ export const metaWebhookService = {
     const MEDIA_TYPES = { image: 'image', document: 'document', audio: 'audio', sticker: 'image' };
     const ourType = MEDIA_TYPES[msg.type];
     if (!ourType) {
-      // video, sticker, location, contacts, interactive, button, etc. --
+      // video, location, contacts, order, system, unknown, etc. --
       // genuinely not implemented yet, same as before this fix.
       return { content: `[${msg.type} message -- content type not yet supported]`, type: 'text', media: null };
     }
@@ -344,6 +361,34 @@ export const metaWebhookService = {
     // _fetchAndAttachInboundMedia's comment for why.
     if (isPendingMedia) {
       void this._fetchAndAttachInboundMedia(ctx, msg, type, result.message.id);
+    }
+
+    // Real, automatic opt-out/opt-in keyword detection -- previously
+    // Consent only ever changed via an agent manually clicking a button
+    // in the Consent tab, so a customer texting "STOP" here had zero
+    // effect on whether Campaigns/Broadcasts/Nurture would keep
+    // messaging them. Fire-and-forget-safe: handleInboundKeyword never
+    // throws, and a no-op for any non-keyword message is nearly free
+    // (one indexed findByPhone lookup only when the text matches).
+    if (!isPendingMedia && type === 'text') {
+      await handleInboundKeyword(ctx, msg.from, content);
+    }
+
+    // Real Automation Rules dispatch for MESSAGE_RECEIVED -- same
+    // previously-completely-idle dispatch() as LEAD_CREATED (see
+    // lead.service.js's createLead). Fire-and-forget: a slow or failing
+    // rule must never delay the webhook's response to Meta or block
+    // inbound message recording, which already happened above.
+    if (conversation.lead_id) {
+      automationRulesService
+        .dispatch(ctx, TRIGGER_TYPE.MESSAGE_RECEIVED, {
+          leadId: String(conversation.lead_id),
+          contactId: String(conversation._id),
+          message: { content: isPendingMedia ? '' : content, type },
+        })
+        .catch((err) => {
+          console.warn(`[automation] MESSAGE_RECEIVED dispatch failed for conversation ${conversation._id}: ${err.message}`);
+        });
     }
 
     // Real "Replied" tracking: if the most recent outbound message in this

@@ -27,6 +27,7 @@
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { emitToTenant } from '../../../../realtime/socket.js';
 import { consentRepository } from './consent.repository.js';
+import { syncLeadFromConsent } from './consentSync.service.js';
 import {
   CONSENT_STATUS,
   CONSENT_STATUS_VALUES,
@@ -225,6 +226,7 @@ export const consentService = {
       // clicking a button) -- still needs to push, or an open Consent tab
       // would show a stale OPTED_IN badge until manually refreshed.
       emitConsentChanged(ctx.tenantId, updated, CONSENT_STATUS.OPTED_IN);
+      await syncLeadFromConsent(ctx.tenantId, updated);
       return { allowed: false, status: updated.status, reason: 'Consent expired' };
     }
 
@@ -269,6 +271,7 @@ export const consentService = {
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
     emitConsentChanged(ctx.tenantId, updated, previousStatus);
+    await syncLeadFromConsent(ctx.tenantId, updated); // keep Lead.opt_out_status/consent_status derived from this, the source of truth
     return toDTO(updated);
   },
 
@@ -300,6 +303,7 @@ export const consentService = {
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
     emitConsentChanged(ctx.tenantId, updated, previousStatus);
+    await syncLeadFromConsent(ctx.tenantId, updated); // keep Lead.opt_out_status/consent_status derived from this, the source of truth
     return toDTO(updated);
   },
 
@@ -328,6 +332,7 @@ export const consentService = {
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
     emitConsentChanged(ctx.tenantId, updated, previousStatus);
+    await syncLeadFromConsent(ctx.tenantId, updated); // keep Lead.opt_out_status/consent_status derived from this, the source of truth
     return toDTO(updated);
   },
 
@@ -358,6 +363,7 @@ export const consentService = {
 
     const updated = await consentRepository.applyTransition(ctx.tenantId, id, set, historyEntry);
     emitConsentChanged(ctx.tenantId, updated, CONSENT_STATUS.BLOCKED);
+    await syncLeadFromConsent(ctx.tenantId, updated); // keep Lead.opt_out_status/consent_status derived from this, the source of truth
     return toDTO(updated);
   },
 
