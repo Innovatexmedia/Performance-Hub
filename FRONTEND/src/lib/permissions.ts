@@ -86,6 +86,7 @@ export const dealPermissions = {
  */
 export const bookingPermissions = {
   canCreate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
+  canUpdate: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
   canUpdateStatus: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
   canReschedule: (role: AuthRole | null | undefined) => atLeast(role, 'sales_user'),
 };

@@ -11,6 +11,7 @@ import { AcceptInvitation } from '@/pages/Auth/AcceptInvitation';
 import { Profile } from '@/pages/Profile/Profile';
 import { RequireRole } from '@/components/auth/RequireRole';
 import { CaptureForm } from '@/pages/Auth/CaptureForm';
+import { PublicBooking } from '@/pages/Public/PublicBooking';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
 import { WhatsAppPanel } from '@/pages/WhatsApp/WhatsAppPanel';
@@ -69,6 +70,7 @@ export default function App() {
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="/capture" element={<CaptureForm />} />
+        <Route path="/book/:tenantId" element={<PublicBooking />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />

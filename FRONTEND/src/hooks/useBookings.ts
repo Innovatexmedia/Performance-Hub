@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { bookingsApi } from '@/lib/bookingsApi';
 import { ApiError, type PaginationMeta } from '@/lib/apiClient';
-import type { Booking, BookingInput, BookingKpis, BookingListQuery, RescheduleInput } from '@/types/booking';
+import type { Booking, BookingInput, BookingKpis, BookingListQuery, BookingUpdateInput, RescheduleInput } from '@/types/booking';
 
 export interface UseBookingsResult {
   bookings: Booking[];
@@ -11,6 +11,7 @@ export interface UseBookingsResult {
   error: string | null;
   refetch: () => void;
   createBooking: (input: BookingInput) => Promise<Booking>;
+  updateBooking: (id: string, input: BookingUpdateInput) => Promise<Booking>;
   updateStatus: (id: string, status: string) => Promise<Booking>;
   reschedule: (id: string, input: RescheduleInput) => Promise<Booking>;
 }
@@ -57,6 +58,12 @@ export function useBookings(query: BookingListQuery): UseBookingsResult {
     return booking;
   }, [refetch]);
 
+  const updateBooking = useCallback(async (id: string, input: BookingUpdateInput) => {
+    const booking = await bookingsApi.update(id, input);
+    refetch();
+    return booking;
+  }, [refetch]);
+
   const updateStatus = useCallback(async (id: string, status: string) => {
     const booking = await bookingsApi.updateStatus(id, status);
     refetch();
@@ -69,5 +76,5 @@ export function useBookings(query: BookingListQuery): UseBookingsResult {
     return booking;
   }, [refetch]);
 
-  return { bookings, pagination, kpis, loading, error, refetch, createBooking, updateStatus, reschedule };
+  return { bookings, pagination, kpis, loading, error, refetch, createBooking, updateBooking, updateStatus, reschedule };
 }

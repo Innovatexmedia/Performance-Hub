@@ -315,6 +315,56 @@ export const createBooking = async (data, reqUser) => {
 };
 
 // =============================================================================
+// UPDATE BOOKING (generic field edit)
+// =============================================================================
+
+/**
+ * updateBooking — generic in-place edit of a booking's own fields.
+ * Deliberately narrower than createBooking: it does NOT touch status
+ * (use updateBookingStatus — has its own real side effects) and does NOT
+ * move meeting_date/meeting_time (use rescheduleBooking — creates a new
+ * document by design, per FRONTEND_SPEC's "Rescheduled" status flow).
+ * This is for correcting/adjusting booking details: meeting_type,
+ * assigned_user_id (owner), meeting_link, duration_minutes, notes.
+ *
+ * Reuses bookingRepo.updateById (already generic + tenant-scoped +
+ * runValidators: true) -- no new repository method needed.
+ */
+const EDITABLE_FIELDS = ['meeting_type', 'assigned_user_id', 'meeting_link', 'duration_minutes', 'notes'];
+
+export const updateBooking = async (tenantId, id, data, reqUser) => {
+  const ctx = buildCtx(reqUser);
+
+  const booking = await bookingRepo.findById(tenantId, id);
+  if (!booking) throw AppError.notFound('Booking not found');
+
+  if (booking.status === BOOKING_STATUS.COMPLETED || booking.status === BOOKING_STATUS.CANCELLED) {
+    throw AppError.badRequest(`Cannot edit a ${booking.status.toLowerCase()} booking`);
+  }
+
+  const patch = {};
+  for (const field of EDITABLE_FIELDS) {
+    if (data[field] !== undefined) patch[field] = data[field];
+  }
+  if (Object.keys(patch).length === 0) {
+    throw AppError.badRequest('No editable fields provided');
+  }
+  patch.updated_by = ctx.userId;
+
+  const updated = await bookingRepo.updateById(tenantId, id, patch);
+
+  await logActivity(
+    ctx,
+    booking.lead_id,
+    ACTIVITY_TYPE.BOOKING_UPDATED,
+    `Booking details updated (${Object.keys(patch).filter((k) => k !== 'updated_by').join(', ')})`,
+    { booking_id: id }
+  );
+
+  return updated;
+};
+
+// =============================================================================
 // UPDATE BOOKING STATUS
 // =============================================================================
 

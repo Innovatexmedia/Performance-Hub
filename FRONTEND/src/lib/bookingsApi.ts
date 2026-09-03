@@ -1,6 +1,6 @@
 import { apiClient } from '@/lib/apiClient';
 import type {
-  Booking, BookingInput, BookingListQuery, BookingKpis, RescheduleInput,
+  Booking, BookingInput, BookingListQuery, BookingKpis, BookingUpdateInput, RescheduleInput,
 } from '@/types/booking';
 
 /**
@@ -27,6 +27,14 @@ export const bookingsApi = {
   /** POST /api/bookings -- wrapped in { booking }. */
   create: (input: BookingInput) =>
     apiClient.post<{ booking: Booking }>('/bookings', input).then((r) => r.booking),
+
+  /**
+   * PATCH /api/bookings/:id -- generic edit (meeting_type, owner,
+   * meeting_link, duration, notes). Does NOT move meeting_date/time or
+   * status -- use reschedule/updateStatus for those. Wrapped in { booking }.
+   */
+  update: (id: string, input: BookingUpdateInput) =>
+    apiClient.patch<{ booking: Booking }>(`/bookings/${id}`, input).then((r) => r.booking),
 
   /** PATCH /api/bookings/:id/status -- wrapped in { booking }. */
   updateStatus: (id: string, status: string) =>

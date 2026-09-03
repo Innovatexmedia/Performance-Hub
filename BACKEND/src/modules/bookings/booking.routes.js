@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as controller from './booking.controller.js';
 import {
   validateCreateBooking,
+  validateUpdateBooking,
   validateUpdateStatus,
   validateReschedule,
   validateListQuery,
@@ -31,6 +32,7 @@ router
 
 // ── Resource routes
 router.get('/:id',                                                 controller.getBooking);
+router.patch('/:id',         requireRole('sales_user'), validateUpdateBooking, controller.updateBooking);
 router.patch('/:id/status',  requireRole('sales_user'), validateUpdateStatus, controller.updateStatus);
 router.post('/:id/reschedule', requireRole('sales_user'), validateReschedule,  controller.reschedule);
 

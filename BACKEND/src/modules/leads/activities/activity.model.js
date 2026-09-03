@@ -13,6 +13,19 @@ export const ACTIVITY_TYPE = Object.freeze({
   LEAD_ARCHIVED: 'Lead Archived',
   LEAD_RESTORED: 'Lead Restored',
   LEAD_CAPTURED: 'Lead Captured',
+  // Bookings module (booking.service.js) -- these 5 keys were referenced
+  // there (ACTIVITY_TYPE.BOOKING_CREATED etc.) but never actually defined
+  // on this enum. Since this schema's `type` field is required with no
+  // default, every one of those calls was throwing a Mongoose validation
+  // error that logActivity() silently swallows -- meaning no booking has
+  // ever produced a real lead-timeline entry. Adding the real keys here
+  // is the actual fix; booking.service.js itself needed no changes.
+  BOOKING_CREATED: 'Booking Created',
+  BOOKING_UPDATED: 'Booking Updated',
+  BOOKING_COMPLETED: 'Booking Completed',
+  BOOKING_CANCELLED: 'Booking Cancelled',
+  BOOKING_NO_SHOW: 'Booking No Show',
+  BOOKING_RESCHEDULED: 'Booking Rescheduled',
   // WhatsApp Inbox module
   WHATSAPP_ASSIGNED: 'WhatsApp Conversation Assigned',
   WHATSAPP_STATUS_CHANGED: 'WhatsApp Status Changed',

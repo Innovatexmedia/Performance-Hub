@@ -383,7 +383,7 @@ export function Integrations() {
             </div>
           ) : config.key === 'calcom' ? (
             <div className="space-y-4">
-              <p className="text-xs text-ink-500">This makes a real, live call to Cal.com's API to verify your key, then sets up a real webhook so new bookings, reschedules, and cancellations sync automatically.</p>
+              <p className="text-xs text-ink-500">This verifies your credentials against Cal.com's real API, then sets up a real webhook so new bookings, reschedules, and cancellations sync automatically.</p>
               <Field label="API Key" hint="Cal.com → Settings → Developer → API Keys"><Input type="password" value={calcomForm.apiKey} onChange={(e) => setCalcomForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'cal_live_...'} /></Field>
               {typeof config.config.accountEmail === 'string' && config.config.accountEmail && (
                 <div className="rounded-lg border border-ink-100 p-3 text-xs"><p className="text-ink-400">Connected account</p><p className="font-medium text-ink-900">{config.config.accountEmail}</p></div>
@@ -393,6 +393,36 @@ export function Integrations() {
                   Connected, but the real webhook setup failed — new bookings won't sync automatically yet. Click Sync manually, or check that your server's API_BASE_URL is publicly reachable and reconnect.
                 </div>
               )}
+              {config.status === 'connected' && (() => {
+                const bookingLink = `${window.location.origin}/book/${useAuthStore.getState().user?.tenantId ?? ''}`;
+                return (
+                  <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
+                    <p className="text-sm font-semibold text-ink-900">Public Booking Page</p>
+                    <p className="mt-1 text-xs text-ink-600">
+                      This is the page to share with customers. It shows your real, live availability and lets them
+                      book a meeting themselves — no login, no technical setup visible, just your branding and open times.
+                    </p>
+                    <div className="mt-3 flex gap-2">
+                      <Input readOnly value={bookingLink} className="bg-white text-xs" />
+                      <Button
+                        variant="secondary"
+                        onClick={() => window.open(bookingLink, '_blank', 'noopener,noreferrer')}
+                      >
+                        Open / Preview
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        onClick={() => {
+                          void navigator.clipboard.writeText(bookingLink);
+                          toast.success('Link copied', 'Share it in emails, your website, or social bios.');
+                        }}
+                      >
+                        Copy Link
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           ) : config.key === 'sendgrid_nurture' ? (
             <div className="space-y-4">

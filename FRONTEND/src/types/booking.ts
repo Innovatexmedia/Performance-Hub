@@ -65,6 +65,15 @@ export interface BookingInput {
   campaign?: string;
 }
 
+/** PATCH /api/bookings/:id body -- everything optional, at least one required. */
+export interface BookingUpdateInput {
+  meeting_type?: MeetingType;
+  assigned_user_id?: string;
+  meeting_link?: string;
+  duration_minutes?: number;
+  notes?: string;
+}
+
 export interface RescheduleInput {
   meeting_date: string;
   meeting_time: string;

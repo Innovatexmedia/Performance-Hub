@@ -144,6 +144,76 @@ export class CalcomProvider {
     return { webhookId: data.id };
   }
 
+  /**
+   * listEventTypes -- real GET /v2/event-types. Only hidden:false types
+   * are surfaced to the public booking widget -- Cal.com itself excludes
+   * hidden event types from a user's own public booking page, so this
+   * matches that same real behavior rather than showing everything.
+   */
+  async listEventTypes() {
+    const result = await this._request('GET', '/event-types');
+    const items = result.data || [];
+    return items
+      .filter((et) => !et.hidden)
+      .map((et) => ({
+        id: et.id,
+        title: et.title,
+        slug: et.slug,
+        description: et.description || '',
+        lengthInMinutes: et.lengthInMinutes || et.length || 30,
+      }));
+  }
+
+  /**
+   * getAvailableSlots -- real GET /v2/slots?eventTypeId=&start=&end=&timeZone=.
+   * `start`/`end` are date-only (YYYY-MM-DD) per Cal.com's real, current
+   * docs -- NOT full ISO datetimes (that's a different, older variant).
+   * Response nests slots per-date; individual slot objects have used
+   * both `start` and `time` as the field name across different Cal.com
+   * API dates/versions (confirmed from real, dated examples) -- reading
+   * both defensively rather than assuming one.
+   */
+  async getAvailableSlots({ eventTypeId, start, end, timeZone }) {
+    const params = new URLSearchParams();
+    params.set('eventTypeId', String(eventTypeId));
+    params.set('start', start);
+    params.set('end', end);
+    if (timeZone) params.set('timeZone', timeZone);
+
+    const result = await this._request('GET', `/slots?${params.toString()}`);
+    const byDate = result.data || {};
+    const slots = [];
+    for (const day of Object.keys(byDate)) {
+      for (const s of byDate[day] || []) {
+        const iso = s.start || s.time;
+        if (iso) slots.push(iso);
+      }
+    }
+    return slots.sort();
+  }
+
+  /**
+   * createBooking -- real POST /v2/bookings. Matches Cal.com's own
+   * documented minimal real request shape (start + eventTypeId +
+   * attendee{name,email,timeZone}) -- deliberately not attempting to
+   * guess every event type's possible custom bookingFieldsResponses;
+   * if a specific tenant's event type requires one, Cal.com's own 400
+   * error message (already surfaced by _request's real error handling)
+   * tells the caller exactly what's missing rather than us pre-guessing.
+   */
+  async createBooking({ eventTypeId, start, attendee }) {
+    const result = await this._request('POST', '/bookings', {
+      start,
+      eventTypeId,
+      attendee: {
+        name: attendee.name,
+        email: attendee.email,
+        timeZone: attendee.timeZone || 'UTC',
+      },
+    });
+    return result.data || result;
+  }
+
   async deleteWebhook(webhookId) {
     return this._request('DELETE', `/webhooks/${webhookId}`);
   }

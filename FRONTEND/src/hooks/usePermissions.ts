@@ -30,6 +30,7 @@ export function usePermissions() {
     },
     bookings: {
       canCreate: bookingPermissions.canCreate(role),
+      canUpdate: bookingPermissions.canUpdate(role),
       canUpdateStatus: bookingPermissions.canUpdateStatus(role),
       canReschedule: bookingPermissions.canReschedule(role),
     },

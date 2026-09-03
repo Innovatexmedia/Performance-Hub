@@ -53,6 +53,22 @@ export const createBooking = asyncHandler(async (req, res) => {
 });
 
 /**
+ * updateBooking — PATCH /api/bookings/:id
+ * Generic edit: meeting_type, assigned_user_id, meeting_link,
+ * duration_minutes, notes. Does not touch status or move the meeting
+ * time -- see updateStatus/reschedule below for those.
+ */
+export const updateBooking = asyncHandler(async (req, res) => {
+  const updated = await bookingService.updateBooking(
+    req.user.tenantId,
+    req.params.id,
+    req.body,
+    req.user
+  );
+  return sendSuccess(res, { booking: updated }, 'Booking updated successfully');
+});
+
+/**
  * updateStatus — PATCH /api/bookings/:id/status
  * Inline status update — the dropdown in the table (FRONTEND_SPEC §9).
  */

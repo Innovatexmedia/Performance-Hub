@@ -59,6 +59,43 @@ export const validateCreateBooking = [
 ];
 
 /**
+ * validateUpdateBooking — PATCH /api/bookings/:id
+ * Every field optional (partial edit), but at least one must be a real
+ * editable field -- service layer enforces "at least one provided".
+ * Deliberately excludes meeting_date/meeting_time/status -- those go
+ * through reschedule/status endpoints, which carry their own real side
+ * effects (new document / lead+deal updates respectively).
+ */
+export const validateUpdateBooking = [
+  param('id')
+    .isMongoId().withMessage('Booking ID must be a valid MongoDB ObjectId'),
+
+  body('meeting_type')
+    .optional()
+    .isIn(MEETING_TYPE_VALUES)
+    .withMessage(`meeting_type must be one of: ${MEETING_TYPE_VALUES.join(', ')}`),
+
+  body('assigned_user_id')
+    .optional()
+    .isMongoId().withMessage('assigned_user_id must be a valid MongoDB ObjectId'),
+
+  body('meeting_link')
+    .optional({ nullable: true, checkFalsy: true })
+    .isURL().withMessage('meeting_link must be a valid URL'),
+
+  body('duration_minutes')
+    .optional()
+    .isInt({ min: 15 }).withMessage('duration_minutes must be at least 15'),
+
+  body('notes')
+    .optional()
+    .isString()
+    .isLength({ max: 1000 }).withMessage('notes cannot exceed 1000 characters'),
+
+  handleValidation,
+];
+
+/**
  * validateUpdateStatus — PATCH /api/bookings/:id/status
  * Inline status update from the table dropdown (FRONTEND_SPEC §9).
  */

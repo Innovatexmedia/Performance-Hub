@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, CalendarDays, Clock, Check, X, RotateCcw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, CalendarDays, Clock, Check, X, RotateCcw, Pencil, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   PageHeader, Card, CardHeader, Button, Badge, Table, Th, Td, Tr, Modal, Field,
   Input, Select, Avatar, EmptyState,
@@ -13,7 +13,7 @@ import { usePermissions } from '@/hooks/usePermissions';
 import { leadsApi } from '@/lib/leadsApi';
 import { ApiError } from '@/lib/apiClient';
 import { SELECTABLE_STATUS_VALUES, MEETING_TYPE_VALUES } from '@/types/booking';
-import type { BookingStatus } from '@/types/booking';
+import type { BookingStatus, Booking } from '@/types/booking';
 import type { LeadListItem } from '@/types/lead';
 
 export function Bookings() {
@@ -28,12 +28,13 @@ export function Bookings() {
     limit: 20,
   }), [statusFilter, page]);
 
-  const { bookings, pagination, kpis, loading, error, refetch, createBooking, updateStatus, reschedule } = useBookings(query);
+  const { bookings, pagination, kpis, loading, error, refetch, createBooking, updateBooking, updateStatus, reschedule } = useBookings(query);
 
   useEffect(() => setPage(1), [statusFilter]);
 
   const [showAdd, setShowAdd] = useState(false);
   const [reschedulingId, setReschedulingId] = useState<string | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const handleStatusChange = async (id: string, status: BookingStatus) => {
     try {
@@ -114,15 +115,26 @@ export function Bookings() {
                       )}
                     </Td>
                     <Td>
-                      {permissions.bookings.canReschedule && b.status === 'Scheduled' && (
-                        <button
-                          onClick={() => setReschedulingId(b._id)}
-                          className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600"
-                          title="Reschedule"
-                        >
-                          <RotateCcw size={15} />
-                        </button>
-                      )}
+                      <div className="flex items-center gap-1">
+                        {permissions.bookings.canUpdate && b.status !== 'Completed' && b.status !== 'Cancelled' && (
+                          <button
+                            onClick={() => setEditingId(b._id)}
+                            className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600"
+                            title="Edit details"
+                          >
+                            <Pencil size={15} />
+                          </button>
+                        )}
+                        {permissions.bookings.canReschedule && b.status === 'Scheduled' && (
+                          <button
+                            onClick={() => setReschedulingId(b._id)}
+                            className="rounded p-1.5 text-ink-400 hover:bg-ink-100 hover:text-brand-600"
+                            title="Reschedule"
+                          >
+                            <RotateCcw size={15} />
+                          </button>
+                        )}
+                      </div>
                     </Td>
                   </Tr>
                 ))}
@@ -155,6 +167,14 @@ export function Bookings() {
           onClose={() => setReschedulingId(null)}
           onDone={() => { refetch(); setReschedulingId(null); }}
           reschedule={reschedule}
+        />
+      )}
+      {editingId && (
+        <EditBookingModal
+          booking={bookings.find((b) => b._id === editingId)!}
+          onClose={() => setEditingId(null)}
+          onDone={() => { refetch(); setEditingId(null); }}
+          updateBooking={updateBooking}
         />
       )}
     </div>
@@ -246,6 +266,79 @@ function AddBookingModal({ onClose, onCreated, createBooking }: {
           </Select>
         </Field>
         <p className="text-xs text-ink-400">Creating a booking moves the lead to <strong>Booked</strong> and updates the pipeline automatically.</p>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * EditBookingModal -- calls the generic PATCH /:id endpoint (meeting_type,
+ * owner, meeting_link, notes). Deliberately does NOT touch meeting_date/
+ * meeting_time/status -- those have their own dedicated flows
+ * (RescheduleModal / the inline status dropdown) with their own real
+ * side effects, which a generic edit must not duplicate or bypass.
+ */
+function EditBookingModal({ booking, onClose, onDone, updateBooking }: {
+  booking: Booking;
+  onClose: () => void;
+  onDone: () => void;
+  updateBooking: ReturnType<typeof useBookings>['updateBooking'];
+}) {
+  const { members } = useTeamMembers();
+  const [meetingType, setMeetingType] = useState(booking.meeting_type);
+  const [assignedUserId, setAssignedUserId] = useState(booking.assigned_user_id ?? '');
+  const [meetingLink, setMeetingLink] = useState(booking.meeting_link ?? '');
+  const [notes, setNotes] = useState(booking.notes ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setSaving(true);
+    try {
+      await updateBooking(booking._id, {
+        meeting_type: meetingType,
+        assigned_user_id: assignedUserId || undefined,
+        meeting_link: meetingLink || undefined,
+        notes,
+      });
+      toast.success('Booking updated');
+      onDone();
+    } catch (err) {
+      toast.error('Could not update booking', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Edit Booking"
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={() => void submit()} disabled={saving}>{saving ? 'Saving…' : 'Save changes'}</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <Field label="Meeting type">
+          <Select value={meetingType} onChange={(e) => setMeetingType(e.target.value as never)}>
+            {MEETING_TYPE_VALUES.map((t) => <option key={t}>{t}</option>)}
+          </Select>
+        </Field>
+        <Field label="Assigned to">
+          <Select value={assignedUserId} onChange={(e) => setAssignedUserId(e.target.value)}>
+            {members.map((u) => <option key={u.id} value={u.id}>{u.fullName}</option>)}
+          </Select>
+        </Field>
+        <Field label="Meeting link (optional)">
+          <Input value={meetingLink} onChange={(e) => setMeetingLink(e.target.value)} placeholder="https://..." />
+        </Field>
+        <Field label="Notes">
+          <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Internal notes about this booking" />
+        </Field>
+        <p className="text-xs text-ink-400">To change the date/time, use Reschedule instead — it preserves a real history of the change.</p>
       </div>
     </Modal>
   );

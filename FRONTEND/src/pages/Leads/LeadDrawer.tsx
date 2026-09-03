@@ -3,11 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import * as Icons from 'lucide-react';
 import { Sparkles, MessageCircle, CalendarPlus, CreditCard, Plus } from 'lucide-react';
 import { useStore } from '@/store/store';
+import { useAuthStore } from '@/store/authStore';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
 import { usePermissions } from '@/hooks/usePermissions';
 import { leadsApi } from '@/lib/leadsApi';
+import { bookingsApi } from '@/lib/bookingsApi';
 import { whatsappInboxApi } from '@/lib/whatsappInboxApi';
-import { Drawer, Badge, StatusBadge, Button, Avatar, Field, Textarea } from '@/components/ui';
+import { Drawer, Badge, StatusBadge, Button, Avatar, Field, Textarea, Modal, Input, Select } from '@/components/ui';
+import { MEETING_TYPE_VALUES } from '@/types/booking';
+import type { MeetingType } from '@/types/booking';
 import { formatCurrency, formatDateTime, timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -32,14 +36,16 @@ function TIcon({ type }: { type: string }) {
 
 export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () => void }) {
   const navigate = useNavigate();
-  const { nameById } = useTeamMembers();
+  const { nameById, members } = useTeamMembers();
   const permissions = usePermissions();
-  // Quick-action buttons below still create MOCK bookings/payments -- the
-  // Bookings and Payments modules haven't been migrated to the real API
-  // yet, so these are a known follow-up, not silently broken.
-  const { createBooking, createPayment } = useStore();
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  // Payment quick-action still creates a MOCK payment -- the Payments
+  // module hasn't been migrated to the real API yet, known follow-up.
+  // Booking now goes through the real API via BookCallModal below.
+  const { createPayment } = useStore();
 
   const [waLoading, setWaLoading] = useState(false);
+  const [showBookCall, setShowBookCall] = useState(false);
 
   const [details, setDetails] = useState<LeadDetails | null>(null);
   const [loading, setLoading] = useState(true);
@@ -143,7 +149,7 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
               <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => navigate('/qualification')}>
                 <Sparkles size={18} /> Qualify
               </Button>
-              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => { createBooking({ lead_id: lead.id, source: lead.source, campaign: lead.campaign, meeting_date: new Date(Date.now() + 2 * 86400000).toISOString() }); }}>
+              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => setShowBookCall(true)}>
                 <CalendarPlus size={18} /> Book Call
               </Button>
               <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => { createPayment({ lead_id: lead.id, amount: lead.value || 5000, source: lead.source, campaign: lead.campaign }); }}>
@@ -222,10 +228,96 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
               <span>Value: {formatCurrency(lead.value)}</span>
               <span>Last contacted: {timeAgo(lead.last_contacted_at)}</span>
             </div>
+
+            {showBookCall && (
+              <BookCallModal
+                leadId={lead.id}
+                leadName={lead.name}
+                defaultAssignedUserId={currentUserId}
+                members={members}
+                onClose={() => setShowBookCall(false)}
+                onBooked={() => { setShowBookCall(false); load(); }}
+              />
+            )}
           </>
         );
       })()}
     </Drawer>
+  );
+}
+
+/**
+ * BookCallModal -- real POST /api/bookings via bookingsApi.create(), same
+ * endpoint and side-effect chain (lead->Booked, deal create/advance,
+ * timeline, notification, tracking event, email) as the Bookings page's
+ * own AddBookingModal. Replaces the previous mock-store quick action.
+ * Owner defaults to the current logged-in user (self-assign) since this
+ * is a one-click action, but stays editable.
+ */
+function BookCallModal({ leadId, leadName, defaultAssignedUserId, members, onClose, onBooked }: {
+  leadId: string;
+  leadName: string;
+  defaultAssignedUserId?: string;
+  members: { id: string; fullName: string }[];
+  onClose: () => void;
+  onBooked: () => void;
+}) {
+  const [meetingDate, setMeetingDate] = useState(new Date(Date.now() + 86400000).toISOString().slice(0, 10));
+  const [meetingTime, setMeetingTime] = useState('14:00');
+  const [meetingType, setMeetingType] = useState<MeetingType>('Discovery Call');
+  const [assignedUserId, setAssignedUserId] = useState(defaultAssignedUserId ?? members[0]?.id ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    if (!assignedUserId) return toast.error('Select an owner');
+    setSaving(true);
+    try {
+      await bookingsApi.create({
+        lead_id: leadId,
+        assigned_user_id: assignedUserId,
+        meeting_date: meetingDate,
+        meeting_time: meetingTime,
+        meeting_type: meetingType,
+      });
+      toast.success('Call booked', leadName);
+      onBooked();
+    } catch (err) {
+      toast.error('Could not book call', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Book Call — ${leadName}`}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button onClick={() => void submit()} disabled={saving}>{saving ? 'Booking…' : 'Book call'}</Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Date"><Input type="date" value={meetingDate} onChange={(e) => setMeetingDate(e.target.value)} /></Field>
+          <Field label="Time"><Input type="time" value={meetingTime} onChange={(e) => setMeetingTime(e.target.value)} /></Field>
+        </div>
+        <Field label="Meeting type">
+          <Select value={meetingType} onChange={(e) => setMeetingType(e.target.value as MeetingType)}>
+            {MEETING_TYPE_VALUES.map((t) => <option key={t}>{t}</option>)}
+          </Select>
+        </Field>
+        <Field label="Assigned to">
+          <Select value={assignedUserId} onChange={(e) => setAssignedUserId(e.target.value)}>
+            {members.map((u) => <option key={u.id} value={u.id}>{u.fullName}</option>)}
+          </Select>
+        </Field>
+        <p className="text-xs text-ink-400">This moves the lead to <strong>Booked</strong> and updates the pipeline automatically.</p>
+      </div>
+    </Modal>
   );
 }
 
