@@ -71,7 +71,9 @@ export const TABS = [
   { id: 'templates', label: 'Templates' },
   { id: 'approval', label: 'Template Approval' },
   { id: 'campaigns', label: 'Campaigns' },
-  { id: 'nurture', label: 'Nurture Messages' },
+  // 'nurture' tab hidden for v1 launch -- feature stays in the codebase
+  // (Automation Rules' Start/Stop Nurture actions and Booking/Lead
+  // auto-enroll all still work), just not exposed in this plan's UI yet.
   { id: 'ai', label: 'AI Reply Assistant' },
   { id: 'broadcasts', label: 'Broadcasts' },
   { id: 'rules', label: 'Automation Rules' },

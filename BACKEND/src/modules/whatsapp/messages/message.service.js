@@ -6,6 +6,7 @@ import { Lead } from '../../leads/lead/lead.model.js';
 import { createTrackingEvent } from '../../attribution/attribution.service.js';
 import { TRACKING_EVENT_TYPE } from '../../attribution/attribution.constants.js';
 import { emitToTenant } from '../../../realtime/socket.js';
+import { assertSendAllowed } from '../submodules/consent/consentGuard.service.js';
 
 import { messageRepository } from './message.repository.js';
 import { conversationRepository } from '../conversations/conversation.repository.js';
@@ -230,12 +231,18 @@ export const messageService = {
     const conversation = await getConversationOrThrow(ctx, conversationId);
 
     // Opt-out guard -- DEVELOPER_HANDOFF.md's action table lists this FIRST
-    // for sendMessage: "opt-out guard (blocks + logs)". Was completely
-    // missing before this fix -- nothing anywhere checked opt_out_status,
-    // so opted-out leads could still receive real (simulated) sends.
+    // for sendMessage: "opt-out guard (blocks + logs)". Now uses the same
+    // retried, fail-closed WhatsAppConsent check as every other send path
+    // (Campaigns/Broadcasts/manual bulk send/Nurture/Automation Rules) --
+    // previously this was the one remaining path still reading the
+    // denormalised lead.opt_out_status boolean directly instead of the
+    // real-time source of truth.
+    let consentCheck = { allowed: true };
     if (conversation.lead_id) {
       const lead = await Lead.findOne({ _id: conversation.lead_id, tenant_id: ctx.tenantId });
-      if (lead?.opt_out_status) {
+      const phone = lead?.whatsapp_number || lead?.phone || conversation.phone;
+      consentCheck = await assertSendAllowed(ctx.tenantId, phone);
+      if (!consentCheck.allowed) {
         const blockedMessage = await messageRepository.create({
           tenant_id: ctx.tenantId,
           conversation_id: conversation._id,
@@ -249,7 +256,7 @@ export const messageService = {
           status: MESSAGE_STATUS.BLOCKED_BY_OPT_OUT,
         });
         await activityService.log(ctx, conversation.lead_id, ACTIVITY_TYPE.WHATSAPP_MESSAGE_SENT, {
-          message: 'Outbound WhatsApp message BLOCKED -- lead has opted out',
+          message: `Outbound WhatsApp message BLOCKED -- ${consentCheck.reason}`,
           meta: { conversation_id: String(conversation._id), message_id: String(blockedMessage._id), blocked: true },
         });
         emitToTenant(ctx.tenantId, 'whatsapp:message', {
