@@ -60,12 +60,7 @@ export const migratePlansToInr = async () => {
   for (const seed of DEFAULT_PLANS) {
     await Plan.updateOne(
       { key: seed.key, currency: 'USD' },
-      // razorpayPlanId is cleared too, defensively -- Razorpay Plans are
-      // immutable, so if one somehow got created under the old (broken)
-      // USD setup, it can't be reused; clearing it makes
-      // ensureRazorpayPlan create a fresh, correctly-priced one instead
-      // of silently reusing a wrong one.
-      { $set: { price: seed.price, currency: 'INR', razorpayPlanId: null } },
+      { $set: { price: seed.price, currency: 'INR' } },
     );
   }
 };
@@ -256,31 +251,13 @@ export const planService = {
 
     if (patch.isDefault === true) await Plan.updateMany({ _id: { $ne: id }, isDefault: true }, { isDefault: false });
 
-    // Razorpay Plans are IMMUTABLE once created -- editing price/currency
-    // here only changes what WE store; the already-created Razorpay Plan
-    // object still has the old price baked in forever. Without this, a
-    // Super Admin changing ₹999 -> ₹1 would silently keep charging ₹999,
-    // since createSubscriptionCheckout reuses razorpayPlanId if it's
-    // already set (see subscription.service.js's ensureRazorpayPlan).
-    // Clearing it here forces a fresh, correctly-priced Razorpay Plan to
-    // be created on the NEXT checkout -- existing subscribers already
-    // paying under the old Razorpay Plan are unaffected (correct: a
-    // price change shouldn't silently re-bill someone already
-    // subscribed), only future checkouts pick up the new price.
-    //
-    // Deliberately UNCONDITIONAL on price/currency being PRESENT in the
-    // patch, not on whether the value actually differs from what's
-    // stored -- the Super Admin edit form always submits the full
-    // price/currency fields on every save, whether the number visibly
-    // changed on screen or not, and there's no reliable way from here to
-    // tell "admin retyped the same number" apart from "value never
-    // changed". A stray extra Razorpay Plan created on a genuinely
-    // no-op save is a harmless, invisible cost; a stale cached ID that
-    // silently keeps charging the OLD price is not.
-    if (patch.price !== undefined || patch.currency !== undefined) {
-      plan.razorpayPlanId = null;
-    }
-
+    // Unlike the old Razorpay integration, there's no cached provider-side
+    // plan id to invalidate here -- Cashfree gets plan terms fresh on
+    // every checkout (see subscription.service.js), so an edited
+    // price/currency takes effect on the very next checkout automatically.
+    // Existing subscribers already on an active mandate are correctly
+    // unaffected either way -- Cashfree doesn't retroactively re-price a
+    // subscription that's already running.
     const editable = ['name', 'price', 'currency', 'limits', 'isActive', 'isDefault', 'sortOrder'];
     // track/tier/key are deliberately NOT editable after creation -- a plan
     // switching track (full <-> whatsapp_only) out from under tenants

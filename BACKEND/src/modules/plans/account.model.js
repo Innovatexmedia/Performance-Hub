@@ -47,11 +47,33 @@ const accountSchema = new Schema({
   trialEndsAt:           { type: Date, default: null },
   mrr:                    { type: Number, default: 0, min: 0 },
 
-  // ── Razorpay subscription (real recurring billing) ──────────────────────
-  razorpaySubscriptionId: { type: String, default: null },
-  razorpaySubscriptionStatus: {
+  // ── Cashfree subscription (real recurring mandate billing) ──────────────
+  // subscription_id is OURS -- we generate it when calling Create
+  // Subscription. cashfreeSubReferenceId is CASHFREE'S id for the same
+  // subscription -- the v2 Subscriptions API (confirmed to be what this
+  // account is actually provisioned on) requires THIS id, not our
+  // subscriptionId, for Fetch/Cancel calls (path param subReferenceId).
+  // Stored as a STRING, not Number -- Cashfree's subReferenceId can
+  // exceed Number.MAX_SAFE_INTEGER, and Mongoose's Number type is a JS
+  // double under the hood with the exact same precision ceiling, so a
+  // Number field would silently round it (see cashfree.js's
+  // parseCashfreeJson for the matching fix on the parsing side). It's
+  // never used arithmetically, only as an opaque id, so String loses
+  // nothing.
+  //
+  // cashfreeSubscriptionStatus values are Cashfree's own Subscription
+  // Status Change lifecycle values, kept uppercase exactly as Cashfree
+  // sends them so webhook handling never needs a translation table that
+  // could drift out of sync.
+  cashfreeSubscriptionId: { type: String, default: null },
+  cashfreeSubReferenceId: { type: String, default: null },
+  cashfreeSubscriptionStatus: {
     type: String,
-    enum: ['none', 'created', 'authenticated', 'active', 'pending', 'halted', 'cancelled', 'completed', 'expired'],
+    enum: [
+      'none', 'INITIALIZED', 'BANK_APPROVAL_PENDING', 'ACTIVE', 'ON_HOLD',
+      'COMPLETED', 'CUSTOMER_CANCELLED', 'CUSTOMER_PAUSED', 'EXPIRED',
+      'LINK_EXPIRED', 'CANCELLED', 'CARD_EXPIRED',
+    ],
     default: 'none',
   },
   pendingPlanId:    { type: Schema.Types.ObjectId, ref: 'Plan', default: null },

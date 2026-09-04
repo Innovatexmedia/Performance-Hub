@@ -181,21 +181,18 @@ const tenantSchema = new Schema(
     subscriptionStartDate: { type: Date,   default: null },
     subscriptionEndDate:   { type: Date,   default: null },
     trialEndsAt:           { type: Date,   default: null },
-    razorpayCustomerId:    { type: String, default: null },
+    cashfreeCustomerId:    { type: String, default: null },
     mrr:                   { type: Number, default: 0, min: 0 },
 
-    // ── Razorpay Subscription (real recurring billing) ────────────────────────
-    // razorpaySubscriptionStatus mirrors Razorpay's own subscription
-    // lifecycle exactly (their literal status strings) -- kept separate
-    // from `subscriptionStatus` above (our own trial/active/inactive
-    // concept) rather than overloading one field, since Razorpay's
-    // states (authenticated/pending/halted/etc.) don't map 1:1 onto ours.
-    // 'none' = never subscribed to a paid plan (still on a free/default
-    // plan, or hasn't started checkout).
-    razorpaySubscriptionId: { type: String, default: null },
-    razorpaySubscriptionStatus: {
+    // ── Cashfree Subscription -- LEGACY/UNUSED on Tenant ───────────────────────
+    // Real subscription state lives on Account now (see plans/account.model.js's
+    // cashfreeSubscriptionId/cashfreeSubscriptionStatus) -- these fields are
+    // never read or written anywhere else in this codebase; kept only for
+    // backward-compat with any pre-migration documents that still have them set.
+    cashfreeSubscriptionId: { type: String, default: null },
+    cashfreeSubscriptionStatus: {
       type: String,
-      enum: ['none', 'created', 'authenticated', 'active', 'pending', 'halted', 'cancelled', 'completed', 'expired'],
+      enum: ['none', 'INITIALIZED', 'BANK_APPROVAL_PENDING', 'ACTIVE', 'ON_HOLD', 'COMPLETED', 'CUSTOMER_CANCELLED', 'CUSTOMER_PAUSED', 'EXPIRED', 'LINK_EXPIRED', 'CANCELLED', 'CARD_EXPIRED'],
       default: 'none',
     },
     /** The plan a tenant is CHECKING OUT for, before payment is confirmed
@@ -228,7 +225,7 @@ const tenantSchema = new Schema(
     // ── Integration Flags ─────────────────────────────────────────────────────
     metaConnected:           { type: Boolean, default: false },
     whatsappConnected:       { type: Boolean, default: false },
-    razorpayConnected:       { type: Boolean, default: false },
+    cashfreeConnected:       { type: Boolean, default: false },
     openAIConnected:         { type: Boolean, default: false },
     googleCalendarConnected: { type: Boolean, default: false },
 
@@ -272,7 +269,7 @@ const tenantSchema = new Schema(
         if (ret.aiConfig) {
           delete ret.aiConfig.aiApiKey;
         }
-        delete ret.razorpayCustomerId;
+        delete ret.cashfreeCustomerId;
         return ret;
       },
     },

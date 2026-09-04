@@ -16,9 +16,9 @@ export type PaymentStatus = 'Pending' | 'Sent' | 'Paid' | 'Failed' | 'Refunded';
 
 export const PAYMENT_STATUS_VALUES: PaymentStatus[] = ['Pending', 'Sent', 'Paid', 'Failed', 'Refunded'];
 
-export type PaymentMethod = 'Card' | 'PayPal' | 'Stripe' | 'Bank Transfer' | 'UPI' | 'Razorpay' | 'Cash';
+export type PaymentMethod = 'Card' | 'PayPal' | 'Stripe' | 'Bank Transfer' | 'UPI' | 'Cashfree' | 'Cash';
 
-export const PAYMENT_METHOD_VALUES: PaymentMethod[] = ['Card', 'PayPal', 'Stripe', 'Bank Transfer', 'UPI', 'Razorpay', 'Cash'];
+export const PAYMENT_METHOD_VALUES: PaymentMethod[] = ['Card', 'PayPal', 'Stripe', 'Bank Transfer', 'UPI', 'Cashfree', 'Cash'];
 
 export type PaymentCurrency = 'USD' | 'INR' | 'EUR' | 'GBP';
 

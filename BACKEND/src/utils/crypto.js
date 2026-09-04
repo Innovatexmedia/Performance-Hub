@@ -8,7 +8,7 @@
  * PURPOSE
  * ───────
  * AES-256-GCM symmetric encryption for storing sensitive credentials at rest.
- * Used to encrypt: WhatsApp API keys, access tokens, AI API keys, Razorpay keys
+ * Used to encrypt: WhatsApp API keys, access tokens, AI API keys, Cashfree keys
  * before saving them to MongoDB.
  *
  * HOW IT FITS

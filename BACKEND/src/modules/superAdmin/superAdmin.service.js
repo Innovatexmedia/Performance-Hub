@@ -41,12 +41,12 @@ export const getPlatformDashboard = async () => {
     User.countDocuments({ status: { $ne: USER_STATUS.DELETED } }),
     // MRR moved to Account (see plans/account.model.js) -- aggregating
     // Tenant.mrr here would always return ~0 now, since nothing writes
-    // to that field anymore. razorpaySubscriptionStatus is Account's
+    // to that field anymore. cashfreeSubscriptionStatus is Account's
     // real "is this actually being paid for" signal, not the
     // trial/active/inactive subscriptionStatus (a brand-new trial
     // account is 'active' in that sense but pays nothing).
     AccountModel.aggregate([
-      { $match: { razorpaySubscriptionStatus: 'active' } },
+      { $match: { cashfreeSubscriptionStatus: 'ACTIVE' } },
       { $group: { _id: null, total: { $sum: '$mrr' } } },
     ]),
   ]);

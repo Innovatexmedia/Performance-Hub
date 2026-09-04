@@ -1,5 +1,3 @@
-
-
 import dotenv from 'dotenv';
 dotenv.config();
 
@@ -123,6 +121,26 @@ const config = {
   SHOPIFY_CLIENT_ID:     process.env.SHOPIFY_CLIENT_ID || null,
   SHOPIFY_CLIENT_SECRET: process.env.SHOPIFY_CLIENT_SECRET || null,
   SHOPIFY_OAUTH_REDIRECT_URI: process.env.SHOPIFY_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/shopify/oauth/callback`,
+
+  // Cashfree Subscriptions (real recurring mandate billing -- see
+  // config/cashfree.js). NOTE: the previous Razorpay integration read
+  // process.env.RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET directly in a couple
+  // of call sites but was NEVER assigned onto this `config` object, so
+  // `config.RAZORPAY_KEY_ID` was always undefined regardless of what was
+  // set in .env -- billing was silently unconfigured in every
+  // deployment. Fixed here: every Cashfree var actually lives on config.
+  CASHFREE_APP_ID:         process.env.CASHFREE_APP_ID || '',
+  CASHFREE_SECRET_KEY:     process.env.CASHFREE_SECRET_KEY || '',
+  // 'sandbox' or 'production'. Also read directly by the frontend's
+  // checkout SDK init (see settings.service.js's billing response) so
+  // the client-side widget and server-side API calls always target the
+  // same Cashfree environment.
+  CASHFREE_ENV:            process.env.CASHFREE_ENV || 'sandbox',
+  CASHFREE_API_VERSION:    process.env.CASHFREE_API_VERSION || '2025-01-01',
+  // Optional -- see cashfree.js's verifyWebhookSignature. Leave unset to
+  // verify with CASHFREE_SECRET_KEY, which is what Cashfree's own docs
+  // specify.
+  CASHFREE_WEBHOOK_SECRET: process.env.CASHFREE_WEBHOOK_SECRET || '',
 };
 
 if (!process.env.SUPER_ADMIN_SECRET) {
@@ -154,6 +172,14 @@ if (!process.env.SHOPIFY_CLIENT_ID || !process.env.SHOPIFY_CLIENT_SECRET) {
     '\n⚠️  Shopify is not fully configured.' +
     '\n   Set SHOPIFY_CLIENT_ID and SHOPIFY_CLIENT_SECRET (from your Shopify Partner app).' +
     '\n   Until both are set, tenants cannot connect a real Shopify store -- the Connect button will show a clear setup-required error.\n'
+  );
+}
+
+if (!process.env.CASHFREE_APP_ID || !process.env.CASHFREE_SECRET_KEY) {
+  console.warn(
+    '\n⚠️  Cashfree is not configured.' +
+    '\n   Set CASHFREE_APP_ID and CASHFREE_SECRET_KEY (from your Cashfree Merchant Dashboard).' +
+    '\n   Until both are set, paid plan checkout will return a clear setup-required error instead of starting a subscription.\n'
   );
 }
 

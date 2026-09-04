@@ -24,7 +24,7 @@ const buildCtx = (reqUser) => ({
 
 /**
  * getAccountForTenant — billing state (subscriptionStatus, trialEndsAt,
- * mrr, razorpaySubscriptionStatus) now lives on Account, not Tenant --
+ * mrr, cashfreeSubscriptionStatus) now lives on Account, not Tenant --
  * see plans/account.model.js. Tenant keeps denormalized COPIES of
  * plan/planTrack/maxUsers etc. (still safe to read directly off tenant
  * for those), but the subscription-lifecycle fields specifically only
@@ -184,12 +184,9 @@ export const getPlanPublic = async (tenantId) => {
  * directly, the same way every real SaaS billing page works -- not have
  * it manually assigned by a platform admin every time.
  *
- * No payment collected here yet (see Razorpay integration, still
- * pending) -- this just switches which Plan a tenant is on and re-syncs
- * denormalized limits/track via Tenant.js's upgradePlan()/pre-save hook,
- * same mechanism Super Admin's path already used. Once Razorpay is wired
- * in, this is the natural place to gate on "payment succeeded" before
- * calling upgradePlan() -- the plan-switching logic itself doesn't change.
+ * No payment collected here directly -- paid plans go through the real
+ * Cashfree checkout/verify flow (see subscription.service.js), which
+ * gates on "mandate is ACTIVE" before calling this same upgradePlan().
  */
 export const updateBillingPlan = async (tenantId, planId, reqUser) => {
   const ctx    = buildCtx(reqUser);
@@ -202,7 +199,7 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
   if (!targetPlan) throw AppError.notFound('Plan not found');
   if (!targetPlan.isActive) throw AppError.badRequest(`"${targetPlan.name}" is no longer available -- choose a different plan`);
   if (targetPlan.price > 0) {
-    // Paid plans go through the real Razorpay checkout/verify flow (see
+    // Paid plans go through the real Cashfree checkout/verify flow (see
     // subscription.service.js) so a switch can never happen without an
     // actual payment. This direct path stays open ONLY for $0 plans --
     // e.g. downgrading back to a free tier needs no payment at all.
@@ -230,7 +227,7 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
     plan:                  refreshedTenant.plan,
     plan_track:            refreshedTenant.planTrack,
     subscription_status:   account.subscriptionStatus,
-    razorpay_subscription_status: account.razorpaySubscriptionStatus,
+    cashfree_subscription_status: account.cashfreeSubscriptionStatus,
     trial_ends_at:         account.trialEndsAt || null,
     trial_days_remaining:  trialDaysRemaining(account),
     mrr:                   account.mrr || 0,
@@ -321,7 +318,7 @@ export const getAllSettings = async (tenantId) => {
       plan:                  tenant.plan,
       plan_track:            tenant.planTrack,
       subscription_status:   account?.subscriptionStatus || 'trial',
-      razorpay_subscription_status: account?.razorpaySubscriptionStatus || 'none',
+      cashfree_subscription_status: account?.cashfreeSubscriptionStatus || 'none',
       trial_ends_at:         account?.trialEndsAt || null,
       trial_days_remaining:  trialDaysRemaining(account),
       mrr:                   account?.mrr || 0,

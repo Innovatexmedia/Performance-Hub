@@ -509,7 +509,7 @@ const sendBookingAction = async (ctx, step, lead, variableContext) => {
  * SCOPE, stated honestly: CREATE_REQUEST creates a real InnovateX
  * payment record and its real shareable link (<CLIENT_URL>/pay/{id} --
  * the exact same link the Payments module itself generates), sent to
- * the lead. This does NOT call any real Razorpay/payment-gateway API --
+ * the lead. This does NOT call any real Cashfree/payment-gateway API --
  * none exists in this codebase. The link opens InnovateX's own payment
  * page, where a rep would confirm/mark it paid, same as the existing
  * Payments module's manual flow.

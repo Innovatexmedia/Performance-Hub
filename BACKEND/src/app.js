@@ -41,6 +41,8 @@ import integrationRoutes from './modules/integrations/integration.routes.js';
 import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js';
 import shopifyWebhookRoutes from './modules/shopify/shopifyWebhook.routes.js';
 import sendgridWebhookRoutes from './modules/email/sendgridWebhook.routes.js';
+import cashfreeWebhookRoutes from './modules/plans/cashfreeWebhook.routes.js';
+import billingReturnRoutes from './modules/plans/billingReturn.routes.js';
 import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
 // WhatsApp submodules (contacts, templates, template-approval, campaigns,
 // broadcasts, nurtures, ai, automation-rules, delivery-logs, consent,
@@ -53,6 +55,19 @@ import { errorHandler, notFoundHandler } from './shared/middlewares/errorHandler
 import { generalApiRateLimit }           from './shared/middlewares/rateLimit.middleware.js';
 
 const app = express();
+
+// PUBLIC, mounted BEFORE helmet/cors/body-parsers -- this is Cashfree's
+// hosted checkout page redirecting the customer's browser back after
+// the mandate flow. Confirmed in practice: that redirect is a genuine
+// cross-origin form POST from https://payments-test.cashfree.com (or
+// the production equivalent), which the global CORS policy below
+// correctly rejects for every other route -- but this one specifically
+// needs to accept it. Mounting it ahead of cors() means it's handled
+// (and a redirect response sent) before that middleware ever runs,
+// rather than trying to carve out a same-policy exception inside it.
+// The handler only reads req.query (never req.body) for exactly this
+// reason -- body-parser middleware hasn't run yet at this point either.
+app.use('/api/billing/cashfree-return', billingReturnRoutes);
 
 /*
 |--------------------------------------------------------------------------
@@ -188,6 +203,12 @@ app.use('/api/templates', templateRoutes);
 // generic GET /:id pattern would treat "google-ads" as an integration ID.
 app.use('/api/integrations/google-ads/oauth', googleAdsOAuthRoutes);
 app.use('/api/shopify/webhook', shopifyWebhookRoutes);
+// NOTE: the old '/api/webhooks/razorpay' equivalent (razorpayWebhook.routes.js)
+// was never actually mounted here -- that endpoint didn't exist in the
+// running app. Fixed for Cashfree: this one is real. Point Cashfree's
+// dashboard webhook config (Subscriptions section) at
+// `${API_BASE_URL}/api/webhooks/cashfree`.
+app.use('/api/webhooks/cashfree', cashfreeWebhookRoutes);
 app.use('/api/shopify/oauth', shopifyOAuthRoutes);
 app.use('/api/integrations', integrationRoutes);
 

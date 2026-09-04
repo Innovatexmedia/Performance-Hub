@@ -452,7 +452,7 @@ export function Nurture() {
                             <Input ref={fieldRef(step.stepNumber, 'paymentNote')} value={step.paymentNote || ''} onChange={(e) => updateStep(step.stepNumber, { paymentNote: e.target.value })} placeholder="Message shown with the payment link" />
                             <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'paymentNote')} onInsert={(v) => updateStep(step.stepNumber, { paymentNote: v })} />
                           </div>
-                          <p className="text-xs text-ink-500">Creates a real InnovateX payment record and sends its real link — this is not a Razorpay checkout, since no lead-facing Razorpay integration exists yet.</p>
+                          <p className="text-xs text-ink-500">Creates a real InnovateX payment record and sends its real link — this is not a Cashfree checkout, since no lead-facing Cashfree integration exists yet.</p>
                         </>
                       )}
                     </>

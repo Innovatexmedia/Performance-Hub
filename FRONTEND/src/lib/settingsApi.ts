@@ -81,16 +81,19 @@ export const settingsApi = {
   updateBillingPlan: (planId: string) =>
     apiClient.patch<BillingSettings>('/settings/billing/plan', { planId }),
 
-  /** Starts a real Razorpay subscription for a paid plan. Does NOT
-   * change the tenant's plan yet -- returns what's needed to open
-   * Razorpay Checkout; the plan only actually switches once
-   * verifySubscriptionPayment confirms real payment. */
+  /** Starts a real Cashfree subscription mandate for a paid plan. Does
+   * NOT change the tenant's plan yet -- returns an authLink to redirect
+   * the browser to (this account's Cashfree API version uses a plain
+   * redirect, not a JS checkout widget); the plan only actually switches
+   * once verifySubscriptionPayment confirms the mandate is ACTIVE. */
   createSubscriptionCheckout: (planId: string) =>
-    apiClient.post<{ subscriptionId: string; keyId: string; planName: string; amount: number; currency: string }>('/settings/billing/subscribe', { planId }),
+    apiClient.post<{ subscriptionId: string; authLink: string; planName: string; amount: number; currency: string }>('/settings/billing/subscribe', { planId }),
 
-  /** Called right after Razorpay Checkout's client-side success handler
-   * fires -- verifies the payment server-side, then applies the switch. */
-  verifySubscriptionPayment: (payload: { razorpay_payment_id: string; razorpay_subscription_id: string; razorpay_signature: string }) =>
+  /** Called right after Cashfree Checkout's widget closes on the client
+   * (success, failure, or dismissal -- the widget alone can't tell us
+   * which). Verifies the subscription's real status server-side, direct
+   * from Cashfree, before applying the switch. */
+  verifySubscriptionPayment: (payload: { subscriptionId: string }) =>
     apiClient.post<{ success: boolean; plan: string }>('/settings/billing/subscribe/verify', payload),
 
   updateQualification: (questions: string[]) =>

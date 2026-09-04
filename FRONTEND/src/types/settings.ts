@@ -76,15 +76,15 @@ export interface BillingSettings {
   plan: string;
   plan_track: 'full' | 'whatsapp_only';
   subscription_status: string;
-  /** Razorpay's own lifecycle status (see subscription.service.js) --
+  /** Cashfree's own mandate lifecycle status (see subscription.service.js) --
    * 'none' for a tenant that's never had a paid subscription (e.g. still
-   * on trial), vs 'halted'/'cancelled'/'expired' for one that genuinely
-   * lapsed. Distinct from `subscription_status` above (our own simpler
-   * trial/active/inactive concept) specifically so the UI can tell
-   * "brand new, never paid" apart from "payment actually failed" --
-   * conflating the two was exactly what caused a normal trial workspace
-   * to show a false "payment failed" warning. */
-  razorpay_subscription_status?: string;
+   * on trial), vs a lapsed status (e.g. 'CUSTOMER_CANCELLED'/'EXPIRED')
+   * for one that genuinely lapsed. Distinct from `subscription_status`
+   * above (our own simpler trial/active/inactive concept) specifically
+   * so the UI can tell "brand new, never paid" apart from "payment
+   * actually failed" -- conflating the two was exactly what caused a
+   * normal trial workspace to show a false "payment failed" warning. */
+  cashfree_subscription_status?: string;
   trial_ends_at: string | null;
   trial_days_remaining: number;
   mrr: number;

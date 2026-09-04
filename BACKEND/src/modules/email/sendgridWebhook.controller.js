@@ -13,7 +13,7 @@
  *     ECDSA/SHA256 (P-256 curve) against the base64 public key SendGrid
  *     gives you when Signed Event Webhook is enabled on that account
  *   - Requires the RAW, unparsed body -- same reasoning as every other
- *     real webhook in this app (Shopify/Cal.com/Meta/Razorpay): JSON
+ *     real webhook in this app (Shopify/Cal.com/Meta/Cashfree): JSON
  *     re-serialization can change byte-for-byte content and silently
  *     break signature verification
  *

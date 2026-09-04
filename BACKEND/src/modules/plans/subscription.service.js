@@ -1,6 +1,6 @@
 /**
  * =============================================================================
- * InnovateX Revenue OS — Subscription Service (Razorpay)
+ * InnovateX Revenue OS — Subscription Service (Cashfree)
  * =============================================================================
  *
  * FILE: src/modules/plans/subscription.service.js
@@ -15,10 +15,34 @@
  * result to EVERY tenant that account covers, not just the one that
  * started the flow.
  *
+ * WHICH CASHFREE API THIS IS WRITTEN AGAINST
+ * ───────────────────────────────────────────
+ * Cashfree has two live Subscriptions API families (see cashfree.js's
+ * comment for the full explanation). This account was confirmed via
+ * real request/response testing to be on the v2 family
+ * (`/api/v2/subscriptions/...`), NOT the newer hosted-checkout-widget
+ * one. Within that family there are also two create-subscription
+ * endpoints: `seamless` (for merchants building their OWN payment UI --
+ * its authLink only appears after you've already submitted specific
+ * payment details yourself) and `nonSeamless` (Cashfree hosts the whole
+ * payment-method picker + auth flow, and hands back a ready-to-use
+ * authLink directly in the create response). This uses `nonSeamless` --
+ * create returns `authLink` immediately, the customer's browser
+ * navigates there directly (a real page redirect, not a JS modal), and
+ * there's no client-side JS SDK involved at all on this path -- see
+ * cashfreeCheckout.ts on the frontend.
+ *
+ * verifySubscriptionPayment doesn't get a client-side payment signature
+ * to check either (this API doesn't hand one back). Instead it
+ * re-fetches the subscription's real status directly from Cashfree
+ * using our own credentials -- strictly more trustworthy than verifying
+ * a client-supplied signature, since there's nothing client-supplied to
+ * trust at all.
+ *
  * THE CORE IDEA — locking/unlocking reuses existing enforcement, not new code
  * ─────────────────────────────────────────────────────────────────────────
  * "Lock" doesn't mean a new flag threaded through every permission check.
- * It means: when a subscription lapses (halted/cancelled/expired),
+ * It means: when a subscription lapses (on-hold/cancelled/expired),
  * reassign the ACCOUNT back to the platform default plan via the SAME
  * upgradePlan() every other plan change already goes through, then sync
  * every tenant under it. That re-syncs maxUsers/maxLeads/maxCampaigns/
@@ -32,14 +56,25 @@ import Tenant from '../auth/models/Tenant.js';
 import Account from './account.model.js';
 import Plan from './plan.model.js';
 import { getDefaultPlan, syncTenantsFromAccount } from './plan.service.js';
-import { getRazorpayClient, isRazorpayConfigured, verifyPaymentSignature } from '../../config/razorpay.js';
+import { cashfreeV2Request, isCashfreeConfigured, CashfreeApiError } from '../../config/cashfree.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 import { SUBSCRIPTION_STATUS } from '../auth/constants/auth.constants.js';
+import config from '../../config/config.js';
 
-const asRazorpayError = (err, fallback = 'Payment provider error') => {
-  const description = err?.error?.description || err?.description;
-  return AppError.badRequest(description || fallback);
+const asCashfreeError = (err, fallback = 'Payment provider error') => {
+  if (err instanceof CashfreeApiError) return AppError.badRequest(err.message || fallback);
+  return AppError.badRequest(fallback);
 };
+
+/** Statuses that mean "this mandate is genuinely up and running" -- see
+ * handleWebhookEvent's wasActive check for why this distinction matters. */
+const ACTIVE_STATUSES = new Set(['ACTIVE']);
+/** Terminal/lapsed statuses that should lock the account back to the
+ * default plan IF the subscription was previously active. */
+const LAPSED_STATUSES = new Set([
+  'ON_HOLD', 'COMPLETED', 'CUSTOMER_CANCELLED', 'CUSTOMER_PAUSED',
+  'EXPIRED', 'LINK_EXPIRED', 'CANCELLED', 'CARD_EXPIRED',
+]);
 
 /** Resolves a tenantId to its owning Account -- every function below needs this first. */
 const resolveAccountForTenant = async (tenantId) => {
@@ -51,45 +86,61 @@ const resolveAccountForTenant = async (tenantId) => {
   return { tenant, account };
 };
 
-/**
- * ensureRazorpayPlan — creates the Razorpay Plan for our Plan document if
- * it doesn't have one yet. Razorpay Plans are immutable once created, so
- * this only ever creates, never updates.
- */
-const ensureRazorpayPlan = async (plan) => {
-  if (plan.razorpayPlanId) return plan.razorpayPlanId;
+/** Cashfree needs a name/email/phone for the mandate -- pulled from the
+ * account's owning user, same person every checkout on this account
+ * ultimately bills to. */
+const getCustomerDetailsForAccount = async (account) => {
+  const User = (await import('../auth/models/User.js')).default;
+  const owner = await User.findById(account.ownerUserId);
+  if (!owner) throw AppError.notFound('Billing account owner not found');
 
-  const razorpay = getRazorpayClient();
-  let created;
-  try {
-    created = await razorpay.plans.create({
-      period: 'monthly',
-      interval: 1,
-      item: {
-        name: plan.name,
-        amount: Math.round(plan.price * 100),
-        currency: plan.currency || 'INR',
-      },
-      notes: { innovatex_plan_id: String(plan._id), innovatex_plan_key: plan.key },
-    });
-  } catch (err) {
-    throw asRazorpayError(err, 'Could not create the Razorpay plan');
-  }
-
-  plan.razorpayPlanId = created.id;
-  await plan.save();
-  return created.id;
+  return {
+    customerName: `${owner.firstName || ''} ${owner.lastName || ''}`.trim() || 'Customer',
+    customerEmail: owner.email,
+    // Cashfree expects a bare 10-digit Indian mobile number; strip any
+    // country code / formatting the user profile might have stored.
+    customerPhone: (owner.phoneNumber || '').replace(/\D/g, '').slice(-10) || '9999999999',
+  };
 };
 
+/** A fresh, unique subscriptionId per checkout attempt -- Cashfree
+ * requires the merchant to supply this id (it's not autogenerated), and
+ * it must not collide with a previous attempt. */
+const generateSubscriptionId = (account) => `sub_${String(account._id)}_${Date.now()}`;
+
 /**
- * createSubscriptionCheckout — starts a Razorpay subscription for the
- * account this tenant belongs to. Does NOT change any plan/limits yet --
- * that only happens once verifySubscriptionPayment (or the webhook)
- * confirms real payment.
+ * sanitizePlanName — Cashfree's planInfo.planName field rejects anything
+ * outside alphanumerics/spaces/a few special characters (confirmed in
+ * practice: an em dash in a plan name like "Growth — WhatsApp Panel"
+ * gets rejected with "planInfo.planName: allows only alpha numerics &
+ * few special characters"). Plan names in this app are display strings a
+ * Super Admin can freely edit (see plan.service.js), so this can't
+ * assume they're always clean -- normalize before ever sending to
+ * Cashfree, without touching what's actually stored/displayed anywhere
+ * else.
+ */
+const sanitizePlanName = (name) =>
+  name
+    .replace(/[\u2012-\u2015\u2212]/g, '-') // em/en dashes, minus sign -> plain hyphen
+    .replace(/[^a-zA-Z0-9 _-]/g, '')        // drop anything else Cashfree might reject
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** Cashfree's v2 API wants "YYYY-MM-DD HH:mm:ss", not ISO 8601. */
+const toCashfreeDateTime = (date) => date.toISOString().slice(0, 19).replace('T', ' ');
+
+/**
+ * createSubscriptionCheckout — starts a Cashfree subscription mandate for
+ * the account this tenant belongs to. Does NOT change any plan/limits
+ * yet -- that only happens once verifySubscriptionPayment (or the
+ * webhook) confirms the mandate is actually ACTIVE.
+ *
+ * Returns an `authLink` -- the frontend does a plain browser redirect to
+ * it (see cashfreeCheckout.ts), not a JS widget call.
  */
 export const createSubscriptionCheckout = async (tenantId, planId, reqUser) => {
-  if (!isRazorpayConfigured()) {
-    throw AppError.badRequest('Payments are not configured on this server yet -- set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.');
+  if (!isCashfreeConfigured()) {
+    throw AppError.badRequest('Payments are not configured on this server yet -- set CASHFREE_APP_ID and CASHFREE_SECRET_KEY.');
   }
 
   const { account } = await resolveAccountForTenant(tenantId);
@@ -101,74 +152,84 @@ export const createSubscriptionCheckout = async (tenantId, planId, reqUser) => {
     throw AppError.badRequest('This plan is free -- use the direct plan switch, not checkout.');
   }
 
-  const razorpay = getRazorpayClient();
-
   // Cancel any existing ACTIVE subscription before starting a new one --
   // without this, switching plans while already subscribed leaves the
-  // OLD Razorpay subscription running (still billing) at the same time
-  // as the new one, since account.razorpaySubscriptionId was previously
-  // just overwritten with no cleanup. cancel_at_cycle_end: false stops
-  // it immediately rather than letting one more cycle bill on the plan
-  // the customer is actively leaving.
-  if (account.razorpaySubscriptionId && account.razorpaySubscriptionStatus === 'active') {
+  // OLD Cashfree mandate running (still billing) at the same time as the
+  // new one.
+  if (account.cashfreeSubReferenceId && account.cashfreeSubscriptionStatus === 'ACTIVE') {
     try {
-      await razorpay.subscriptions.cancel(account.razorpaySubscriptionId, false);
+      await cashfreeV2Request(`/api/v2/subscriptions/${account.cashfreeSubReferenceId}/cancel`, { method: 'POST' });
     } catch (err) {
-      // Already cancelled/expired on Razorpay's side (e.g. via a webhook
+      // Already cancelled/expired on Cashfree's side (e.g. via a webhook
       // we haven't processed yet) is fine to ignore -- anything else
       // should stop the new checkout rather than risk two concurrent
-      // subscriptions both charging this account.
-      const alreadyGone = err?.error?.description && /already|cancel/i.test(err.error.description);
-      if (!alreadyGone) throw asRazorpayError(err, 'Could not cancel the existing subscription before switching plans');
+      // mandates both billing this account.
+      const alreadyGone = err instanceof CashfreeApiError && /already|not.*found|invalid/i.test(err.message || '');
+      if (!alreadyGone) throw asCashfreeError(err, 'Could not cancel the existing subscription before switching plans');
     }
   }
 
-  // TEMP DIAGNOSTIC -- remove once the account-level billing migration is
-  // fully confirmed stable.
-  const cachedIdBefore = plan.razorpayPlanId;
-  console.log('[checkout] plan from DB:', {
-    name: plan.name, price: plan.price, currency: plan.currency,
-    cachedRazorpayPlanId: cachedIdBefore, accountId: String(account._id),
-  });
+  const customerDetails = await getCustomerDetailsForAccount(account);
+  const subscriptionId = generateSubscriptionId(account);
 
-  let razorpayPlanId = await ensureRazorpayPlan(plan);
-  console.log('[checkout] razorpayPlanId actually used:', razorpayPlanId, cachedIdBefore === razorpayPlanId ? '(REUSED cached)' : '(newly created just now)');
+  const tenYearsOut = new Date();
+  tenYearsOut.setFullYear(tenYearsOut.getFullYear() + 10);
 
-  const buildSubscriptionPayload = (rzpPlanId) => ({
-    plan_id: rzpPlanId,
-    customer_notify: 1,
-    total_count: 120,
-    notes: {
-      innovatex_account_id: String(account._id),
-      innovatex_plan_id: String(plan._id),
-      created_by_user_id: String(reqUser?.sub || ''),
+  const payload = {
+    subscriptionId,
+    ...customerDetails,
+    // Points at the BACKEND, not the frontend -- Cashfree redirects the
+    // browser here via an HTML form POST (confirmed in practice), not a
+    // normal GET link. A frontend dev server (Vite, or most static
+    // hosts) has no route/middleware for an arbitrary POST and will
+    // 404 it. The backend has a real Express route for this
+    // (billingReturn.routes.js) that accepts the POST, verifies the
+    // subscription server-to-server, then 302-redirects the browser to
+    // a plain GET on the frontend, which any dev/static server handles
+    // fine. subscriptionId is duplicated as a query param (not relying
+    // solely on the POST body) so it survives regardless of exactly how
+    // Cashfree's redirect ends up shaped.
+    returnUrl: `${config.API_BASE_URL}/api/billing/cashfree-return?subscriptionId=${subscriptionId}`,
+    // A nominal ₹1 authorization charge -- standard practice for
+    // e-mandate/UPI Autopay setup: this confirms the mandate works
+    // before real recurring billing starts on it. Refunded automatically
+    // by Cashfree per their mandate-authorization flow, not something
+    // this app needs to handle.
+    authAmount: 1,
+    expiresOn: toCashfreeDateTime(tenYearsOut),
+    planInfo: {
+      type: 'PERIODIC',
+      planName: sanitizePlanName(plan.name),
+      recurringAmount: plan.price,
+      maxAmount: plan.price,
+      intervals: 1,
+      intervalType: 'month',
     },
-  });
+    notificationChannels: ['EMAIL'],
+  };
 
-  let subscription;
+  let created;
   try {
-    subscription = await razorpay.subscriptions.create(buildSubscriptionPayload(razorpayPlanId));
+    created = await cashfreeV2Request('/api/v2/subscriptions/nonSeamless/subscription', { method: 'POST', body: payload });
   } catch (err) {
-    const looksLikeStalePlanId = err?.statusCode === 400 && /not.*found|invalid/i.test(err?.error?.description || '');
-    if (!looksLikeStalePlanId) throw asRazorpayError(err, 'Could not start the subscription');
-
-    plan.razorpayPlanId = null;
-    razorpayPlanId = await ensureRazorpayPlan(plan);
-    try {
-      subscription = await razorpay.subscriptions.create(buildSubscriptionPayload(razorpayPlanId));
-    } catch (retryErr) {
-      throw asRazorpayError(retryErr, 'Could not start the subscription');
-    }
+    throw asCashfreeError(err, 'Could not start the subscription');
   }
 
-  account.razorpaySubscriptionId = subscription.id;
-  account.razorpaySubscriptionStatus = subscription.status;
+  const subReferenceId = created?.data?.subReferenceId;
+  const authLink = created?.data?.authLink;
+  if (!subReferenceId || !authLink) {
+    throw AppError.badRequest('Cashfree did not return a usable subscription -- please try again.');
+  }
+
+  account.cashfreeSubscriptionId = subscriptionId;
+  account.cashfreeSubReferenceId = subReferenceId;
+  account.cashfreeSubscriptionStatus = created?.data?.status || 'INITIALIZED';
   account.pendingPlanId = plan._id;
   await account.save();
 
   return {
-    subscriptionId: subscription.id,
-    keyId: process.env.RAZORPAY_KEY_ID,
+    subscriptionId,
+    authLink,
     planName: plan.name,
     amount: plan.price,
     currency: plan.currency || 'INR',
@@ -176,38 +237,55 @@ export const createSubscriptionCheckout = async (tenantId, planId, reqUser) => {
 };
 
 /**
- * verifySubscriptionPayment — applies the plan switch to the ACCOUNT and
- * propagates it to every tenant that account covers, not just the one
- * that initiated checkout.
+ * finalizeVerification — the actual "check with Cashfree and apply the
+ * plan switch" logic, keyed only by OUR subscriptionId (via the
+ * Account it's stored on) -- no tenantId/reqUser needed. Shared by two
+ * callers with different trust levels:
+ *  - verifySubscriptionPayment (below): an authenticated frontend call,
+ *    additionally checks the subscription belongs to THIS caller's
+ *    account before delegating here.
+ *  - billingReturn.controller.js: Cashfree's own unauthenticated
+ *    redirect after the mandate flow -- there's no logged-in user in
+ *    that request at all, so account is resolved purely from the
+ *    subscriptionId Cashfree hands back, which is safe because the
+ *    actual authorization decision is never taken from anything the
+ *    browser/Cashfree redirect claims -- it's always a fresh re-fetch
+ *    from Cashfree's API using our own server-side credentials.
  */
-export const verifySubscriptionPayment = async (tenantId, payload, reqUser) => {
-  const { razorpay_payment_id, razorpay_subscription_id, razorpay_signature } = payload;
-  if (!razorpay_payment_id || !razorpay_subscription_id || !razorpay_signature) {
-    throw AppError.badRequest('Missing payment confirmation fields');
+const finalizeVerification = async (subscriptionId) => {
+  const account = await Account.findOne({ cashfreeSubscriptionId: subscriptionId });
+  if (!account || !account.cashfreeSubReferenceId) {
+    throw AppError.notFound('Subscription not found');
   }
 
-  const { account } = await resolveAccountForTenant(tenantId);
-
-  if (account.razorpaySubscriptionId !== razorpay_subscription_id) {
-    throw AppError.badRequest('This subscription does not belong to this billing account');
+  let subscription;
+  try {
+    const fetched = await cashfreeV2Request(`/api/v2/subscriptions/${account.cashfreeSubReferenceId}`);
+    subscription = fetched?.subscription;
+  } catch (err) {
+    throw asCashfreeError(err, 'Could not verify the subscription with Cashfree');
   }
 
-  const valid = verifyPaymentSignature({ razorpay_payment_id, razorpay_subscription_id, razorpay_signature });
-  if (!valid) {
-    throw AppError.badRequest('Payment could not be verified -- please try again or contact support');
+  const status = subscription?.status;
+  account.cashfreeSubscriptionStatus = status || account.cashfreeSubscriptionStatus;
+
+  if (!ACTIVE_STATUSES.has(status)) {
+    await account.save();
+    throw AppError.badRequest(
+      status === 'BANK_APPROVAL_PENDING' || status === 'INITIALIZED'
+        ? 'The mandate authorization is still pending -- please complete it, or try again.'
+        : 'Payment could not be verified -- please try again or contact support'
+    );
   }
 
   if (!account.pendingPlanId) {
     // Webhook may have already completed this exact upgrade before this
-    // call landed -- Razorpay fires both, either can win the race.
-    if (account.razorpaySubscriptionStatus === 'active') {
-      return { success: true, plan: account.plan };
-    }
-    throw AppError.badRequest('No pending plan found for this subscription');
+    // call landed -- Cashfree fires both, either can win the race.
+    await account.save();
+    return { success: true, plan: account.plan };
   }
 
   await account.upgradePlan(account.pendingPlanId);
-  account.razorpaySubscriptionStatus = 'active';
   account.pendingPlanId = null;
   await account.save();
   await syncTenantsFromAccount(account._id);
@@ -216,15 +294,45 @@ export const verifySubscriptionPayment = async (tenantId, payload, reqUser) => {
 };
 
 /**
+ * verifySubscriptionByCashfreeId — used by the public return-redirect
+ * handler (billingReturn.controller.js), where there's no authenticated
+ * user/tenant in the request at all.
+ */
+export const verifySubscriptionByCashfreeId = (subscriptionId) => finalizeVerification(subscriptionId);
+
+/**
+ * verifySubscriptionPayment — the authenticated, frontend-callable
+ * version. Kept for any path that still lands with the subscriptionId
+ * known client-side and a logged-in user (e.g. a manual retry); the
+ * normal Cashfree-redirect flow now goes through billingReturn instead,
+ * which already finished verification server-to-server before the
+ * browser ever gets back to the frontend.
+ */
+export const verifySubscriptionPayment = async (tenantId, payload) => {
+  const { subscriptionId } = payload;
+  if (!subscriptionId) {
+    throw AppError.badRequest('Missing subscriptionId');
+  }
+
+  const { account } = await resolveAccountForTenant(tenantId);
+
+  if (account.cashfreeSubscriptionId !== subscriptionId || !account.cashfreeSubReferenceId) {
+    throw AppError.badRequest('This subscription does not belong to this billing account');
+  }
+
+  return finalizeVerification(subscriptionId);
+};
+
+/**
  * lockToDefaultPlan — the actual "lock" action. Reassigns the ACCOUNT
  * back to the platform default plan, then propagates that to every
  * tenant it covers. Called ONLY when a subscription that was genuinely
- * ACTIVE lapses (halted/cancelled/expired) -- see the caller's check
- * below. Explicitly overrides subscriptionStatus AFTER upgradePlan()
- * (which unconditionally sets it to 'active', correct for a genuine
- * paid activation, wrong here) -- otherwise a locked-back-to-default
- * account would misleadingly show "active" in the UI at the same time
- * razorpaySubscriptionStatus correctly says cancelled/halted/expired.
+ * ACTIVE lapses -- see the caller's check below. Explicitly overrides
+ * subscriptionStatus AFTER upgradePlan() (which unconditionally sets it
+ * to 'active', correct for a genuine paid activation, wrong here) --
+ * otherwise a locked-back-to-default account would misleadingly show
+ * "active" in the UI at the same time cashfreeSubscriptionStatus
+ * correctly says a lapsed status.
  */
 const lockToDefaultPlan = async (account) => {
   const defaultPlan = await getDefaultPlan();
@@ -235,57 +343,71 @@ const lockToDefaultPlan = async (account) => {
 };
 
 /**
- * handleWebhookEvent — looks up the ACCOUNT by razorpaySubscriptionId
+ * handleWebhookEvent — looks up the ACCOUNT by cashfreeSubscriptionId
  * (not a tenant -- a subscription belongs to an account now), and every
  * change here propagates to every tenant that account covers.
+ *
+ * Only SUBSCRIPTION_STATUS_CHANGE actually drives plan changes --
+ * SUBSCRIPTION_PAYMENT_SUCCESS/FAILED fire per individual recurring
+ * charge and don't by themselves mean the mandate's overall status
+ * changed (Cashfree retries failed charges before ever moving the
+ * subscription to a lapsed status), so this deliberately ignores them
+ * for plan-switching purposes.
  */
 export const handleWebhookEvent = async (event) => {
-  const subscriptionEntity = event?.payload?.subscription?.entity;
-  if (!subscriptionEntity) return;
+  if (event?.type !== 'SUBSCRIPTION_STATUS_CHANGE') return;
 
-  const account = await Account.findOne({ razorpaySubscriptionId: subscriptionEntity.id });
+  const subscriptionDetails = event?.data?.subscription_details;
+  const subscriptionId = subscriptionDetails?.subscription_id || subscriptionDetails?.gateway_subscription_id;
+  if (!subscriptionId) return;
+
+  const account = await Account.findOne({ cashfreeSubscriptionId: subscriptionId });
   if (!account) return;
 
-  switch (event.event) {
-    case 'subscription.activated':
-    case 'subscription.charged': {
-      account.razorpaySubscriptionStatus = 'active';
-      if (subscriptionEntity.current_end) {
-        account.currentPeriodEnd = new Date(subscriptionEntity.current_end * 1000);
-      }
-      if (account.pendingPlanId) {
-        await account.upgradePlan(account.pendingPlanId);
-        account.pendingPlanId = null;
-      }
-      await account.save();
-      await syncTenantsFromAccount(account._id);
-      break;
+  const status = subscriptionDetails.subscription_status;
+  const wasActive = account.cashfreeSubscriptionStatus === 'ACTIVE';
+
+  if (ACTIVE_STATUSES.has(status)) {
+    account.cashfreeSubscriptionStatus = status;
+    if (subscriptionDetails.subscription_expiry_time) {
+      account.currentPeriodEnd = new Date(subscriptionDetails.subscription_expiry_time);
     }
-    case 'subscription.halted':
-    case 'subscription.cancelled':
-    case 'subscription.expired': {
-      // Only actually LOCK the account (reassign every tenant back to
-      // the default plan) if a real, previously-ACTIVE subscription
-      // just lapsed -- a subscription that never successfully activated
-      // in the first place (e.g. the very first payment failed at the
-      // bank) has nothing to "lock back" from: the account's plan was
-      // never changed away from whatever it already was, so downgrading
-      // it here would incorrectly punish every workspace under this
-      // account for a checkout attempt that never actually unlocked
-      // anything to begin with.
-      const wasActive = account.razorpaySubscriptionStatus === 'active';
-      account.razorpaySubscriptionStatus = event.event.split('.')[1];
+    if (account.pendingPlanId) {
+      await account.upgradePlan(account.pendingPlanId);
       account.pendingPlanId = null;
-      if (wasActive) {
-        await lockToDefaultPlan(account);
-      }
-      await account.save();
-      if (wasActive) {
-        await syncTenantsFromAccount(account._id);
-      }
-      break;
     }
-    default:
-      break;
+    await account.save();
+    await syncTenantsFromAccount(account._id);
+    return;
+  }
+
+  if (LAPSED_STATUSES.has(status)) {
+    // Only actually LOCK the account (reassign every tenant back to the
+    // default plan) if a real, previously-ACTIVE mandate just lapsed --
+    // a subscription that never successfully activated in the first
+    // place (e.g. the customer abandoned the authorization page) has
+    // nothing to "lock back" from: the account's plan was never changed
+    // away from whatever it already was, so downgrading it here would
+    // incorrectly punish every workspace under this account for a
+    // checkout attempt that never actually unlocked anything to begin
+    // with.
+    account.cashfreeSubscriptionStatus = status;
+    account.pendingPlanId = null;
+    if (wasActive) {
+      await lockToDefaultPlan(account);
+    }
+    await account.save();
+    if (wasActive) {
+      await syncTenantsFromAccount(account._id);
+    }
+    return;
+  }
+
+  // Any other status (INITIALIZED, BANK_APPROVAL_PENDING, ...) is just an
+  // in-progress step of the authorization flow -- record it, nothing else
+  // to do until it resolves to ACTIVE or a lapsed status above.
+  if (status) {
+    account.cashfreeSubscriptionStatus = status;
+    await account.save();
   }
 };

@@ -92,8 +92,8 @@ export const BOOKING_ACTION = Object.freeze({
 export const BOOKING_ACTION_VALUES = Object.freeze(Object.values(BOOKING_ACTION));
 
 // Real, bounded sub-actions for the PAYMENT node. SCOPE, stated
-// honestly: there is no real Razorpay (or any) payment gateway API
-// integration anywhere in this codebase -- RAZORPAY only exists as a
+// honestly: there is no real Cashfree (or any) payment gateway API
+// integration anywhere in this codebase -- CASHFREE only exists as a
 // payment-method label a rep selects when manually recording a payment
 // already received. CHECK_STATUS reads real, existing InnovateX payment
 // records. CREATE_REQUEST creates a real, pending InnovateX payment

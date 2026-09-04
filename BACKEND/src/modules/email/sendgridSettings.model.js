@@ -31,7 +31,7 @@ const sendgridSettingsSchema = new Schema(
 
     // Encrypted via src/utils/crypto.js's encrypt()/decrypt() before this
     // ever touches the database -- same real AES-256-GCM already used for
-    // WhatsApp/Google Ads/Razorpay credentials, never a new scheme.
+    // WhatsApp/Google Ads/Cashfree credentials, never a new scheme.
     apiKey: { type: String, default: null },
 
     // A SendGrid API key alone doesn't tell you WHICH address it's allowed

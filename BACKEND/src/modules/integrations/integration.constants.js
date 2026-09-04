@@ -73,7 +73,7 @@ export const INTEGRATION_CATALOG = Object.freeze([
 
   // Payments (3)
   { key: 'stripe',    name: 'Stripe',    category: INTEGRATION_CATEGORY.PAYMENTS, description: 'Online payments and subscription billing.', logo_color: '#635BFF', available: true },
-  { key: 'razorpay',  name: 'Razorpay',  category: INTEGRATION_CATEGORY.PAYMENTS, description: 'Payments, invoicing, and settlements for India.', logo_color: '#0C2451', available: true },
+  { key: 'cashfree',  name: 'Cashfree',  category: INTEGRATION_CATEGORY.PAYMENTS, description: 'Payments, invoicing, and settlements for India.', logo_color: '#3395FF', available: true },
   { key: 'paypal',    name: 'PayPal',    category: INTEGRATION_CATEGORY.PAYMENTS, description: 'Global online payments and checkout.', logo_color: '#003087', available: true },
 
   // AI (3)

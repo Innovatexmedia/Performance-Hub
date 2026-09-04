@@ -31,12 +31,13 @@ const startServer = async () => {
     // Connect to MongoDB
     await connectDB();
 
-    // TEMP DIAGNOSTIC -- prints at boot whether Razorpay keys actually
+    // TEMP DIAGNOSTIC -- prints at boot whether Cashfree keys actually
     // loaded from .env, in plain terminal text that's impossible to miss
     // or misread (unlike a later error deep in a request). Remove once
     // payment configuration issues are fully confirmed resolved.
-    console.log('[boot] RAZORPAY_KEY_ID loaded:', config.RAZORPAY_KEY_ID ? `yes (${config.RAZORPAY_KEY_ID.slice(0, 12)}...)` : 'NO -- .env not picked up');
-    console.log('[boot] RAZORPAY_KEY_SECRET loaded:', config.RAZORPAY_KEY_SECRET ? 'yes' : 'NO -- .env not picked up');
+    console.log('[boot] CASHFREE_APP_ID loaded:', config.CASHFREE_APP_ID ? `yes (${config.CASHFREE_APP_ID.slice(0, 12)}...)` : 'NO -- .env not picked up');
+    console.log('[boot] CASHFREE_SECRET_KEY loaded:', config.CASHFREE_SECRET_KEY ? 'yes' : 'NO -- .env not picked up');
+    console.log('[boot] CASHFREE_ENV:', config.CASHFREE_ENV);
 
     // Idempotent -- only inserts the 6 default plans if they don't already
     // exist (by key), so this is safe to run on every boot. See

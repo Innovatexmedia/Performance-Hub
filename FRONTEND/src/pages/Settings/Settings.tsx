@@ -3,7 +3,7 @@ import { Save, Plus, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useSettings } from '@/hooks/useSettings';
 import { settingsApi } from '@/lib/settingsApi';
-import { openRazorpaySubscriptionCheckout } from '@/lib/razorpayCheckout';
+import { redirectToCashfreeAuth } from '@/lib/cashfreeCheckout';
 import { usePlanStore } from '@/store/planStore';
 import { useCurrencyStore } from '@/store/currencyStore';
 import { applyAccentColor } from '@/utils/theme';
@@ -404,9 +404,44 @@ function ConsentTab({ data, canEdit, onSaved }: { data: ConsentSettings; canEdit
 function BillingTab({ data, canEdit, onSaved }: { data: AllSettings['billing']; canEdit: boolean; onSaved: () => void }) {
   const [switchingId, setSwitchingId] = useState<string | null>(null);
 
+  // Handles the return trip from Cashfree's hosted mandate-authorization
+  // flow. Verification already happened server-side (see
+  // billingReturn.controller.js) BEFORE the browser ever gets back here
+  // -- Cashfree's redirect is a form POST straight to the backend (a
+  // frontend dev/static server has no route for an arbitrary POST and
+  // 404s it), which verifies against Cashfree directly and then
+  // 302-redirects the browser to this plain GET with the outcome
+  // already decided. This effect just reads that outcome and reflects
+  // it in the UI -- it does not call verifySubscriptionPayment itself.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const result = params.get('billing_result');
+    if (!result) return;
+
+    const plan = params.get('billing_plan');
+    const message = params.get('billing_message');
+
+    // Strip the params immediately so a page refresh doesn't re-show a
+    // stale toast for an outcome that's already been handled.
+    params.delete('billing_result');
+    params.delete('billing_plan');
+    params.delete('billing_message');
+    const newSearch = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${newSearch ? `?${newSearch}` : ''}`);
+
+    if (result === 'success') {
+      toast.success('Payment confirmed', plan ? `You're now on ${plan}` : 'Your plan has been updated.');
+      onSaved();
+      void usePlanStore.getState().refresh();
+    } else {
+      toast.error('Could not confirm the subscription', message || 'If you completed the payment, this may need a moment — check back shortly or contact support.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once on mount to consume the redirect params
+  }, []);
+
   const switchPlan = async (plan: Plan) => {
     // Free plans (e.g. downgrading back to a $0 tier) switch instantly --
-    // no payment to collect. Paid plans go through real Razorpay Checkout;
+    // no payment to collect. Paid plans go through real Cashfree Checkout;
     // the backend rejects a direct switch for these (see settings.service.js),
     // so this branch has to exist -- it's not just a nicer UX path.
     if (plan.price <= 0) {
@@ -427,28 +462,11 @@ function BillingTab({ data, canEdit, onSaved }: { data: AllSettings['billing']; 
     setSwitchingId(plan.id);
     try {
       const checkout = await settingsApi.createSubscriptionCheckout(plan.id);
-      const opened = openRazorpaySubscriptionCheckout({
-        keyId: checkout.keyId,
-        subscriptionId: checkout.subscriptionId,
-        planName: checkout.planName,
-        onSuccess: async (response) => {
-          try {
-            await settingsApi.verifySubscriptionPayment(response);
-            toast.success('Payment confirmed', `You're now on ${checkout.planName}`);
-            onSaved();
-            void usePlanStore.getState().refresh(); // Sidebar reflects the new track immediately, not just after a reload
-          } catch (err) {
-            toast.error('Payment received but could not be confirmed', err instanceof ApiError ? err.message : 'Contact support with your payment ID.');
-          } finally {
-            setSwitchingId(null);
-          }
-        },
-        onDismiss: () => setSwitchingId(null),
-      });
-      if (!opened) {
-        toast.error('Could not open checkout', 'Payment provider failed to load — check your connection and try again.');
-        setSwitchingId(null);
-      }
+      // This account's Cashfree API version authorizes mandates via a
+      // plain redirect (not a JS checkout widget) -- the browser leaves
+      // the app entirely and comes back via return_url, which the
+      // effect above picks up to finish verification server-side.
+      redirectToCashfreeAuth(checkout.authLink);
     } catch (err) {
       toast.error('Could not start checkout', err instanceof ApiError ? err.message : 'Please try again.');
       setSwitchingId(null);
@@ -485,7 +503,7 @@ function BillingTab({ data, canEdit, onSaved }: { data: AllSettings['billing']; 
         <p className="mt-3 text-xs text-amber-600">This workspace isn't linked to a billing plan yet — contact support if this persists after a page reload.</p>
       )}
       {data.trial_ends_at && <p className="mt-3 text-xs text-ink-500">Trial ends in {data.trial_days_remaining} days</p>}
-      {['halted', 'cancelled', 'expired'].includes(data.razorpay_subscription_status || '') && (
+      {['ON_HOLD', 'CUSTOMER_CANCELLED', 'CANCELLED', 'EXPIRED', 'LINK_EXPIRED', 'CARD_EXPIRED'].includes(data.cashfree_subscription_status || '') && (
         <p className="mt-3 text-xs text-red-600">Your subscription isn't active — paid features may be locked until payment is resolved.</p>
       )}
 

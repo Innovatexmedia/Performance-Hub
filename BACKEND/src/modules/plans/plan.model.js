@@ -103,16 +103,13 @@ const planSchema = new Schema({
 
   sortOrder: { type: Number, default: 0 },
 
-  /** Razorpay's own Plan ID, created lazily the first time a tenant
-   * subscribes to this plan (see subscription.service.js). Razorpay
-   * Plans are immutable once created (price/period can't change), so
-   * this is created once and reused -- NOT regenerated on price edits.
-   * Editing `price` after this is set only changes what's DISPLAYED and
-   * what future NEW Razorpay Plans would use if this were ever cleared;
-   * it does not retroactively change what existing subscribers on the
-   * already-created Razorpay Plan are being charged. Same "no surprise
-   * change for existing subscribers" principle as isActive already has. */
-  razorpayPlanId: { type: String, default: null },
+  // NOTE: the old Razorpay integration cached an immutable razorpayPlanId
+  // here, created lazily and reused across checkouts (Razorpay Plans
+  // can't be edited once created). Cashfree's Subscriptions API doesn't
+  // need that -- plan terms (name/amount/interval) are sent INLINE on
+  // every Create Subscription call (see subscription.service.js), so
+  // there's no separate provider-side Plan object to cache or worry
+  // about going stale when a Super Admin edits `price` here.
 }, {
   timestamps: true,
   toJSON: {

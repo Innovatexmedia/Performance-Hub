@@ -67,9 +67,9 @@ export const updateBillingPlan = asyncHandler(async (req, res) => {
 
 /**
  * createSubscriptionCheckout — POST /api/settings/billing/subscribe
- * Starts a real Razorpay subscription for a paid plan. Returns what the
- * frontend needs to open Razorpay Checkout -- does NOT change the
- * tenant's plan yet (see subscription.service.js).
+ * Starts a real Cashfree subscription mandate for a paid plan. Returns
+ * what the frontend needs to open Cashfree Checkout -- does NOT change
+ * the tenant's plan yet (see subscription.service.js).
  */
 export const createSubscriptionCheckout = asyncHandler(async (req, res) => {
   const data = await subscriptionService.createSubscriptionCheckout(req.user.tenantId, req.body.planId, req.user);
@@ -78,9 +78,11 @@ export const createSubscriptionCheckout = asyncHandler(async (req, res) => {
 
 /**
  * verifySubscriptionPayment — POST /api/settings/billing/subscribe/verify
- * Called right after Razorpay Checkout's success callback fires on the
- * client. Verifies the payment signature server-side before applying
- * the plan switch -- see subscription.service.js.
+ * Called right after Cashfree Checkout's widget closes on the client
+ * (success, failure, or dismissal -- the caller can't tell which from
+ * the widget alone). Re-fetches the subscription's real status directly
+ * from Cashfree server-side before applying the plan switch -- see
+ * subscription.service.js.
  */
 export const verifySubscriptionPayment = asyncHandler(async (req, res) => {
   const data = await subscriptionService.verifySubscriptionPayment(req.user.tenantId, req.body, req.user);

@@ -6,7 +6,7 @@
  *
  * Public (no authenticate/resolveTenant) -- SendGrid can't carry our
  * session, same as every other real inbound webhook in this app
- * (Shopify/Cal.com/Meta/Razorpay). Real authenticity comes from the
+ * (Shopify/Cal.com/Meta/Cashfree). Real authenticity comes from the
  * signature verification inside the controller, not from route auth.
  * =============================================================================
  */

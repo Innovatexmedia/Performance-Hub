@@ -44,7 +44,7 @@ export const PAYMENT_METHOD = Object.freeze({
   STRIPE:        'Stripe',
   BANK_TRANSFER: 'Bank Transfer',
   UPI:           'UPI',
-  RAZORPAY:      'Razorpay',
+  CASHFREE:      'Cashfree',
   CASH:          'Cash',
 });
 export const PAYMENT_METHOD_VALUES = Object.freeze(Object.values(PAYMENT_METHOD));
