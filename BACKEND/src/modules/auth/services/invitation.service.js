@@ -113,6 +113,33 @@ export const acceptInvitation = async ({ token, password }, req) => {
     { $set: { status: MEMBERSHIP_STATUS.ACTIVE, joinedAt: new Date() } }
   );
 
+  // Team membership is shared across the WHOLE billing account, not
+  // siloed to the single workspace this invitation was sent for (see
+  // team.service.js's getAccountTenantIds comment for the full
+  // reasoning) -- so accepting an invite grants access to every OTHER
+  // workspace the account already covers too, not just this one. Each
+  // is upserted individually (not a single updateMany) because a sibling
+  // Membership might already exist in an unexpected state from some
+  // other flow, and upserting per-tenant is the safe way to guarantee
+  // every one of them ends up ACTIVE regardless of its prior state,
+  // without a unique-index collision on tenants that don't have a row
+  // yet. Reuses the `tenant` doc already loaded above (not a fresh
+  // lookup) -- it's the same tenant this invitation was for.
+  if (tenant.accountId) {
+    const siblingTenants = await tenantRepo.findAll({ accountId: tenant.accountId });
+    const otherTenantIds = siblingTenants
+      .map((t) => t._id)
+      .filter((id) => String(id) !== String(tokenRecord.tenantId));
+
+    await Promise.all(otherTenantIds.map((siblingTenantId) =>
+      Membership.updateOne(
+        { userId: user._id, tenantId: siblingTenantId },
+        { $set: { status: MEMBERSHIP_STATUS.ACTIVE, joinedAt: new Date() }, $setOnInsert: { userId: user._id, tenantId: siblingTenantId, role: tokenRecord.role, invitedBy: tokenRecord.invitedBy } },
+        { upsert: true }
+      )
+    ));
+  }
+
   await tenantRepo.incrementUsageCounter(tokenRecord.tenantId, 'currentUserCount', 1);
 
   await tokenRepo.markInvitationAccepted(tokenRecord._id);

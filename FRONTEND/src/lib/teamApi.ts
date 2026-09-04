@@ -44,6 +44,12 @@ export const teamApi = {
   setStatus: (id: string, status: MemberStatus) =>
     apiClient.patch<{ member: TeamMemberProfile }>(`/team/${id}/status`, { status }).then((r) => r.member),
 
+  /** Owner-only. Member must already be inactive with zero assigned
+   * leads -- the backend enforces both and returns a clear error
+   * message if not, which the caller should surface as-is rather than
+   * a generic failure toast. */
+  deleteMember: (id: string) => apiClient.delete<void>(`/team/${id}`),
+
   /** GET /team/permissions/catalog -- every grantable permission, grouped + labeled. */
   getPermissionCatalog: () =>
     apiClient.get<{ catalog: PermissionCatalogGroup[] }>('/team/permissions/catalog').then((r) => r.catalog),

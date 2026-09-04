@@ -13,6 +13,7 @@ export interface UseTeamResult {
   updateRole: (id: string, role: string) => Promise<void>;
   setStatus: (id: string, status: MemberStatus) => Promise<void>;
   updatePermissions: (id: string, permissions: string[]) => Promise<void>;
+  deleteMember: (id: string) => Promise<void>;
 }
 
 /**
@@ -69,5 +70,10 @@ export function useTeam(): UseTeamResult {
     refetch();
   }, [refetch]);
 
-  return { members, kpis, loading, error, refetch, addMember, updateRole, setStatus, updatePermissions };
+  const deleteMember = useCallback(async (id: string) => {
+    await teamApi.deleteMember(id);
+    refetch();
+  }, [refetch]);
+
+  return { members, kpis, loading, error, refetch, addMember, updateRole, setStatus, updatePermissions, deleteMember };
 }

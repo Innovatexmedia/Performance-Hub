@@ -93,11 +93,45 @@ const getAssignedLeadCounts = async (tenantId, userIds) => {
 // =============================================================================
 
 /**
- * getTeamMembers — all users in the tenant with their assigned lead counts.
+ * getAccountTenantIds — every tenant (workspace) sharing this tenant's
+ * billing account, or just this one tenant if it isn't linked to an
+ * account yet.
+ *
+ * TEAM IS SHARED ACROSS THE WHOLE ACCOUNT, NOT SILOED PER WORKSPACE:
+ * one owner can run several workspaces (companies) under a single
+ * billing account (see plans/account.model.js), and the team roster is
+ * meant to be the SAME set of people across all of them -- only which
+ * LEADS a person is assigned varies per workspace, not who's on the
+ * team at all. Every User-scoped query in this file uses this to match
+ * tenantId against the WHOLE account's tenant list, not just the one
+ * tenantId the current request happens to be in -- otherwise a team
+ * member added while working in Workspace A would be invisible (and,
+ * before the invitation-acceptance fix below, actually unable to log
+ * in) from Workspace B, even though they're meant to be the same team.
+ */
+const getAccountTenantIds = async (tenantId) => {
+  const tenant = await tenantRepo.findById(tenantId);
+  if (!tenant?.accountId) return [tenantId];
+  const siblingTenants = await tenantRepo.findAll({ accountId: tenant.accountId });
+  const ids = siblingTenants.map((t) => t._id);
+  return ids.length ? ids : [tenantId];
+};
+
+/**
+ * getTeamMembers — every user across the WHOLE ACCOUNT (every workspace
+ * sharing this billing account, not just this one tenant -- see
+ * getAccountTenantIds above), with their assigned lead counts scoped to
+ * THIS specific tenant (assignedLeads is legitimately
+ * workspace-specific -- a shared team can still have different lead
+ * assignments per workspace).
  * SOURCE: FRONTEND_SPEC §17 Team Members table
  */
 export const getTeamMembers = async (tenantId) => {
-  const users = await userRepo.findByTenantId(tenantId);
+  const accountTenantIds = await getAccountTenantIds(tenantId);
+  // Excludes soft-deleted members (status: 'deleted') -- see
+  // deleteTeamMember below. Without this filter a deleted member would
+  // still show up in the list, which defeats the point of deleting them.
+  const users = await User.find({ tenantId: { $in: accountTenantIds }, status: { $ne: USER_STATUS.DELETED } });
 
   if (!users.length) return { members: [], kpis: buildKpis([]) };
 
@@ -297,7 +331,7 @@ export const updateMemberRole = async (memberId, newRole, reqUser) => {
   }
 
   // Load target user — must be in same tenant
-  const member = await User.findOne({ _id: memberId, tenantId: ctx.tenantId });
+  const member = await User.findOne({ _id: memberId, tenantId: { $in: await getAccountTenantIds(ctx.tenantId) } });
   if (!member) throw AppError.notFound('Team member not found');
 
   // Prevent non-super-admins from touching tenant_owner role
@@ -420,7 +454,7 @@ export const updateMemberPermissions = async (memberId, permissions, reqUser) =>
     throw AppError.badRequest('You cannot change your own permissions');
   }
 
-  const member = await User.findOne({ _id: memberId, tenantId: ctx.tenantId });
+  const member = await User.findOne({ _id: memberId, tenantId: { $in: await getAccountTenantIds(ctx.tenantId) } });
   if (!member) throw AppError.notFound('Team member not found');
 
   if (member.role === ROLES.TENANT_OWNER && ctx.role !== ROLES.SUPER_ADMIN) {
@@ -476,7 +510,7 @@ export const setMemberStatus = async (memberId, status, reqUser) => {
     throw AppError.badRequest('You cannot deactivate your own account');
   }
 
-  const member = await User.findOne({ _id: memberId, tenantId: ctx.tenantId });
+  const member = await User.findOne({ _id: memberId, tenantId: { $in: await getAccountTenantIds(ctx.tenantId) } });
   if (!member) throw AppError.notFound('Team member not found');
 
   // Cannot deactivate the tenant owner
@@ -497,11 +531,98 @@ export const setMemberStatus = async (memberId, status, reqUser) => {
 };
 
 // =============================================================================
+// DELETE TEAM MEMBER (Owner-only)
+// =============================================================================
+
+/**
+ * deleteTeamMember — a real, permanent removal, not just deactivation.
+ * Soft-deletes (status: 'deleted') rather than actually removing the
+ * User document -- USER_STATUS already defines 'deleted' for exactly
+ * this ("Soft-deleted -- account no longer usable"), which keeps
+ * historical references (deals they closed, activities/notes they
+ * created, who assigned what) resolvable instead of turning into a
+ * dangling userId the moment the record is gone. getTeamMembers already
+ * excludes 'deleted' members, so the practical effect the person asking
+ * for "delete" wants -- the member disappearing from the Team list --
+ * still happens.
+ *
+ * Guarded by two preconditions, both required before deletion is even
+ * attempted (checked here, not just left to the route's role gate,
+ * since a role check alone can't express "and only if..."):
+ *  - Member must already be INACTIVE. Deleting a currently-active
+ *    member skips the deliberate step of deactivating them first, which
+ *    is the moment someone would notice "wait, that's the wrong person"
+ *    before it becomes irreversible-in-practice.
+ *  - Member must have ZERO currently-assigned leads. Deleting someone
+ *    with active lead assignments would either orphan those leads or
+ *    silently reassign them as a side effect of an unrelated action --
+ *    reassignment should be its own deliberate step the owner takes
+ *    first, not something hidden inside "delete user".
+ */
+export const deleteTeamMember = async (memberId, reqUser) => {
+  const ctx = buildCtx(reqUser);
+
+  if (String(memberId) === String(ctx.userId)) {
+    throw AppError.badRequest('You cannot delete your own account');
+  }
+
+  const member = await User.findOne({ _id: memberId, tenantId: { $in: await getAccountTenantIds(ctx.tenantId) } });
+  if (!member) throw AppError.notFound('Team member not found');
+
+  if (member.role === ROLES.TENANT_OWNER) {
+    throw AppError.forbidden('Cannot delete the Tenant Owner');
+  }
+
+  if (member.status === USER_STATUS.ACTIVE) {
+    throw AppError.badRequest('Deactivate this member before deleting them');
+  }
+
+  const assignedLeadCount = await Lead.countDocuments({
+    tenant_id:        String(ctx.tenantId),
+    assigned_user_id: String(memberId),
+    archived:         false,
+  });
+  if (assignedLeadCount > 0) {
+    throw AppError.badRequest(
+      `${member.firstName} still has ${assignedLeadCount} assigned lead${assignedLeadCount === 1 ? '' : 's'} -- reassign ${assignedLeadCount === 1 ? 'it' : 'them'} to someone else first.`
+    );
+  }
+
+  await userRepo.updateById(memberId, {
+    $set: {
+      status:    USER_STATUS.DELETED,
+      isActive:  false,
+      updatedBy: ctx.userId,
+    },
+  });
+
+  // Best-effort cleanup of any Membership record for this user+tenant.
+  // Non-fatal if it fails or nothing exists -- the newer Membership
+  // model is additive alongside the legacy User.tenantId this whole
+  // module still runs on (see Membership.js's own comment on that), so
+  // a member added before Membership existed may not have one at all.
+  try {
+    // Cleans up Membership across EVERY tenant this account covers, not
+    // just the one this request happened to come from -- a shared-team
+    // member deleted from one workspace is being removed from the team
+    // entirely, so a stale ACTIVE Membership left behind for another
+    // workspace would let them switchWorkspace() back into it despite
+    // being soft-deleted (status alone doesn't block switchWorkspace's
+    // Membership-based check).
+    await Membership.deleteMany({ userId: memberId, tenantId: { $in: await getAccountTenantIds(ctx.tenantId) } });
+  } catch (err) {
+    console.error('[team] non-fatal: could not clean up Membership on delete:', err);
+  }
+
+  return { id: memberId };
+};
+
+// =============================================================================
 // GET SINGLE TEAM MEMBER
 // =============================================================================
 
 export const getTeamMember = async (memberId, tenantId) => {
-  const member = await User.findOne({ _id: memberId, tenantId });
+  const member = await User.findOne({ _id: memberId, tenantId: { $in: await getAccountTenantIds(tenantId) } });
   if (!member) throw AppError.notFound('Team member not found');
 
   const leadCount = await Lead.countDocuments({

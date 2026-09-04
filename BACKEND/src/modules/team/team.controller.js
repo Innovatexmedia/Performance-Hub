@@ -83,6 +83,18 @@ export const setStatus = asyncHandler(async (req, res) => {
 });
 
 /**
+ * deleteMember — DELETE /api/team/:id
+ * Owner-only (see team.routes.js). Soft-deletes an already-inactive
+ * member with zero assigned leads -- see team.service.js's
+ * deleteTeamMember for why those preconditions exist and why this is a
+ * soft delete rather than actually removing the User document.
+ */
+export const deleteMember = asyncHandler(async (req, res) => {
+  await teamService.deleteTeamMember(req.params.id, req.user);
+  return sendSuccess(res, null, 'Team member deleted successfully');
+});
+
+/**
  * updatePermissions — PATCH /api/team/:id/permissions
  * Full replace of a member's granular permission set (beyond their role
  * default). Powers the Team page's permissions modal.

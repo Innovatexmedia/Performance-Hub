@@ -75,6 +75,12 @@ router.patch(
   controller.setStatus
 );
 
+// Delete — Tenant Owner only, and only if the member is already
+// inactive with zero assigned leads (enforced in the service, not just
+// here -- a role gate alone can't express "and only if..."). See
+// team.service.js's deleteTeamMember.
+router.delete('/:id', requireRole('tenant_owner'), controller.deleteMember);
+
 // Granular permission overrides — tenant_admin and above
 router.patch(
   '/:id/permissions',

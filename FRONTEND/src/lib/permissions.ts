@@ -220,6 +220,20 @@ export const teamPermissions = {
     return true;
   },
 
+  /** Mirrors deleteTeamMember()'s exact guard in team.service.js --
+   * Owner-only (stricter than the tenant_admin floor everything else
+   * here uses), never your own row, never the Tenant Owner. This only
+   * covers WHO may attempt it; the member.status/assignedLeads
+   * preconditions are checked in Team.tsx right before the confirm
+   * dialog, since they need live data this permission helper doesn't
+   * have, and are re-enforced server-side regardless. */
+  canDelete: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
+    if (!atLeast(requesterRole, 'tenant_owner')) return false;
+    if (member.id === requesterUserId) return false;
+    if (member.role === 'tenant_owner' && requesterRole !== 'super_admin') return false;
+    return true;
+  },
+
   /** Mirrors updateMemberPermissions()'s exact guard in team.service.js. */
   canChangePermissions: (requesterRole: AuthRole | null | undefined, requesterUserId: string, member: { id: string; role: AuthRole }) => {
     if (!atLeast(requesterRole, 'tenant_admin')) return false;

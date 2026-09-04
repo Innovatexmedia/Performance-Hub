@@ -1,8 +1,12 @@
 import Tenant from '../auth/models/Tenant.js';
 import Plan from '../plans/plan.model.js';
 import Account from '../plans/account.model.js';
+import User from '../auth/models/User.js';
+import { Lead } from '../leads/lead/lead.model.js';
+import { Campaign } from '../campaigns/campaign.model.js';
 import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
+import { USER_STATUS } from '../auth/constants/auth.constants.js';
 import { PAYMENT_CURRENCY_VALUES } from '../payments/payment.constants.js';
 import {
   DEFAULT_QUALIFICATION_QUESTIONS,
@@ -21,6 +25,65 @@ const buildCtx = (reqUser) => ({
   userId:   reqUser.sub,
   role:     reqUser.role,
 });
+
+/**
+ * getAccountTenantIds — every tenant (workspace) sharing this account's
+ * billing, or just this one tenant if it isn't linked to an account yet.
+ * The single source of truth for "which tenants share this plan's pool"
+ * -- used both to count workspaces and to scope the usage counts below,
+ * so the two numbers can never disagree about which tenants they cover.
+ */
+const getAccountTenantIds = async (tenant) => {
+  if (!tenant.accountId) return [tenant._id];
+  const ids = await Tenant.find({ accountId: tenant.accountId }).distinct('_id');
+  return ids.length ? ids : [tenant._id];
+};
+
+/**
+ * getLiveUsageCounts — real, current usage against plan limits, computed
+ * directly from the actual records rather than Tenant's denormalized
+ * currentUserCount/currentLeadCount/currentCampaignCount counters.
+ *
+ * Those counters exist for fast per-request enforcement checks
+ * (canCreateUser()/canCreateLead()/canCreateCampaign() in Tenant.js), but
+ * they're NOT a reliable source for DISPLAY: currentUserCount only
+ * increments on invitation acceptance (see team.service.js's
+ * addTeamMember comment) and nothing in this codebase ever increments
+ * currentLeadCount or currentCampaignCount at all -- so both permanently
+ * read 0 regardless of how many leads/campaigns actually exist. Rather
+ * than trying to retrofit increment calls at every lead/campaign
+ * creation site (fragile -- one missed call site and it drifts again),
+ * the Billing tab's usage display queries the real collections directly.
+ *
+ * SCOPED TO THE WHOLE ACCOUNT, NOT JUST ONE TENANT: billing is
+ * account-level (see plans/account.model.js) -- one plan's quota is a
+ * shared pool across every workspace the account owns, the same way
+ * `current_workspace_count` already counts every Tenant under the
+ * account rather than just "1" for the current one. A user, lead, or
+ * campaign in ANY of those workspaces draws from the same limit, so this
+ * sums across all of them ($in tenantIds), not just the tenant the
+ * request happened to come from -- otherwise workspace A showing 5
+ * leads and workspace B showing 3 would each separately claim "3 of
+ * 25000 used" instead of the true combined 8.
+ *
+ * User.tenantId is a real ObjectId ref, so tenantIds (already ObjectIds)
+ * are used as-is; Lead/Campaign's tenant_id fields are plain strings, so
+ * those need the ids converted first.
+ */
+const getLiveUsageCounts = async (tenantIds) => {
+  const tenantIdStrings = tenantIds.map(String);
+  const [userCount, leadCount, campaignCount] = await Promise.all([
+    // Excludes soft-deleted members (status: 'deleted') -- same
+    // exclusion team.service.js's getTeamMembers applies, so a deleted
+    // member disappearing from the Team list and freeing up a Users
+    // seat on the Billing page are the same event, not two different
+    // ones that can drift out of sync.
+    User.countDocuments({ tenantId: { $in: tenantIds }, status: { $ne: USER_STATUS.DELETED } }),
+    Lead.countDocuments({ tenant_id: { $in: tenantIdStrings } }),
+    Campaign.countDocuments({ tenant_id: { $in: tenantIdStrings } }),
+  ]);
+  return { userCount, leadCount, campaignCount };
+};
 
 /**
  * getAccountForTenant — billing state (subscriptionStatus, trialEndsAt,
@@ -217,10 +280,11 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
   await syncTenantsFromAccount(account._id);
 
   const refreshedTenant = await getTenant(tenantId); // re-read post-sync so the response reflects the new denormalized numbers
-  const [currentPlan, availablePlans, accountWorkspaceCount] = await Promise.all([
+  const accountTenantIds = await getAccountTenantIds(refreshedTenant);
+  const [currentPlan, availablePlans, liveUsage] = await Promise.all([
     Plan.findById(account.planId),
     Plan.find({ isActive: true }).sort({ sortOrder: 1, price: 1 }),
-    Tenant.countDocuments({ accountId: account._id }),
+    getLiveUsageCounts(accountTenantIds),
   ]);
 
   return {
@@ -235,10 +299,10 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
     max_leads:             refreshedTenant.maxLeads,
     max_campaigns:         refreshedTenant.maxCampaigns,
     max_workspaces:        refreshedTenant.maxWorkspaces,
-    current_workspace_count: accountWorkspaceCount,
-    current_user_count:    refreshedTenant.currentUserCount, 
-    current_lead_count:    refreshedTenant.currentLeadCount,
-    current_campaign_count:refreshedTenant.currentCampaignCount,
+    current_workspace_count: accountTenantIds.length,
+    current_user_count:    liveUsage.userCount,
+    current_lead_count:    liveUsage.leadCount,
+    current_campaign_count:liveUsage.campaignCount,
     plan_details:          currentPlan,
     available_plans:       availablePlans, 
   };
@@ -246,11 +310,12 @@ export const updateBillingPlan = async (tenantId, planId, reqUser) => {
 
 export const getAllSettings = async (tenantId) => {
   const tenant = await getTenant(tenantId);
-  const [currentPlan, availablePlans, account, accountWorkspaceCount] = await Promise.all([
+  const accountTenantIds = await getAccountTenantIds(tenant);
+  const [currentPlan, availablePlans, account, liveUsage] = await Promise.all([
     tenant.planId ? Plan.findById(tenant.planId) : null,
     Plan.find({ isActive: true }).sort({ sortOrder: 1, price: 1 }),
     getAccountForTenant(tenant),
-    tenant.accountId ? Tenant.countDocuments({ accountId: tenant.accountId }) : 1,
+    getLiveUsageCounts(accountTenantIds),
   ]);
 
   return {
@@ -326,10 +391,10 @@ export const getAllSettings = async (tenantId) => {
       max_leads:             tenant.maxLeads,
       max_campaigns:         tenant.maxCampaigns,
       max_workspaces:        tenant.maxWorkspaces,
-      current_workspace_count: accountWorkspaceCount,
-      current_user_count:    tenant.currentUserCount,
-      current_lead_count:    tenant.currentLeadCount,
-      current_campaign_count:tenant.currentCampaignCount,
+      current_workspace_count: accountTenantIds.length,
+      current_user_count:    liveUsage.userCount,
+      current_lead_count:    liveUsage.leadCount,
+      current_campaign_count:liveUsage.campaignCount,
       plan_details:          currentPlan,
       available_plans:       availablePlans,
     },

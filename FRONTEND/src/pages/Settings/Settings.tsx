@@ -489,10 +489,11 @@ function BillingTab({ data, canEdit, onSaved }: { data: AllSettings['billing']; 
         <Badge tone={data.subscription_status === 'active' ? 'green' : 'amber'}>{data.subscription_status}</Badge>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-3">
-        <Stat label="Users" value={`${data.current_user_count} / ${data.max_users}`} />
-        <Stat label="Leads" value={`${data.current_lead_count} / ${data.max_leads}`} />
-        <Stat label="Campaigns" value={`${data.current_campaign_count} / ${data.max_campaigns}`} />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <UsageStat label="Users" current={data.current_user_count} max={data.max_users} />
+        <UsageStat label="Leads" current={data.current_lead_count} max={data.max_leads} />
+        <UsageStat label="Campaigns" current={data.current_campaign_count} max={data.max_campaigns} />
+        <UsageStat label="Workspaces" current={data.current_workspace_count} max={data.max_workspaces} />
       </div>
       {data.max_workspaces > 1 && (
         <p className="mt-3 text-xs text-ink-500">
@@ -599,6 +600,38 @@ function SecurityTab({ data, canEdit, onSaved }: { data: SecuritySettings; canEd
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">{label}</p><p className="text-lg font-bold text-ink-900">{value}</p></div>;
+/**
+ * UsageStat — a KPI card with a real usage bar underneath: fills
+ * proportionally to current/max, and turns red once the limit is
+ * actually reached (>=100%) so it's immediately obvious at a glance
+ * which resource is the one about to block the account, not just a
+ * number that has to be mentally compared against another number.
+ * Amber from 80% up to (but not at) the limit as an early warning.
+ * `max <= 0` is treated as unlimited/not applicable -- no bar, no
+ * fraction, just the raw current count (avoids a division-by-zero
+ * 100%-red bar for a plan that doesn't actually cap this resource).
+ */
+function UsageStat({ label, current, max }: { label: string; current: number; max: number }) {
+  const isUnlimited = !max || max <= 0;
+  const pct = isUnlimited ? 0 : Math.min(100, (current / max) * 100);
+  const isFull = !isUnlimited && current >= max;
+  const isNearFull = !isUnlimited && !isFull && pct >= 80;
+
+  const barColor = isFull ? 'bg-red-500' : isNearFull ? 'bg-amber-500' : 'bg-brand-500';
+  const valueColor = isFull ? 'text-red-600' : 'text-ink-900';
+
+  return (
+    <div className="rounded-lg border border-ink-100 p-3">
+      <p className="text-xs text-ink-400">{label}</p>
+      <p className={cn('text-lg font-bold', valueColor)}>
+        {current}{!isUnlimited && ` / ${max}`}
+      </p>
+      {!isUnlimited && (
+        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-ink-100">
+          <div className={cn('h-full rounded-full transition-all', barColor)} style={{ width: `${pct}%` }} />
+        </div>
+      )}
+      {isFull && <p className="mt-1 text-[11px] font-medium text-red-600">Limit reached</p>}
+    </div>
+  );
 }

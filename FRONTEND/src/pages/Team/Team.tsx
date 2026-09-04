@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, UserCog, Shield } from 'lucide-react';
+import { Plus, UserCog, Shield, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useTeam } from '@/hooks/useTeam';
 import { teamApi } from '@/lib/teamApi';
@@ -29,7 +29,7 @@ import type { TeamMember, AssignableRole, PermissionCatalogGroup } from '@/types
  */
 export function Team() {
   const user = useAuthStore((s) => s.user);
-  const { members, kpis, loading, error, addMember, updateRole, setStatus, updatePermissions } = useTeam();
+  const { members, kpis, loading, error, addMember, updateRole, setStatus, updatePermissions, deleteMember } = useTeam();
 
   const [show, setShow] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -136,6 +136,36 @@ export function Team() {
     }
   };
 
+  /**
+   * handleDelete — client-side guards here (status/assignedLeads) are a
+   * fast, clear "why" shown BEFORE the confirm dialog even opens, so the
+   * owner isn't left guessing after a generic server error. The backend
+   * re-checks both independently regardless (see team.service.js's
+   * deleteTeamMember) -- these aren't a substitute for that, just a
+   * better first impression of the same rule.
+   */
+  const handleDelete = async (member: TeamMember) => {
+    if (member.status === 'active') {
+      toast.error('Cannot delete', 'Deactivate this member first, then delete them.');
+      return;
+    }
+    if (member.assignedLeads > 0) {
+      toast.error('Cannot delete', `Reassign ${member.assignedLeads} assigned lead${member.assignedLeads === 1 ? '' : 's'} to someone else first.`);
+      return;
+    }
+    if (!window.confirm(`Delete ${member.fullName}? This cannot be undone.`)) return;
+
+    setBusyId(member.id);
+    try {
+      await deleteMember(member.id);
+      toast.success('Team member deleted');
+    } catch (err) {
+      toast.error('Could not delete member', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -205,6 +235,16 @@ export function Team() {
                             onClick={() => openPermissions(m)}
                           >
                             <Shield size={14} />
+                          </button>
+                        )}
+                        {teamPermissions.canDelete(user.role, user.id, m) && (
+                          <button
+                            className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                            title={m.status === 'active' ? 'Deactivate before deleting' : 'Delete team member'}
+                            disabled={busyId === m.id}
+                            onClick={() => void handleDelete(m)}
+                          >
+                            <Trash2 size={14} />
                           </button>
                         )}
                       </div>

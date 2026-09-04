@@ -69,11 +69,6 @@ export function Sidebar({ open, onClose }: { open: boolean; onClose: () => void 
             );
           })}
         </nav>
-
-        <div className="mx-3 mb-4 rounded-xl bg-sidebar-accent p-3.5">
-          <p className="text-xs font-semibold text-white">Investor Demo</p>
-          <p className="mt-0.5 text-[11px] leading-snug text-ink-400">All integrations run in simulation mode. Data is local & resettable.</p>
-        </div>
       </aside>
     </>
   );
