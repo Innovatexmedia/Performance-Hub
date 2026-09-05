@@ -28,6 +28,9 @@ import { Integration } from '../integrations/integration.model.js';
 import { GenericTemplate } from '../templates/template.model.js';
 import PlanModel from '../plans/plan.model.js';
 import AccountModel from '../plans/account.model.js';
+import { Lead } from '../leads/lead/lead.model.js';
+import { Campaign } from '../campaigns/campaign.model.js';
+import { Message, MESSAGE_DIRECTION } from '../whatsapp/messages/message.model.js';
 import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import * as userRepo from '../auth/repositories/user.repository.js';
 import { ROLES } from '../auth/constants/roles.js';
@@ -35,7 +38,7 @@ import { USER_STATUS, SUBSCRIPTION_STATUS } from '../auth/constants/auth.constan
 import { AppError, paginationMeta, normalizePaging } from '../../shared/helpers/lead.helpers.js';
 
 export const getPlatformDashboard = async () => {
-  const [totalTenants, activeTenants, totalUsers, mrrAgg] = await Promise.all([
+  const [totalTenants, activeTenants, totalUsers, mrrAgg, totalLeads, totalCampaigns, totalMessages, outboundMessages] = await Promise.all([
     Tenant.countDocuments({ deletedAt: null }),
     Tenant.countDocuments({ deletedAt: null, subscriptionStatus: SUBSCRIPTION_STATUS.ACTIVE }),
     User.countDocuments({ status: { $ne: USER_STATUS.DELETED } }),
@@ -49,6 +52,16 @@ export const getPlatformDashboard = async () => {
       { $match: { cashfreeSubscriptionStatus: 'ACTIVE' } },
       { $group: { _id: null, total: { $sum: '$mrr' } } },
     ]),
+    // Platform-wide usage totals -- deliberately unscoped by tenant
+    // (same "this is the one legitimate cross-tenant surface" reasoning
+    // as everything else in this file), all-time cumulative counts, not
+    // a time-bucketed trend -- there was no request for a chart over
+    // time, just "how much is actually flowing through the whole
+    // platform right now".
+    Lead.countDocuments({}),
+    Campaign.countDocuments({}),
+    Message.countDocuments({}),
+    Message.countDocuments({ direction: MESSAGE_DIRECTION.OUTBOUND }),
   ]);
 
   const byPlan = await Tenant.aggregate([
@@ -68,6 +81,13 @@ export const getPlatformDashboard = async () => {
     mrr: mrrAgg[0]?.total || 0,
     tenantsByPlan: Object.fromEntries(byPlan.map((p) => [p._id, p.count])),
     tenantsByStatus: Object.fromEntries(byStatus.map((s) => [s._id, s.count])),
+    usage: {
+      totalLeads,
+      totalCampaigns,
+      totalMessages,
+      outboundMessages,
+      inboundMessages: totalMessages - outboundMessages,
+    },
   };
 };
 

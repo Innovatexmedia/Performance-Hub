@@ -4,6 +4,8 @@ import * as Icons from 'lucide-react';
 import { Sparkles, MessageCircle, CalendarPlus, CreditCard, Plus } from 'lucide-react';
 import { useStore } from '@/store/store';
 import { useAuthStore } from '@/store/authStore';
+import { usePlanTrack } from '@/hooks/usePlanTrack';
+import { isModuleLocked } from '@/components/layout/nav';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
 import { usePermissions } from '@/hooks/usePermissions';
 import { leadsApi } from '@/lib/leadsApi';
@@ -39,10 +41,32 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
   const { nameById, members } = useTeamMembers();
   const permissions = usePermissions();
   const currentUserId = useAuthStore((s) => s.user?.id);
+  const planTrack = usePlanTrack();
   // Payment quick-action still creates a MOCK payment -- the Payments
   // module hasn't been migrated to the real API yet, known follow-up.
   // Booking now goes through the real API via BookCallModal below.
   const { createPayment } = useStore();
+
+  /**
+   * runIfPlanAllows — gates the Qualify/Book Call/Payment quick-actions
+   * for a WhatsApp-only plan. Those three don't go through a route
+   * navigation ModuleGate.tsx could catch (Book Call opens a local
+   * modal, Payment calls a local mock store action directly) -- Qualify
+   * DOES navigate to /qualification, which IS wrapped in ModuleGate, but
+   * checking it here too means the person gets an immediate, in-context
+   * explanation instead of a navigation round-trip to find out.
+   * Redirects straight to Settings > Billing (not just a toast alone),
+   * matching the same "explain AND get you there" pattern
+   * ModuleGate.tsx's UpgradeRequired screen uses.
+   */
+  const runIfPlanAllows = (moduleKey: string, moduleLabel: string, action: () => void) => {
+    if (isModuleLocked(moduleKey, planTrack)) {
+      toast.info(`${moduleLabel} isn't on your current plan`, 'Upgrade to a Full Access plan to unlock this.');
+      navigate('/settings?tab=billing');
+      return;
+    }
+    action();
+  };
 
   const [waLoading, setWaLoading] = useState(false);
   const [showBookCall, setShowBookCall] = useState(false);
@@ -146,13 +170,13 @@ export function LeadDrawer({ leadId, onClose }: { leadId: string; onClose: () =>
               >
                 <MessageCircle size={18} /> {waLoading ? 'Opening…' : 'WhatsApp'}
               </Button>
-              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => navigate('/qualification')}>
+              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => runIfPlanAllows('qualification', 'AI Qualification', () => navigate('/qualification'))}>
                 <Sparkles size={18} /> Qualify
               </Button>
-              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => setShowBookCall(true)}>
+              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => runIfPlanAllows('bookings', 'Calendar / Bookings', () => setShowBookCall(true))}>
                 <CalendarPlus size={18} /> Book Call
               </Button>
-              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => { createPayment({ lead_id: lead.id, amount: lead.value || 5000, source: lead.source, campaign: lead.campaign }); }}>
+              <Button variant="secondary" className="flex-col !py-3 text-xs" onClick={() => runIfPlanAllows('payments', 'Payments', () => createPayment({ lead_id: lead.id, amount: lead.value || 5000, source: lead.source, campaign: lead.campaign }))}>
                 <CreditCard size={18} /> Payment
               </Button>
             </div>

@@ -46,8 +46,22 @@ export const NAV_ITEMS: NavItem[] = [
 /** Mirrors plans/plan.model.js's TRACK_MODULES exactly -- `null` means "no
  * restriction, everything visible". Keep in sync with the backend by
  * hand; there's no shared-package boundary between FRONTEND/BACKEND in
- * this repo to import a single source of truth from. */
-const WHATSAPP_ONLY_MODULES: string[] | null = ['leads', 'whatsapp', 'pipeline'];
+ * this repo to import a single source of truth from. Exported so
+ * ModuleGate.tsx (route-level enforcement) and any other place that
+ * needs "is this module included on this plan track" can check the
+ * exact same list the Sidebar already uses, rather than a second copy
+ * that could quietly drift out of sync with this one. */
+export const WHATSAPP_ONLY_MODULES: string[] | null = ['leads', 'whatsapp', 'pipeline'];
+
+/** True if `moduleKey` isn't included on `planTrack` -- the single check
+ * every plan-gated surface (sidebar nav, route guards, in-page action
+ * buttons) should use, so "is this module locked" is asked exactly the
+ * same way everywhere instead of each caller re-deriving its own
+ * version of the same condition. */
+export function isModuleLocked(moduleKey: string | undefined, planTrack: string | undefined): boolean {
+  if (!moduleKey) return false;
+  return planTrack === 'whatsapp_only' && !WHATSAPP_ONLY_MODULES?.includes(moduleKey);
+}
 
 export function visibleNav(role: AuthRole, planTrack?: string): NavItem[] {
   return NAV_ITEMS.filter((item) => {
@@ -63,7 +77,7 @@ export function visibleNav(role: AuthRole, planTrack?: string): NavItem[] {
     if (role === 'super_admin') return !!item.superAdminOnly;
     if (item.superAdminOnly) return false;
     if (item.minRole && !atLeast(role, item.minRole)) return false;
-    if (item.moduleKey && planTrack === 'whatsapp_only' && !WHATSAPP_ONLY_MODULES?.includes(item.moduleKey)) return false;
+    if (isModuleLocked(item.moduleKey, planTrack)) return false;
     return true;
   });
 }

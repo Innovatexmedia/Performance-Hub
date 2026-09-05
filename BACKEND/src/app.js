@@ -18,6 +18,7 @@ import cookieParser from 'cookie-parser';
 import dashboardRoutes from './modules/dashboard/dashboard.routes.js';
 import notificationRoutes from './modules/leads/notifications/notification.routes.js';
 import settingsRoutes from './modules/settings/settings.routes.js';
+import planRoutes from './modules/plans/plan.routes.js';
 import authRoutes     from './modules/auth/routes/auth.routes.js';
 import leadRoutes     from './modules/leads/lead/lead.routes.js';
 import pipelineRouter from './modules/pipeline/pipeline.routes.js';
@@ -179,6 +180,15 @@ app.use('/api', generalApiRateLimit);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/settings',   settingsRoutes);
+// NOTE: this file (plan.routes.js -- GET/POST/PATCH/DELETE /api/plans)
+// existed but was never actually mounted anywhere in this app, exactly
+// like the old razorpayWebhook.routes.js gap found earlier -- both
+// Settings > Billing's plan list AND the Super Admin Plans/Tenants tabs
+// call plansApi.list(), which was 404ing the whole time ("Could not
+// load tenants" on the Tenants tab is the SAME root cause, not a
+// separate bug -- it loads tenants and plans together via Promise.all,
+// so the plans 404 fails that whole call too).
+app.use('/api/plans',      planRoutes);
 app.use('/api/auth',      authRoutes);
 app.use('/api/leads',     leadRoutes);
 app.use('/api/pipeline',  pipelineRouter);

@@ -11,6 +11,15 @@ export interface PlatformDashboard {
   mrr: number;
   tenantsByPlan: Record<string, number>;
   tenantsByStatus: Record<string, number>;
+  /** All-time, platform-wide cumulative totals -- not a time-bucketed
+   * trend, just "how much is flowing through the whole platform". */
+  usage: {
+    totalLeads: number;
+    totalCampaigns: number;
+    totalMessages: number;
+    outboundMessages: number;
+    inboundMessages: number;
+  };
 }
 
 /** No longer a fixed set -- plan keys are dynamic now (Super Admin can

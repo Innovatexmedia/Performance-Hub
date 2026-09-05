@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Plus, ShieldCheck, Building2, Users, Server } from 'lucide-react';
+import { Plus, ShieldCheck, Building2, Users, Server, UserPlus, Megaphone, MessageSquare } from 'lucide-react';
 import { superAdminApi } from '@/lib/superAdminApi';
 import { plansApi } from '@/lib/plansApi';
 import { PageHeader, Card, CardHeader, Button, Badge, Tabs, Table, Th, Td, Tr, Modal, Field, Input, Select } from '@/components/ui';
@@ -15,17 +15,20 @@ import type { Plan, CreatePlanInput } from '@/types/plan';
 
 const TABS = [
   { id: 'tenants', label: 'Tenants' }, { id: 'users', label: 'All Users' },
-  { id: 'plans', label: 'Plans' },
+  { id: 'plans', label: 'Plans' }, { id: 'analytics', label: 'Analytics' },
   { id: 'health', label: 'Integration Health' }, { id: 'activity', label: 'Global Activity' },
   { id: 'templates', label: 'Global Templates' },
 ];
 
 /**
- * SuperAdmin -- confirmed spec-aligned (MASTER_SPEC B19, FRONTEND_SPEC §20):
- * platform KPI row + 5 tabs. Real backend built from scratch this session
- * (src/modules/superAdmin/*) -- previously this page read entirely from
- * the old mock store. Every number, every row, every action below is
- * real.
+ * SuperAdmin -- originally built spec-aligned (MASTER_SPEC B19,
+ * FRONTEND_SPEC §20) with exactly 5 tabs; Analytics was added afterward
+ * on direct request (plan distribution + platform-wide usage totals) --
+ * it isn't in the original spec docs, but reuses the SAME
+ * /super-admin/dashboard payload the KPI row already fetches (extended
+ * with a `usage` field -- see superAdmin.service.js's
+ * getPlatformDashboard) rather than adding a new endpoint, so there's
+ * no second fetch or new loading state to manage for it.
  */
 export function SuperAdmin() {
   const [tab, setTab] = useState('tenants');
@@ -51,6 +54,7 @@ export function SuperAdmin() {
       {tab === 'tenants' && <TenantsTab />}
       {tab === 'users' && <UsersTab />}
       {tab === 'plans' && <PlansTab />}
+      {tab === 'analytics' && <AnalyticsTab dashboard={dashboard} />}
       {tab === 'health' && <HealthTab />}
       {tab === 'activity' && <ActivityTab />}
       {tab === 'templates' && <TemplatesTab />}
@@ -382,6 +386,54 @@ function UsersTab() {
         </Table>
       )}
     </Card>
+  );
+}
+
+/**
+ * AnalyticsTab -- plan distribution + platform-wide usage totals.
+ * Reuses the `dashboard` object already fetched once by the parent
+ * SuperAdmin() component (same /super-admin/dashboard payload the top
+ * KPI row reads) rather than fetching anything new -- tenantsByPlan was
+ * already being computed by the backend and simply never rendered
+ * anywhere until now.
+ */
+function AnalyticsTab({ dashboard }: { dashboard: PlatformDashboard | null }) {
+  if (!dashboard) {
+    return <p className="p-8 text-center text-sm text-ink-400">Loading…</p>;
+  }
+
+  const planEntries = Object.entries(dashboard.tenantsByPlan).sort((a, b) => b[1] - a[1]);
+  const maxPlanCount = Math.max(1, ...planEntries.map(([, count]) => count));
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <KpiCard label="Total leads" value={dashboard.usage.totalLeads} icon={<UserPlus size={18} />} accent="#6366f1" hint="All-time, across every tenant" />
+        <KpiCard label="Total campaigns" value={dashboard.usage.totalCampaigns} icon={<Megaphone size={18} />} accent="#8b5cf6" hint="All-time, across every tenant" />
+        <KpiCard label="Messages sent" value={dashboard.usage.totalMessages} icon={<MessageSquare size={18} />} accent="#10b981" hint={`${dashboard.usage.outboundMessages} outbound · ${dashboard.usage.inboundMessages} inbound`} />
+      </div>
+
+      <Card>
+        <CardHeader title="Plan distribution" />
+        {planEntries.length === 0 ? (
+          <p className="p-8 text-center text-sm text-ink-400">No tenants yet.</p>
+        ) : (
+          <div className="space-y-3 p-4">
+            {planEntries.map(([planName, count]) => (
+              <div key={planName}>
+                <div className="mb-1 flex items-center justify-between text-sm">
+                  <span className="font-medium text-ink-700">{planName || 'No plan assigned'}</span>
+                  <span className="text-ink-500">{count} tenant{count === 1 ? '' : 's'}</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-ink-100">
+                  <div className="h-full rounded-full bg-brand-500" style={{ width: `${(count / maxPlanCount) * 100}%` }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
   );
 }
 

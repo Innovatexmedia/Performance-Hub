@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { Toaster } from '@/components/ui/Toaster';
 import { Login } from '@/pages/Auth/Login';
+import { Landing } from '@/pages/Landing/Landing';
 import { Register } from '@/pages/Auth/Register';
 import { ForgotPassword } from '@/pages/Auth/ForgotPassword';
 import { ResetPassword } from '@/pages/Auth/ResetPassword';
@@ -10,7 +11,9 @@ import { VerifyEmail } from '@/pages/Auth/VerifyEmail';
 import { AcceptInvitation } from '@/pages/Auth/AcceptInvitation';
 import { Profile } from '@/pages/Profile/Profile';
 import { RequireRole } from '@/components/auth/RequireRole';
+import { ModuleGate } from '@/components/ModuleGate';
 import { CaptureForm } from '@/pages/Auth/CaptureForm';
+import { PublicBooking } from '@/pages/Public/PublicBooking';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
 import { WhatsAppWorkspace } from '@/pages/WhatsApp/workspace/WhatsAppWorkspace';
@@ -74,6 +77,11 @@ export default function App() {
   return (
     <>
       <Routes>
+        <Route path="/" element={
+          status === 'idle' || status === 'loading' ? null
+          : status === 'authenticated' ? <Navigate to="/dashboard" replace />
+          : <Landing />
+        } />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -81,22 +89,23 @@ export default function App() {
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="/capture" element={<CaptureForm />} />
+        <Route path="/book/:tenantId" element={<PublicBooking />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/leads" element={<Leads />} />
           <Route path="/whatsapp" element={<WhatsAppWorkspace />} />
-          <Route path="/qualification" element={<AIQualification />} />
+          <Route path="/qualification" element={<ModuleGate moduleKey="qualification"><AIQualification /></ModuleGate>} />
           <Route path="/pipeline" element={<Pipeline />} />
-          <Route path="/nurture" element={<Nurture />} />
-          <Route path="/bookings" element={<Bookings />} />
-          <Route path="/calls" element={<Calls />} />
-          <Route path="/attribution" element={<Attribution />} />
-          <Route path="/campaigns" element={<Campaigns />} />
-          <Route path="/payments" element={<Payments />} />
-          <Route path="/reports" element={<Reports />} />
-          <Route path="/automations" element={<Automations />} />
-          <Route path="/templates" element={<Templates />} />
+          <Route path="/nurture" element={<ModuleGate moduleKey="nurture"><Nurture /></ModuleGate>} />
+          <Route path="/bookings" element={<ModuleGate moduleKey="bookings"><Bookings /></ModuleGate>} />
+          <Route path="/calls" element={<ModuleGate moduleKey="calls"><Calls /></ModuleGate>} />
+          <Route path="/attribution" element={<ModuleGate moduleKey="attribution"><Attribution /></ModuleGate>} />
+          <Route path="/campaigns" element={<ModuleGate moduleKey="campaigns"><Campaigns /></ModuleGate>} />
+          <Route path="/payments" element={<ModuleGate moduleKey="payments"><Payments /></ModuleGate>} />
+          <Route path="/reports" element={<ModuleGate moduleKey="reports"><Reports /></ModuleGate>} />
+          <Route path="/automations" element={<ModuleGate moduleKey="automations"><Automations /></ModuleGate>} />
+          <Route path="/templates" element={<ModuleGate moduleKey="templates"><Templates /></ModuleGate>} />
           <Route path="/team" element={<Team />} />
           <Route path="/integrations" element={<Integrations />} />
           <Route path="/settings" element={<Settings />} />

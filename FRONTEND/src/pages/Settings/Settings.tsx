@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Save, Plus, Trash2 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useSettings } from '@/hooks/useSettings';
@@ -43,7 +44,15 @@ export function Settings() {
   const role = useAuthStore((s) => s.user?.role);
   const canEdit = settingsPermissions.canEdit(role);
   const { settings, loading, error, refetch } = useSettings();
-  const [tab, setTab] = useState('company');
+  const [searchParams] = useSearchParams();
+  // Supports deep-linking straight to a tab, e.g. /settings?tab=billing
+  // -- used by ModuleGate's "View plans" button and the Lead Drawer's
+  // upgrade prompts so those actually land somewhere useful instead of
+  // Company (the default) with the person left to find Billing
+  // themselves. Falls back to 'company' for an unrecognized/missing
+  // value rather than silently rendering a blank pane.
+  const requestedTab = searchParams.get('tab');
+  const [tab, setTab] = useState(TABS.some((t) => t.id === requestedTab) ? requestedTab! : 'company');
 
   return (
     <div>
