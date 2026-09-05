@@ -20,7 +20,9 @@ export const campaignSendQueue = new Queue(CAMPAIGN_SEND_QUEUE_NAME, {
 /**
  * Bulk-enqueues one send job per lead for a campaign/broadcast run.
  *
- * jobId is deterministic (`${kind}:${entityId}:${leadId}`) so accidentally
+ * jobId is deterministic (`${kind}-${entityId}-${leadId}`, hyphens --
+ * BullMQ's current version rejects a colon in a custom Job ID with
+ * "Custom Id cannot contain :") so accidentally
  * calling this twice for the same run (e.g. a retried "start" request) is
  * a safe no-op for any lead whose job already exists in the queue, rather
  * than silently double-sending them.
@@ -36,7 +38,7 @@ export async function enqueueCampaignSend(ctx, { kind, entityId, leadIds }) {
       leadId: String(leadId),
     },
     opts: {
-      jobId: `${kind}:${entityId}:${leadId}`,
+      jobId: `${kind}-${entityId}-${leadId}`,
     },
   }));
 

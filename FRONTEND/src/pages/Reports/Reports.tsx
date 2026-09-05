@@ -4,7 +4,7 @@ import { PageHeader, Card, CardHeader, Button, Tabs, Table, Th, Td, Tr, Badge, S
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, DonutChartCard, LineChartCard } from '@/components/charts';
 import { exportToCSV } from '@/utils/csvExport';
-import { formatCurrency, formatCompact } from '@/utils/formatters';
+import { formatCurrency, formatCurrencyCompact } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useReport } from '@/hooks/useReport';
 import { reportsApi } from '@/lib/reportsApi';
@@ -131,7 +131,7 @@ function PipelineReportView({ data }: { data: PipelineReport }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Open pipeline" value={formatCompact(data.kpis.pipelineValue)} icon={<span />} accent="#6366f1" />
+        <KpiCard label="Open pipeline" value={formatCurrencyCompact(data.kpis.pipelineValue)} icon={<span />} accent="#6366f1" />
         <KpiCard label="Deals" value={data.kpis.totalDeals} icon={<span />} accent="#8b5cf6" />
         <KpiCard label="Won" value={data.kpis.wonDeals} icon={<span />} accent="#10b981" />
         <KpiCard label="Lost" value={data.kpis.lostDeals} icon={<span />} accent="#ef4444" />
@@ -170,7 +170,7 @@ function WhatsAppReportView({ data }: { data: WhatsAppReport }) {
         <KpiCard label="Conversations" value={data.kpis.totalConversations} icon={<span />} accent="#22c55e" />
         <KpiCard label="Messages" value={data.kpis.totalMessages} icon={<span />} accent="#6366f1" />
         <KpiCard label="Campaigns" value={data.kpis.campaigns} icon={<span />} accent="#8b5cf6" />
-        <KpiCard label="WA Revenue" value={formatCompact(data.kpis.revenue)} icon={<span />} accent="#10b981" />
+        <KpiCard label="WA Revenue" value={formatCurrencyCompact(data.kpis.revenue)} icon={<span />} accent="#10b981" />
       </div>
     </div>
   );
@@ -206,9 +206,9 @@ function RevenueReportView({ data }: { data: RevenueReport }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Revenue" value={formatCompact(data.kpis.totalRevenue)} icon={<span />} accent="#10b981" />
-        <KpiCard label="Avg deal" value={formatCompact(data.kpis.avgPaymentSize)} icon={<span />} accent="#6366f1" />
-        <KpiCard label="Outstanding" value={formatCompact(data.kpis.pendingAmount)} icon={<span />} accent="#f59e0b" />
+        <KpiCard label="Revenue" value={formatCurrencyCompact(data.kpis.totalRevenue)} icon={<span />} accent="#10b981" />
+        <KpiCard label="Avg deal" value={formatCurrencyCompact(data.kpis.avgPaymentSize)} icon={<span />} accent="#6366f1" />
+        <KpiCard label="Outstanding" value={formatCurrencyCompact(data.kpis.pendingAmount)} icon={<span />} accent="#f59e0b" />
         <KpiCard label="Refunded" value={data.kpis.refundedCount} icon={<span />} accent="#ef4444" />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">

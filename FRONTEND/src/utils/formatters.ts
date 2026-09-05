@@ -1,13 +1,38 @@
-export function formatCurrency(amount: number, currency = 'USD'): string {
+import { useCurrencyStore } from '@/store/currencyStore';
+
+export function formatCurrency(amount: number, currency?: string): string {
+  // Falls back to the tenant's real configured currency (Settings >
+  // Company > Currency) when the caller doesn't pass one explicitly --
+  // previously this silently defaulted to hardcoded 'USD', so a tenant
+  // with INR configured saw $ signs on every KPI/value that didn't
+  // happen to pass currency through by hand (Dashboard, Leads, Pipeline,
+  // Campaigns, Reports, Attribution all called it this way).
+  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'USD';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency,
+    currency: resolvedCurrency,
     maximumFractionDigits: 0,
   }).format(amount);
 }
 
 export function formatCompact(n: number): string {
   return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+}
+
+/**
+ * Compact currency formatting, e.g. "₹18K" -- for money KPI cards that
+ * previously called plain formatCompact() and showed a bare number with
+ * no currency symbol at all (Pipeline Value, Total spend, Won Value,
+ * etc.). Same tenant-currency default as formatCurrency() above.
+ */
+export function formatCurrencyCompact(amount: number, currency?: string): string {
+  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'USD';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: resolvedCurrency,
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(amount);
 }
 
 export function formatNumber(n: number): string {

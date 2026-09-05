@@ -8,7 +8,7 @@ import { useDashboard } from '@/hooks/useDashboard';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { Card, CardHeader, Badge, PageHeader, Button } from '@/components/ui';
 import { BarChartCard, LineChartCard, DonutChartCard, FunnelChartCard } from '@/components/charts';
-import { formatCurrency, formatCompact, timeAgo } from '@/utils/formatters';
+import { formatCurrency, formatCurrencyCompact, timeAgo } from '@/utils/formatters';
 
 /**
  * Dashboard -- confirmed spec-aligned (MASTER_SPEC B2, FRONTEND_SPEC §3):
@@ -95,7 +95,7 @@ export function Dashboard() {
         <KpiCard label="Qualified Leads" value={kpis.qualifiedLeads.value} delta={kpis.qualifiedLeads.change ?? undefined} icon={<UserCheck size={18} />} accent="#3b82f6" />
         <KpiCard label="Hot Leads" value={kpis.hotLeads.value} delta={kpis.hotLeads.change ?? undefined} icon={<Flame size={18} />} accent="#ef4444" />
         <KpiCard label="Booked Calls" value={kpis.bookedCalls.value} delta={kpis.bookedCalls.change ?? undefined} icon={<CalendarCheck size={18} />} accent="#8b5cf6" />
-        <KpiCard label="Pipeline Value" value={formatCompact(kpis.pipelineValue.value)} icon={<TrendingUp size={18} />} accent="#06b6d4" />
+        <KpiCard label="Pipeline Value" value={formatCurrencyCompact(kpis.pipelineValue.value)} icon={<TrendingUp size={18} />} accent="#06b6d4" />
         <KpiCard label="Revenue Closed" value={formatCurrency(kpis.revenueClosed.value)} delta={kpis.revenueClosed.change ?? undefined} icon={<DollarSign size={18} />} accent="#10b981" />
         <KpiCard label="Conversion Rate" value={`${kpis.conversionRate.value.toFixed(1)}%`} delta={kpis.conversionRate.change ?? undefined} icon={<Percent size={18} />} accent="#f59e0b" />
         <KpiCard label="Avg Response Time" value={`${kpis.avgResponseTime.value}m`} icon={<Timer size={18} />} accent="#14b8a6" />
@@ -169,7 +169,7 @@ export function Dashboard() {
                   <p className="truncate text-sm font-medium text-ink-800">{c.campaign_name}</p>
                   <p className="text-xs text-ink-500">{c.leads_generated} leads · {c.bookings} booked</p>
                 </div>
-                <Badge tone="green">{formatCompact(c.revenue)}</Badge>
+                <Badge tone="green">{formatCurrencyCompact(c.revenue)}</Badge>
               </div>
             ))}
           </div>

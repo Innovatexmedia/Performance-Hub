@@ -1,20 +1,10 @@
 import { ArrowRight } from 'lucide-react';
 import { Card } from '@/components/ui';
 import { FunnelChartCard } from '@/components/charts';
-import { formatCompact } from '@/utils/formatters';
+import { formatCurrencyCompact } from '@/utils/formatters';
 import { STAGE_BOARD_KEY, STAGE_COLOR } from '@/types/deal';
 import type { DealStage, PipelineStats } from '@/types/deal';
 
-/**
- * FlowView -- the "Flow" tab. Reuses the existing FunnelChartCard component
- * (already built for other pages) rather than a bespoke chart, fed with
- * real stats.stageTotals -- no invented numbers.
- *
- * Shows only the primary happy-path stages (same SUMMARY_STAGES set as the
- * board's stage strip) -- a funnel is a progression visualization, and
- * Lost/Nurture/Negotiation are exit/side states, not part of a linear
- * conversion path.
- */
 export function FlowView({ stats, stages }: { stats: PipelineStats; stages: DealStage[] }) {
   const countData = stages.map((stage) => ({
     name: stage,
@@ -71,7 +61,7 @@ export function FlowView({ stats, stages }: { stats: PipelineStats; stages: Deal
       </Card>
 
       <p className="text-center text-xs text-ink-400">
-        Total open pipeline across these stages: {formatCompact(totalOpenValue)}
+        Total open pipeline across these stages: {formatCurrencyCompact(totalOpenValue)}
       </p>
     </div>
   );

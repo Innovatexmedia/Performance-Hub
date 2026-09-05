@@ -6,11 +6,11 @@ import {
 } from 'lucide-react';
 import { PageHeader, Card, Badge, Button, Avatar, Select, Modal, Field, Input } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
-import { formatCurrency, formatCompact } from '@/utils/formatters';
+import { formatCurrency, formatCurrencyCompact } from '@/utils/formatters';
 import { exportToCSV } from '@/utils/csvExport';
 import { toast } from '@/store/toastStore';
 import { usePipelineBoard } from '@/hooks/usePipelineBoard';
-import { usePipelineStageLabels } from '@/hooks/usePipelineStageLabels';
+import { usePipelineStageLabels } from '@/hooks/Usepipelinestagelabels';
 import { useLeadNames } from '@/hooks/useLeadNames';
 import { useTeamMembers } from '@/hooks/useTeamMembers';
 import { usePermissions } from '@/hooks/usePermissions';
@@ -151,8 +151,8 @@ export function Pipeline() {
       {/* KPI row -- no trend deltas: accurate 30-day comparisons need a
           historical-snapshot backend feature that doesn't exist yet. */}
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Open Pipeline" value={stats ? formatCompact(stats.pipelineValue) : '—'} icon={<TrendingUp size={18} />} accent="#6366f1" />
-        <KpiCard label="Won Value" value={stats ? formatCompact(stats.wonValue) : '—'} icon={<DollarSign size={18} />} accent="#10b981" />
+        <KpiCard label="Open Pipeline" value={stats ? formatCurrencyCompact(stats.pipelineValue) : '—'} icon={<TrendingUp size={18} />} accent="#6366f1" />
+        <KpiCard label="Won Value" value={stats ? formatCurrencyCompact(stats.wonValue) : '—'} icon={<DollarSign size={18} />} accent="#10b981" />
         <KpiCard label="Win Rate" value={`${winRatePct}%`} icon={<Target size={18} />} accent="#f59e0b" />
         <KpiCard label="Active Deals" value={activeDeals} icon={<Briefcase size={18} />} accent="#06b6d4" />
       </div>
@@ -175,7 +175,7 @@ export function Pipeline() {
                   </span>
                   <span className="text-xs font-semibold text-ink-700">{stageLabel(stage)}</span>
                   <span className="text-xs text-ink-400">{t.count}</span>
-                  <span className="text-xs font-medium text-ink-500">{formatCompact(t.value)}</span>
+                  <span className="text-xs font-medium text-ink-500">{formatCurrencyCompact(t.value)}</span>
                 </button>
                 {i < SUMMARY_STAGES.length - 1 && (
                   <div className="h-px w-4 shrink-0 border-t-2 border-dashed border-ink-200" />
@@ -222,7 +222,7 @@ export function Pipeline() {
                       <span className="text-sm font-semibold text-ink-800">{stageLabel(stage)}</span>
                       <span className="rounded-full bg-white px-1.5 text-xs font-medium text-ink-500">{stageDeals.length}</span>
                     </div>
-                    <span className="text-xs font-medium text-ink-400">{formatCompact(stageValue)}</span>
+                    <span className="text-xs font-medium text-ink-400">{formatCurrencyCompact(stageValue)}</span>
                   </div>
                   <div className="flex-1 space-y-2 px-2 pb-2">
                     {isDragTarget && (

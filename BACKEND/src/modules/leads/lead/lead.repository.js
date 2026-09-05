@@ -96,6 +96,15 @@ export const leadRepository = {
    * phone and whatsapp_number -- a pragmatic, well-established technique,
    * not full E.164 normalization, but handles the common real-world case
    * without a data migration.
+   *
+   * Deliberately does NOT filter archived:false (this function's one
+   * caller, metaWebhook.service.js, was the confirmed source of a real
+   * duplicate-lead bug: a lead gets archived, the same real customer
+   * texts again, the old archived-excluding query genuinely doesn't find
+   * them, and a brand-new duplicate lead gets created for a number that
+   * already existed). A real inbound message is unambiguous evidence
+   * this contact is engaging again -- the caller un-archives the match
+   * it finds here rather than treating "archived" as "gone forever".
    */
   findByWhatsAppNumber(tenantId, rawPhone) {
     const digits = String(rawPhone || '').replace(/\D/g, '');
@@ -104,7 +113,6 @@ export const leadRepository = {
     const pattern = new RegExp(`${last10}$`);
     return Lead.findOne({
       tenant_id: tenantId,
-      archived: false,
       $or: [{ phone: pattern }, { whatsapp_number: pattern }],
     });
   },

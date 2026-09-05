@@ -3,7 +3,7 @@ import { Plus, CreditCard, CheckCircle2, Copy, Download } from 'lucide-react';
 import { PageHeader, Card, CardHeader, Button, StatusBadge, Table, Th, Td, Tr, Modal, Field, Input, Select, Avatar, EmptyState } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { DonutChartCard } from '@/components/charts';
-import { formatCurrency, formatCompact, formatDate } from '@/utils/formatters';
+import { formatCurrency, formatCurrencyCompact, formatDate } from '@/utils/formatters';
 import { exportToCSV } from '@/utils/csvExport';
 import { toast } from '@/store/toastStore';
 import { usePayments } from '@/hooks/usePayments';
@@ -78,8 +78,8 @@ export function Payments() {
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <KpiCard label="Revenue collected" value={kpis ? formatCompact(kpis.revenueCollected) : '—'} icon={<CheckCircle2 size={18} />} accent="#10b981" />
-        <KpiCard label="Outstanding" value={kpis ? formatCompact(kpis.outstanding) : '—'} icon={<CreditCard size={18} />} accent="#f59e0b" />
+        <KpiCard label="Revenue collected" value={kpis ? formatCurrencyCompact(kpis.revenueCollected) : '—'} icon={<CheckCircle2 size={18} />} accent="#10b981" />
+        <KpiCard label="Outstanding" value={kpis ? formatCurrencyCompact(kpis.outstanding) : '—'} icon={<CreditCard size={18} />} accent="#f59e0b" />
         <KpiCard label="Paid" value={kpis?.paidCount ?? '—'} icon={<CheckCircle2 size={18} />} accent="#10b981" />
         <KpiCard label="Pending" value={kpis?.pendingCount ?? '—'} icon={<CreditCard size={18} />} accent="#ef4444" />
       </div>

@@ -11,7 +11,6 @@ import { AcceptInvitation } from '@/pages/Auth/AcceptInvitation';
 import { Profile } from '@/pages/Profile/Profile';
 import { RequireRole } from '@/components/auth/RequireRole';
 import { CaptureForm } from '@/pages/Auth/CaptureForm';
-import { PublicBooking } from '@/pages/Public/PublicBooking';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
 import { WhatsAppWorkspace } from '@/pages/WhatsApp/workspace/WhatsAppWorkspace';
@@ -31,6 +30,7 @@ import { Integrations } from '@/pages/Integrations/Integrations';
 import { Settings } from '@/pages/Settings/Settings';
 import { SuperAdmin } from '@/pages/SuperAdmin/SuperAdmin';
 import { useAuthStore } from '@/store/authStore';
+import { useCurrencyStore } from '@/store/currencyStore';
 import { settingsApi } from '@/lib/settingsApi';
 import { applyAccentColor } from '@/utils/theme';
 
@@ -60,6 +60,17 @@ export default function App() {
     return () => { cancelled = true; };
   }, [user?.tenantId]);
 
+  // Same reasoning as the accent-color effect above -- currency is also a
+  // tenant-level setting that formatCurrency() (utils/formatters.ts) now
+  // reads a default from, but the store previously only ever got
+  // populated by visiting Settings. Anyone who never opened Settings in
+  // a session saw every unlabeled money value fall back to USD/$, even
+  // with INR genuinely configured -- this is the actual fix for that.
+  useEffect(() => {
+    if (!user?.tenantId) return;
+    void useCurrencyStore.getState().refresh();
+  }, [user?.tenantId]);
+
   return (
     <>
       <Routes>
@@ -70,7 +81,6 @@ export default function App() {
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="/capture" element={<CaptureForm />} />
-        <Route path="/book/:tenantId" element={<PublicBooking />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />

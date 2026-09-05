@@ -7,7 +7,8 @@ import type {
   LeadDetails,
   LeadNote,
   LeadConstants,
-  ImportSummary,
+  ImportStartResult,
+  ImportStatus,
 } from '@/types/lead';
 
 /**
@@ -43,7 +44,11 @@ export const leadsApi = {
   unassign: (id: string) => apiClientRaw.post<Lead>(`/leads/${id}/unassign`),
 
   /**
-   * importCsv -- bulk-create leads from a CSV file.
+   * importCsv -- starts a real, asynchronous bulk import from a CSV
+   * file and returns immediately (202) with an importId to poll via
+   * getImportStatus(). Previously this waited for every row to process
+   * synchronously inside the request; now it's queue-based, matching
+   * how Campaign/Broadcast sends already work.
    * SOURCE: src/modules/leads/imports/import.controller.js + csv-import.service.js
    * Recognized column headers (case-insensitive): name, email, phone,
    * whatsapp / whatsapp number, company, source, medium, campaign, status,
@@ -51,10 +56,15 @@ export const leadsApi = {
    * skipDuplicates (default true) skips rows matching an existing lead's
    * email or phone rather than erroring.
    */
-  importCsv(file: File, skipDuplicates = true): Promise<ImportSummary> {
+  importCsv(file: File, skipDuplicates = true): Promise<ImportStartResult> {
     const formData = new FormData();
     formData.append('file', file);
-    return requestFormDataRaw<ImportSummary>('/leads/import', formData, { skipDuplicates });
+    return requestFormDataRaw<ImportStartResult>('/leads/import', formData, { skipDuplicates });
+  },
+
+  /** getImportStatus -- poll this while an import's status isn't COMPLETED yet. */
+  getImportStatus(importId: string): Promise<ImportStatus> {
+    return apiClientRaw.get<ImportStatus>(`/leads/import/${importId}`);
   },
 
   /**

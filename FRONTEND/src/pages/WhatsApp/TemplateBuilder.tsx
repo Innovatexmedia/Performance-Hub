@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import { Plus, Trash2, Smartphone, Upload, Image as ImageIcon, FileText, Video, AlertTriangle, Wand2, CheckCircle2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Plus, Trash2, Smartphone, Upload, Image as ImageIcon, FileText, Video, AlertTriangle, Wand2, CheckCircle2, ZoomIn } from 'lucide-react';
 import { Modal, Button, Input, Field, Select, Textarea, Badge, cn } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -120,6 +120,146 @@ function CharCounter({ current, max }: { current: number; max: number }) {
  * without needing to open the full edit form just to see what a
  * template looks like.
  */
+/**
+ * ImageCropModal -- WhatsApp template header images must be a fixed
+ * 1.91:1 aspect ratio (the same ratio Facebook/WhatsApp link previews
+ * use) to display correctly and not get cropped unpredictably by Meta's
+ * own rendering. Rather than a freeform crop (which could easily produce
+ * an off-ratio image that looks fine here but gets mangled on a real
+ * device), this locks the crop frame to exactly that ratio -- the person
+ * can drag to reposition and zoom in, but can't produce a non-compliant
+ * output.
+ *
+ * No new npm dependency -- plain canvas + pointer events, matching how
+ * light this one interaction needs to be.
+ */
+const HEADER_ASPECT_RATIO = 1200 / 628; // WhatsApp/Meta's standard media-header ratio
+const CROP_OUTPUT_WIDTH = 1200;
+const CROP_OUTPUT_HEIGHT = 628;
+const CROP_FRAME_WIDTH = 480;
+const CROP_FRAME_HEIGHT = Math.round(CROP_FRAME_WIDTH / HEADER_ASPECT_RATIO);
+
+function ImageCropModal({ file, onConfirm, onCancel }: {
+  file: File;
+  onConfirm: (blob: Blob) => void;
+  onCancel: () => void;
+}) {
+  const [imgUrl, setImgUrl] = useState<string | null>(null);
+  const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const dragRef = useRef<{ startX: number; startY: number; startOffsetX: number; startOffsetY: number } | null>(null);
+
+  useEffect(() => {
+    const url = URL.createObjectURL(file);
+    setImgUrl(url);
+    const img = new Image();
+    img.onload = () => setNaturalSize({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  if (!imgUrl || !naturalSize) {
+    return (
+      <Modal open onClose={onCancel} title="Position your image" size="sm" footer={<Button variant="secondary" onClick={onCancel}>Cancel</Button>}>
+        <p className="py-8 text-center text-sm text-ink-500">Loading image…</p>
+      </Modal>
+    );
+  }
+
+  // baseScale: the zoom level at which the image just fully covers the
+  // crop frame (same idea as CSS object-fit: cover) -- the floor for
+  // the zoom slider, since zooming OUT further would leave gaps.
+  const baseScale = Math.max(CROP_FRAME_WIDTH / naturalSize.w, CROP_FRAME_HEIGHT / naturalSize.h);
+  const effectiveScale = baseScale * zoom;
+  const dispW = naturalSize.w * effectiveScale;
+  const dispH = naturalSize.h * effectiveScale;
+  const maxOffsetX = Math.max(0, (dispW - CROP_FRAME_WIDTH) / 2);
+  const maxOffsetY = Math.max(0, (dispH - CROP_FRAME_HEIGHT) / 2);
+
+  const clampedOffset = {
+    x: Math.max(-maxOffsetX, Math.min(maxOffsetX, offset.x)),
+    y: Math.max(-maxOffsetY, Math.min(maxOffsetY, offset.y)),
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    dragRef.current = { startX: e.clientX, startY: e.clientY, startOffsetX: clampedOffset.x, startOffsetY: clampedOffset.y };
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    const dy = e.clientY - dragRef.current.startY;
+    setOffset({ x: dragRef.current.startOffsetX + dx, y: dragRef.current.startOffsetY + dy });
+  };
+  const onPointerUp = () => { dragRef.current = null; };
+
+  const handleConfirm = () => {
+    const img = new Image();
+    img.onload = () => {
+      // Map the visible crop-frame area back to natural image pixel
+      // coordinates, then draw exactly that region at the real output
+      // resolution -- see this component's doc comment for why the
+      // ratio is fixed rather than freeform.
+      const srcX = ((dispW - CROP_FRAME_WIDTH) / 2 - clampedOffset.x) / effectiveScale;
+      const srcY = ((dispH - CROP_FRAME_HEIGHT) / 2 - clampedOffset.y) / effectiveScale;
+      const srcW = CROP_FRAME_WIDTH / effectiveScale;
+      const srcH = CROP_FRAME_HEIGHT / effectiveScale;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = CROP_OUTPUT_WIDTH;
+      canvas.height = CROP_OUTPUT_HEIGHT;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { toast.error('Crop failed', 'Could not create canvas context.'); return; }
+      ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, CROP_OUTPUT_WIDTH, CROP_OUTPUT_HEIGHT);
+      canvas.toBlob((blob) => {
+        if (!blob) { toast.error('Crop failed', 'Could not export the cropped image.'); return; }
+        onConfirm(blob);
+      }, file.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.92);
+    };
+    img.src = imgUrl;
+  };
+
+  return (
+    <Modal open onClose={onCancel} title="Position your image" size="sm" footer={
+      <>
+        <Button variant="secondary" onClick={onCancel}>Cancel</Button>
+        <Button onClick={handleConfirm}>Use this crop</Button>
+      </>
+    }>
+      <p className="mb-3 text-xs text-ink-500">WhatsApp headers use a fixed 1.91:1 shape -- drag to reposition, zoom to fill the frame.</p>
+      <div
+        className="relative mx-auto touch-none overflow-hidden rounded-lg bg-ink-900"
+        style={{ width: CROP_FRAME_WIDTH, height: CROP_FRAME_HEIGHT, cursor: 'grab' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+      >
+        <img
+          src={imgUrl}
+          alt=""
+          draggable={false}
+          className="absolute select-none"
+          style={{
+            width: dispW,
+            height: dispH,
+            left: (CROP_FRAME_WIDTH - dispW) / 2 + clampedOffset.x,
+            top: (CROP_FRAME_HEIGHT - dispH) / 2 + clampedOffset.y,
+          }}
+        />
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        <ZoomIn size={14} className="shrink-0 text-ink-400" />
+        <input
+          type="range" min={1} max={3} step={0.01} value={zoom}
+          onChange={(e) => setZoom(Number(e.target.value))}
+          className="flex-1"
+        />
+      </div>
+    </Modal>
+  );
+}
+
 export function TemplatePreview({ headerType, headerText, headerMediaUrl, body, footer, buttons, category }: {
   headerType: HeaderType;
   headerText?: string;
@@ -190,6 +330,7 @@ export function TemplateBuilder({ template, onClose, onSaved }: {
   const [saving, setSaving] = useState(false);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const [uploadingHeader, setUploadingHeader] = useState(false);
+  const [cropPendingFile, setCropPendingFile] = useState<File | null>(null);
   // Issues are collected live, but only SHOWN after a first save attempt
   // -- otherwise a blank new-template form would open already covered in
   // red "required" errors before the user has typed anything.
@@ -358,6 +499,7 @@ export function TemplateBuilder({ template, onClose, onSaved }: {
   const nameValid = form.name.trim().length > 0 && TEMPLATE_NAME_PATTERN.test(form.name.trim());
 
   return (
+    <>
     <Modal
       open onClose={onClose} title={isEdit ? 'Edit Template' : 'WhatsApp Template Builder'} size="xl"
       footer={<><Button variant="secondary" onClick={onClose} disabled={saving}>Cancel</Button><Button onClick={() => void save()} disabled={saving}>{saving ? 'Saving…' : isEdit ? 'Save template' : 'Create template'}</Button></>}
@@ -406,7 +548,14 @@ export function TemplateBuilder({ template, onClose, onSaved }: {
                 type="file"
                 accept={HEADER_MEDIA_ACCEPT[form.headerType]}
                 className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) void uploadHeaderMedia(f); e.target.value = ''; }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    if (form.headerType === 'IMAGE') setCropPendingFile(f);
+                    else void uploadHeaderMedia(f);
+                  }
+                  e.target.value = '';
+                }}
               />
               {form.headerMediaUrl ? (
                 <div className="flex items-center gap-2 rounded-lg border border-ink-200 px-3 py-2 text-sm">
@@ -526,5 +675,17 @@ export function TemplateBuilder({ template, onClose, onSaved }: {
         </div>
       </div>
     </Modal>
+    {cropPendingFile && (
+      <ImageCropModal
+        file={cropPendingFile}
+        onCancel={() => setCropPendingFile(null)}
+        onConfirm={(blob) => {
+          const cropped = new File([blob], cropPendingFile.name.replace(/\.[^.]+$/, '') + (blob.type === 'image/png' ? '.png' : '.jpg'), { type: blob.type });
+          setCropPendingFile(null);
+          void uploadHeaderMedia(cropped);
+        }}
+      />
+    )}
+    </>
   );
 }

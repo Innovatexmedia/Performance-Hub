@@ -280,13 +280,41 @@ const ACTION_HANDLERS = {
   },
 
   [ACTION_TYPE.SEND_BROADCAST]: async (action, ctx, logs) => {
-    // Not wired -- Broadcasts target a whole audience query, not a single
-    // lead/contact, so "send this broadcast because this one lead's rule
-    // fired" doesn't map cleanly onto the existing Broadcast model
-    // without real product decisions this pass doesn't make. Left
-    // simulated rather than guessed at.
-    logs.push(`[SEND_BROADCAST] broadcastId=${action.params?.broadcastId} → simulated (not yet wired)`);
-    return { success: true, message: `Broadcast ${action.params?.broadcastId || '(none)'} would be sent (simulated)` };
+    // param name kept as 'broadcastId' for backward compatibility with
+    // any rule already saved before the Broadcasts tab was merged into
+    // Campaigns -- it's really a Campaign id now (Type: Broadcast).
+    const campaignId = action.params?.broadcastId || action.params?.campaignId;
+    if (!campaignId) return { success: false, message: 'No campaign configured on this action' };
+    if (ctx.dryRun) {
+      logs.push(`[SEND_BROADCAST] campaignId=${campaignId} → simulated (dry run)`);
+      return { success: true, message: `Campaign ${campaignId} would be started (dry run)` };
+    }
+
+    try {
+      // Dynamic import -- same circular-dependency-avoidance pattern as
+      // CHANGE_PIPELINE_STAGE's dealService import. Starts an
+      // ALREADY-CONFIGURED Campaign (Type: Broadcast) -- its audience and
+      // template were set up separately, in the Campaigns tab -- the
+      // same real pipeline as clicking "Start" manually: consent/opt-out
+      // filtering, approval-state validation, then the real
+      // campaignSenderService send dispatch. Lead-independent by design.
+      //
+      // NOTE: the standalone Broadcasts module (broadcasts.service.js)
+      // still exists and still works for any pre-existing Broadcast
+      // documents, but the Broadcasts tab is hidden from the UI --
+      // Campaigns (with Type: Broadcast) is the only way to create a new
+      // one going forward, matching how AiSensy itself models this
+      // (one Campaigns feature, Broadcast is a Type within it).
+      const { campaignsService } = await import('../campaigns/campaigns.service.js');
+      const result = await campaignsService.startCampaign(ctx, campaignId, {
+        comment: `Started by automation rule "${ctx.ruleName || ''}"`.trim(),
+      });
+      logs.push(`[SEND_BROADCAST] campaignId=${campaignId} -> started, ${result.recipientCount ?? '?'} recipients`);
+      return { success: true, message: `Campaign started (${result.recipientCount ?? '?'} recipients)` };
+    } catch (err) {
+      logs.push(`[SEND_BROADCAST] campaignId=${campaignId} -> failed: ${err.message}`);
+      return { success: false, message: err.message };
+    }
   },
 
   [ACTION_TYPE.GENERATE_AI_REPLY]: async (action, ctx, logs) => {

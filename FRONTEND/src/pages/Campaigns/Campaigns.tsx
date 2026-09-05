@@ -3,7 +3,7 @@ import { Plus, Megaphone, Copy, Link2, Download } from 'lucide-react';
 import { PageHeader, Card, CardHeader, Button, Badge, StatusBadge, Table, Th, Td, Tr, Modal, Field, Input, Select, EmptyState } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard } from '@/components/charts';
-import { formatCurrency, formatCompact } from '@/utils/formatters';
+import { formatCurrency, formatCurrencyCompact } from '@/utils/formatters';
 import { exportToCSV } from '@/utils/csvExport';
 import { toast } from '@/store/toastStore';
 import { useCampaigns } from '@/hooks/useCampaigns';
@@ -59,8 +59,8 @@ export function Campaigns() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label="Campaigns" value={kpis?.totalCampaigns ?? '—'} icon={<Megaphone size={18} />} accent="#6366f1" />
-        <KpiCard label="Total spend" value={kpis ? formatCompact(kpis.totalSpend) : '—'} icon={<Megaphone size={18} />} accent="#f59e0b" />
-        <KpiCard label="Total revenue" value={kpis ? formatCompact(kpis.totalRevenue) : '—'} icon={<Megaphone size={18} />} accent="#10b981" />
+        <KpiCard label="Total spend" value={kpis ? formatCurrencyCompact(kpis.totalSpend) : '—'} icon={<Megaphone size={18} />} accent="#f59e0b" />
+        <KpiCard label="Total revenue" value={kpis ? formatCurrencyCompact(kpis.totalRevenue) : '—'} icon={<Megaphone size={18} />} accent="#10b981" />
         <KpiCard label="Blended ROAS" value={kpis ? `${kpis.blendedRoas}x` : '—'} icon={<Megaphone size={18} />} accent="#8b5cf6" />
       </div>
 

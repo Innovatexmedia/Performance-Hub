@@ -3,7 +3,7 @@ import { PageHeader, Card, CardHeader, Button, Table, Th, Td, Tr, Badge, StatusB
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, DonutChartCard } from '@/components/charts';
 import { exportToCSV } from '@/utils/csvExport';
-import { formatCurrency, formatDateTime, formatCompact } from '@/utils/formatters';
+import { formatCurrency, formatDateTime, formatCompact, formatCurrencyCompact } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { useAttribution } from '@/hooks/useAttribution';
 import { attributionApi } from '@/lib/attributionApi';
@@ -32,7 +32,7 @@ export function Attribution() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label="Tracking events" value={dashboard?.kpis.totalEvents ?? '—'} icon={<Network size={18} />} accent="#6366f1" />
-        <KpiCard label="Attributed revenue" value={dashboard ? formatCompact(dashboard.kpis.attributedRevenue) : '—'} icon={<GitBranch size={18} />} accent="#10b981" />
+        <KpiCard label="Attributed revenue" value={dashboard ? formatCurrencyCompact(dashboard.kpis.attributedRevenue) : '—'} icon={<GitBranch size={18} />} accent="#10b981" />
         <KpiCard label="Sources" value={dashboard?.kpis.uniqueSources ?? '—'} icon={<Network size={18} />} accent="#8b5cf6" />
         <KpiCard label="Top source" value={dashboard?.kpis.topSource ?? '—'} icon={<Network size={18} />} accent="#f59e0b" />
       </div>

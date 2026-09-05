@@ -521,6 +521,22 @@ export const campaignsService = {
 
     this.validateStatusTransition(existing.status, CAMPAIGN_STATUS.CANCELLED);
 
+    // A small/fast campaign can finish processing every recipient within
+    // seconds of "Start" -- if the person clicks Cancel after that point,
+    // there is nothing left in flight to actually stop, and labeling the
+    // result CANCELLED is actively misleading (it reads as "nothing was
+    // sent" when messages genuinely went out). Block it here with a clear
+    // reason instead of silently allowing a CANCELLED status that
+    // disagrees with the campaign's own sent/failed counts.
+    const alreadyFullyProcessed = existing.recipientCount > 0
+      && (existing.sentCount + existing.failedCount + existing.skippedCount) >= existing.recipientCount;
+    if (alreadyFullyProcessed) {
+      throw new AppError(
+        400,
+        `This campaign has already finished sending to all ${existing.recipientCount} recipient(s) -- there is nothing left to cancel. Refresh to see its final status.`,
+      );
+    }
+
     const now = new Date();
     const auditEntry = buildAuditEntry(existing.status, CAMPAIGN_STATUS.CANCELLED, CAMPAIGN_ACTION.CANCEL, ctx.userId, comment);
 

@@ -693,13 +693,27 @@ export const templatesService = {
             existing = await templatesRepository.findByNameAndLanguage(ctx.tenantId, metaTemplate.name, metaTemplate.language);
           }
 
+          // Meta's GET /message_templates response NEVER includes a
+          // fetchable media URL for an IMAGE/VIDEO/DOCUMENT header --
+          // only the format ("IMAGE") is confirmed, the one-time upload
+          // handle used at creation isn't retrievable afterward. Without
+          // this fallback, every sync silently wiped the real
+          // Cloudinary-hosted mediaUrl this template was created with,
+          // breaking both its preview (shows a placeholder instead of
+          // the image) and every future send (MetaProvider.sendTemplate
+          // can't build a header component with no mediaUrl, so Meta
+          // rejects the message outright for a template that requires one).
+          const header = mapped.header.mediaUrl
+            ? mapped.header
+            : { ...mapped.header, mediaUrl: existing?.header?.mediaUrl || '', mediaMimeType: existing?.header?.mediaMimeType || '', mediaSizeBytes: existing?.header?.mediaSizeBytes || 0 };
+
           const patch = {
             name: metaTemplate.name,
             category: mapMetaCategory(metaTemplate.category),
             languageCode: metaTemplate.language,
             status: statusInfo.status,
             approvalStatus: statusInfo.approvalStatus,
-            header: mapped.header,
+            header,
             body: mapped.body,
             footer: mapped.footer,
             buttons: mapped.buttons,

@@ -69,6 +69,15 @@ async function findOrCreateLeadAndConversation(ctx, waId, profileName) {
   let lead = await leadRepository.findByWhatsAppNumber(ctx.tenantId, waId);
   console.log(`[WA_INBOUND_DEV] Lead lookup for ${waId}: ${lead ? 'FOUND existing lead ' + (lead.id || lead._id) : 'not found -- will create new'}`);
 
+  if (lead?.archived) {
+    // Confirmed real bug this fixes: findByWhatsAppNumber used to exclude
+    // archived leads, so a real customer texting again after being
+    // archived got a brand-new duplicate lead instead of reviving the
+    // one that already existed for their number.
+    lead = await leadRepository.unarchiveById(ctx.tenantId, lead._id);
+    console.log(`[WA_INBOUND_DEV] Lead ${lead.id || lead._id} was archived -- un-archived on real inbound message`);
+  }
+
   if (!lead) {
     lead = await leadService.createLead(
       ctx,

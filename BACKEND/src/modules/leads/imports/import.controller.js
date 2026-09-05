@@ -1,8 +1,6 @@
-import { Readable } from 'stream';
-import csvParser from 'csv-parser';
-
 import { asyncHandler, AppError } from '../../../shared/helpers/lead.helpers.js';
 import { importService } from './import.service.js';
+import { csvToLeadRows } from './csv-import.service.js';
 
 export const importController = {
   // POST /api/leads/import
@@ -11,11 +9,18 @@ export const importController = {
   // 2. JSON { rows: [...] }
   // 3. JSON { csv: "..." }
   // 4. Raw CSV text body
-
+  //
+  // Real and asynchronous (see import.service.js's startImport for why).
+  // ALL FOUR input methods now go through the exact same csvToLeadRows
+  // parser -- previously file-upload used a separate library (csv-parser)
+  // that skipped every bit of header-alias-mapping/case-insensitivity/
+  // blank-cell handling csvToLeadRows does, so a real file with headers
+  // like "Full Name" or "Phone Number" (both extremely common) silently
+  // failed every row with "Missing name or phone", while the UI's own
+  // text claimed those columns were already recognized.
   importCsv: asyncHandler(async (req, res) => {
     const skipDuplicates = req.query.skipDuplicates !== 'false';
-
-    let summary;
+    const fileName = req.file?.originalname || '';
 
     /*
     |--------------------------------------------------------------------------
@@ -24,25 +29,10 @@ export const importController = {
     */
 
     if (req.file) {
-      const rows = [];
-
-      await new Promise((resolve, reject) => {
-        Readable.from(req.file.buffer)
-          .pipe(csvParser())
-          .on('data', (row) => rows.push(row))
-          .on('end', resolve)
-          .on('error', reject);
-      });
-
-      summary = await importService.importRows(
-        req.context,
-        rows,
-        {
-          skipDuplicates,
-        }
-      );
-
-      return res.status(201).json(summary);
+      const csvText = req.file.buffer.toString('utf8');
+      const rows = csvToLeadRows(csvText);
+      const result = await importService.startImport(req.context, rows, { skipDuplicates, fileName });
+      return res.status(202).json(result);
     }
 
     /*
@@ -52,15 +42,8 @@ export const importController = {
     */
 
     if (Array.isArray(req.body?.rows)) {
-      summary = await importService.importRows(
-        req.context,
-        req.body.rows,
-        {
-          skipDuplicates,
-        }
-      );
-
-      return res.status(201).json(summary);
+      const result = await importService.startImport(req.context, req.body.rows, { skipDuplicates });
+      return res.status(202).json(result);
     }
 
     /*
@@ -69,25 +52,31 @@ export const importController = {
     |--------------------------------------------------------------------------
     */
 
-    const csv =
-      typeof req.body === 'string'
-        ? req.body
-        : req.body?.csv;
+    const csv = typeof req.body === 'string' ? req.body : req.body?.csv;
 
     if (!csv) {
-      throw AppError.badRequest(
-        'Provide CSV file, CSV text ({ csv }), or rows ({ rows })'
-      );
+      throw AppError.badRequest('Provide CSV file, CSV text ({ csv }), or rows ({ rows })');
     }
 
-    summary = await importService.importFromCsv(
-      req.context,
-      csv,
-      {
-        skipDuplicates,
-      }
-    );
+    const result = await importService.startImportFromCsv(req.context, csv, { skipDuplicates });
+    return res.status(202).json(result);
+  }),
 
-    return res.status(201).json(summary);
+  // GET /api/leads/import/:id -- poll this for live progress, same idea
+  // as GET /whatsapp/campaigns/:id for a running campaign's progress bar.
+  getImportStatus: asyncHandler(async (req, res) => {
+    const record = await importService.getStatus(req.context, req.params.id);
+    if (!record) throw AppError.notFound('Import not found');
+    return res.status(200).json({
+      id: String(record._id),
+      status: record.status,
+      fileName: record.fileName,
+      totalRows: record.totalRows,
+      processedCount: record.processedCount,
+      createdCount: record.createdCount,
+      skippedCount: record.skippedCount,
+      failedCount: record.failedCount,
+      errors: record.errors,
+    });
   }),
 };

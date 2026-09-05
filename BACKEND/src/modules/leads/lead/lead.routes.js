@@ -31,6 +31,7 @@ router.get('/export', authorize(ACTIONS.EXPORT), exportController.exportCsv);
 // router.post('/import', authorize(ACTIONS.IMPORT), importController.importCsv);
 router.post('/import', authorize(ACTIONS.IMPORT), upload.single('file'), importController.importCsv
 );
+router.get('/import/:id', authorize(ACTIONS.IMPORT), importController.getImportStatus);
 router.get('/constants', authorize(ACTIONS.READ), leadController.constants);
 router.use('/groups', groupRoutes);
 

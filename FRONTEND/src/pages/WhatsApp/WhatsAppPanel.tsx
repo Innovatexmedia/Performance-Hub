@@ -75,7 +75,11 @@ export const TABS = [
   // (Automation Rules' Start/Stop Nurture actions and Booking/Lead
   // auto-enroll all still work), just not exposed in this plan's UI yet.
   { id: 'ai', label: 'AI Reply Assistant' },
-  { id: 'broadcasts', label: 'Broadcasts' },
+  // 'broadcasts' tab hidden -- merged into Campaigns (Type: Broadcast),
+  // matching AiSensy's own model (one Campaigns feature, "Broadcast" is
+  // a Type within it, not a separate feature/page). The standalone
+  // Broadcasts backend module is untouched for existing data; new
+  // Broadcast-type sends now go through Campaigns end-to-end.
   { id: 'rules', label: 'Automation Rules' },
   { id: 'consent', label: 'Opt-Out / Consent' },
   { id: 'logs', label: 'Delivery Logs' },
@@ -1061,7 +1065,36 @@ function TemplatesTab() {
   const [editTpl, setEditTpl] = useState<WhatsAppTemplateReal | null>(null);
   const [previewTpl, setPreviewTpl] = useState<WhatsAppTemplateReal | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const currentUser = useAuthStore((s) => s.user);
+
+  // Same real sync as WhatsApp Settings' "Sync now" -- duplicated here
+  // because a stale/incomplete template list is discovered ON this page,
+  // not in Settings, so the fix belongs where the person notices the
+  // problem. Settings keeps the auto-sync toggle (a background-behavior
+  // setting); this is the same one-off action, just reachable from
+  // where it's actually needed.
+  const handleSyncTemplates = async () => {
+    setSyncing(true);
+    try {
+      const { result } = await whatsappSettingsApi.syncTemplates();
+      if (!result) {
+        toast.error('Sync failed', 'No result returned from server.');
+      } else if (result.errors.length > 0) {
+        toast.warning(
+          `Synced with ${result.errors.length} error(s)`,
+          `${result.created} created, ${result.updated} updated. First error: ${result.errors[0].message}`,
+        );
+      } else {
+        toast.success('Templates synced from Meta', `${result.created} created, ${result.updated} updated, ${result.total} total.`);
+      }
+      refetch();
+    } catch (err) {
+      toast.error('Sync failed', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Mirrors templates.service.js's activateTemplate guard exactly: the
   // owner can only bypass real approval for templates they PERSONALLY
@@ -1117,7 +1150,14 @@ function TemplatesTab() {
           icon={TAB_ICONS.templates}
           title="Templates"
           subtitle="Create, edit and duplicate WhatsApp templates before they go into internal review."
-          action={<Button onClick={() => setShowBuilder(true)}><Plus size={16} /> New Template</Button>}
+          action={
+            <div className="flex gap-2">
+              <Button variant="secondary" onClick={() => void handleSyncTemplates()} disabled={syncing}>
+                <RefreshCw size={16} className={syncing ? 'animate-spin' : ''} /> {syncing ? 'Syncing…' : 'Sync from Meta'}
+              </Button>
+              <Button onClick={() => setShowBuilder(true)}><Plus size={16} /> New Template</Button>
+            </div>
+          }
         />
       </Card>
       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
@@ -1128,55 +1168,59 @@ function TemplatesTab() {
                 <p className="font-semibold text-ink-900">{t.name}</p>
                 <div className="mt-1 flex gap-1.5"><Badge tone="violet">{t.category}</Badge><Badge tone="gray">{t.languageCode}</Badge></div>
               </div>
-              <StatusBadge status={t.status} />
+              <div className="flex items-center gap-1.5">
+                <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700" onClick={() => setPreviewTpl(t)} title="Preview"><Eye size={14} /></button>
+                <StatusBadge status={t.status} />
+              </div>
             </div>
             <p className="mt-3 line-clamp-3 flex-1 rounded-lg bg-ink-50 p-2.5 text-sm text-ink-600">{t.body}</p>
             {t.approvalStatus === 'REJECTED' && (
               <p className="mt-2 text-xs font-medium text-red-600">Rejected — read-only. Duplicate to start a fresh, editable copy.</p>
             )}
             {t.variables.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{t.variables.map((v) => <span key={v} className="font-mono text-[11px] text-brand-600">{`{{${v}}}`}</span>)}</div>}
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {t.approvalStatus === 'DRAFT' && (
-                <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
-              )}
-              <Button
-                variant="ghost" className="px-2.5 py-1 text-xs" disabled={busyId === t.id}
-                onClick={() => void runAction(t.id, () => duplicateTemplate(t.id), 'Template duplicated', 'Could not duplicate template')}
-              ><Copy size={12} /> Duplicate</Button>
-              <Button variant="ghost" className="px-2.5 py-1 text-xs" onClick={() => setPreviewTpl(t)}><Eye size={12} /> Preview</Button>
-              {t.approvalStatus === 'DRAFT' && t.createdBy === currentUser?.id && !canActivateDirectly(t) && (
-                <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitForReview(t.id), 'Submitted for internal review', 'Could not submit for review')}>
-                  <Send size={12} /> Submit for Internal Review
-                </Button>
-              )}
-              {(t.status === 'DRAFT' || t.status === 'PAUSED') && canActivateDirectly(t) && (
-                <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => activateTemplate(t.id), 'Template activated', 'Could not activate template')}>
-                  {t.status === 'PAUSED' ? 'Resume' : 'Activate'}
-                </Button>
-              )}
-              {t.approvalStatus === 'DRAFT' && t.createdBy !== currentUser?.id && !canActivateDirectly(t) && (
-                <span className="px-2.5 py-1 text-xs text-ink-400">Awaiting submission by its creator</span>
-              )}
-              {t.approvalStatus === 'INTERNALLY_APPROVED' && (
-                canSubmitToProvider ? (
-                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError)}>
-                    <Send size={12} /> Submit to provider
+            <div className="mt-3 flex items-start justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {t.approvalStatus === 'DRAFT' && (
+                  <Button variant="secondary" className="px-2.5 py-1 text-xs" onClick={() => setEditTpl(t)}>Edit</Button>
+                )}
+                <button
+                  className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700 disabled:opacity-50" disabled={busyId === t.id} title="Duplicate"
+                  onClick={() => void runAction(t.id, () => duplicateTemplate(t.id), 'Template duplicated', 'Could not duplicate template')}
+                ><Copy size={14} /></button>
+                {t.approvalStatus === 'DRAFT' && t.createdBy === currentUser?.id && !canActivateDirectly(t) && (
+                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitForReview(t.id), 'Submitted for internal review', 'Could not submit for review')}>
+                    <Send size={12} /> Submit for Internal Review
                   </Button>
-                ) : (
-                  <span className="px-2.5 py-1 text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights</span>
-                )
-              )}
-              {t.status === 'ACTIVE' && (
-                <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => pauseTemplate(t.id), 'Template paused', 'Could not pause template')}>
-                  Pause
-                </Button>
-              )}
-              {t.status !== 'ARCHIVED' && (
-                <Button variant="ghost" className="px-2.5 py-1 text-xs text-ink-500" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => archiveTemplate(t.id), 'Template archived', 'Could not archive template')}>
-                  Archive
-                </Button>
-              )}
-              <button onClick={() => void handleDelete(t)} disabled={busyId === t.id} className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600" title="Delete">
+                )}
+                {(t.status === 'DRAFT' || t.status === 'PAUSED') && canActivateDirectly(t) && (
+                  <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => activateTemplate(t.id), 'Template activated', 'Could not activate template')}>
+                    {t.status === 'PAUSED' ? 'Resume' : 'Activate'}
+                  </Button>
+                )}
+                {t.approvalStatus === 'DRAFT' && t.createdBy !== currentUser?.id && !canActivateDirectly(t) && (
+                  <span className="px-2.5 py-1 text-xs text-ink-400">Awaiting submission by its creator</span>
+                )}
+                {t.approvalStatus === 'INTERNALLY_APPROVED' && (
+                  canSubmitToProvider ? (
+                    <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError)}>
+                      <Send size={12} /> Submit to provider
+                    </Button>
+                  ) : (
+                    <span className="px-2.5 py-1 text-xs text-ink-400">Approved internally — awaiting submission by someone with approval rights</span>
+                  )
+                )}
+                {t.status === 'ACTIVE' && (
+                  <Button variant="secondary" className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => pauseTemplate(t.id), 'Template paused', 'Could not pause template')}>
+                    Pause
+                  </Button>
+                )}
+                {t.status !== 'ARCHIVED' && (
+                  <Button variant="ghost" className="px-2.5 py-1 text-xs text-ink-500" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => archiveTemplate(t.id), 'Template archived', 'Could not archive template')}>
+                    Archive
+                  </Button>
+                )}
+              </div>
+              <button onClick={() => void handleDelete(t)} disabled={busyId === t.id} className="shrink-0 rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600" title="Delete">
                 <Trash2 size={14} />
               </button>
             </div>
@@ -1535,6 +1579,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const [starting, setStarting] = useState(false);
   const [resendTarget, setResendTarget] = useState<WhatsAppCampaignReal | null>(null);
   const [resending, setResending] = useState(false);
+  const [filterTab, setFilterTab] = useState<'all' | 'broadcast' | 'scheduled'>('all');
   const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
   const { members } = useTeamMembers();
 
@@ -1559,7 +1604,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   // broadcasts.constants.js exactly -- the backend rejects update/delete
   // outside these, so the UI only offers the buttons when they'd succeed.
   const EDIT_LOCKED = ['SCHEDULED', 'RUNNING', 'COMPLETED', 'CANCELLED'];
-  const DELETE_LOCKED = ['COMPLETED', 'CANCELLED'];
+  const DELETE_LOCKED = ['COMPLETED', 'CANCELLED', 'RUNNING', 'SCHEDULED'];
 
   // Audience is either a whole named Group, OR a set of raw contact filters
   // (tags, source, score range, consent, owner, date ranges) -- the backend's
@@ -1719,28 +1764,105 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
           action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button>}
         />
       </Card>
-      {campaigns.length === 0 ? <EmptyState title={`No ${broadcast ? 'broadcasts' : 'campaigns'} yet`} action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> Create</Button>} /> : (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {campaigns.map((c) => {
+      {(() => {
+        const filteredCampaigns = campaigns.filter((c) => {
+          if (filterTab === 'broadcast') return c.type === 'BROADCAST';
+          if (filterTab === 'scheduled') return c.status === 'SCHEDULED';
+          return true;
+        });
+        const TAB_DEFS: { id: typeof filterTab; label: string; count: number }[] = [
+          { id: 'all', label: 'All', count: campaigns.length },
+          { id: 'broadcast', label: 'Broadcast', count: campaigns.filter((c) => c.type === 'BROADCAST').length },
+          { id: 'scheduled', label: 'Scheduled', count: campaigns.filter((c) => c.status === 'SCHEDULED').length },
+        ];
+        return (
+          <>
+            <div className="mb-3 flex gap-1 border-b border-ink-100">
+              {TAB_DEFS.map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setFilterTab(t.id)}
+                  className={cn(
+                    'border-b-2 px-3 py-2 text-sm font-medium transition-colors',
+                    filterTab === t.id ? 'border-brand-600 text-brand-700' : 'border-transparent text-ink-500 hover:text-ink-700',
+                  )}
+                >
+                  {t.label} <span className="ml-1 text-xs text-ink-400">{t.count}</span>
+                </button>
+              ))}
+            </div>
+            {filteredCampaigns.length === 0 ? (
+              <EmptyState title={`No ${filterTab === 'all' ? (broadcast ? 'broadcasts' : 'campaigns') : filterTab} yet`} action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> Create</Button>} />
+            ) : (
+              <div className="grid gap-3 lg:grid-cols-2">
+                {filteredCampaigns.map((c) => {
             const m = c.metrics;
             const isBusy = busyId === c.id;
+            // Left accent color follows the same status→tone mapping
+            // StatusBadge already uses, so a card's accent and its badge
+            // never disagree about what a status "means" visually.
+            const ACCENT_BY_STATUS: Record<string, string> = {
+              COMPLETED: 'border-l-emerald-500', RUNNING: 'border-l-blue-500',
+              SCHEDULED: 'border-l-amber-500', FAILED: 'border-l-red-500', CANCELLED: 'border-l-red-500',
+              APPROVED: 'border-l-blue-400', DRAFT: 'border-l-ink-200',
+            };
+            const accent = ACCENT_BY_STATUS[c.status] || 'border-l-ink-200';
+            const deliveryPct = c.recipientCount > 0 ? Math.round((m.deliveredCount / c.recipientCount) * 100) : 0;
             return (
-              <Card key={c.id} className="p-4">
+              <Card key={c.id} className={cn('border-l-4 p-4', accent)}>
                 <div className="flex items-start justify-between">
-                  <div><p className="font-semibold text-ink-900">{c.name}</p><p className="text-xs text-ink-500">{c.type} · {c.recipientCount} recipients · {c.templateName || 'no template'}</p></div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-semibold text-ink-900">{c.name}</p>
+                      {c.type === 'BROADCAST' && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+                          <Radio size={11} /> Broadcast
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-ink-500">{c.type !== 'BROADCAST' && `${c.type} · `}{c.recipientCount} recipients · {c.templateName || 'no template'}</p>
+                  </div>
                   <StatusBadge status={c.status} />
                 </div>
-                <div className="mt-3 grid grid-cols-4 gap-2 text-center">
-                  {[['Sent', m.sentCount], ['Delivered', m.deliveredCount], ['Read', m.readCount], ['Replied', m.repliedCount]].map(([k, v]) => (
-                    <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
-                  ))}
-                </div>
-                <div className="mt-2 grid grid-cols-3 gap-2 text-center">
-                  {[['Bookings', m.bookingCount], ['Payments', m.paymentCount]].map(([k, v]) => (
-                    <div key={k} className="rounded-lg bg-ink-50 py-1.5"><p className="text-sm font-bold text-ink-900">{v}</p><p className="text-[10px] text-ink-500">{k}</p></div>
-                  ))}
-                  <div className="rounded-lg bg-emerald-50 py-1.5"><p className="text-sm font-bold text-emerald-700">{formatMoney(m.revenueGenerated)}</p><p className="text-[10px] text-emerald-600">Revenue</p></div>
-                </div>
+                {c.recipientCount > 0 && (
+                  <div className="mt-2.5 h-1 overflow-hidden rounded-full bg-ink-100">
+                    <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${deliveryPct}%` }} />
+                  </div>
+                )}
+                {(() => {
+                  const funnelSteps: [string, number, React.ComponentType<{ size?: number; className?: string }>, string][] = [
+                    ['Sent', m.sentCount, Send, 'bg-ink-300'],
+                    ['Delivered', m.deliveredCount, CheckCircle2, 'bg-ink-400'],
+                    ['Read', m.readCount, Eye, 'bg-brand-400'],
+                    ['Replied', m.repliedCount, MessageSquare, 'bg-emerald-500'],
+                  ];
+                  const maxVal = Math.max(1, ...funnelSteps.map(([, v]) => v as number));
+                  return (
+                    <div className="mt-3 flex items-end gap-3">
+                      {funnelSteps.map(([label, value, Icon, barColor]) => (
+                        <div key={label as string} className="flex-1 text-center">
+                          <p className="text-lg font-bold text-ink-900">{value as number}</p>
+                          <div className="mx-auto mt-1 h-10 w-full max-w-[36px] overflow-hidden rounded-t bg-ink-50">
+                            <div
+                              className={cn('w-full rounded-t transition-all', barColor as string)}
+                              style={{ height: `${Math.max(6, ((value as number) / maxVal) * 100)}%`, marginTop: `${100 - Math.max(6, ((value as number) / maxVal) * 100)}%` }}
+                            />
+                          </div>
+                          <p className="mt-1 flex items-center justify-center gap-1 text-[10px] text-ink-500">
+                            {(() => { const IconComp = Icon; return <IconComp size={10} />; })()} {label as string}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+                {/* Bookings/Payments/Revenue removed -- these fields exist on
+                    the Campaign schema but nothing in the backend ever
+                    increments them from a real booking or payment, so they
+                    would always silently read 0. Real per-campaign revenue
+                    attribution is a genuine feature to build (likely via
+                    the existing Attribution module) -- showing a fake
+                    always-zero number was worse than showing nothing. */}
                 {c.status === 'RUNNING' && (() => {
                   // Real live progress -- reads the exact same metrics
                   // the BullMQ worker updates atomically per-recipient
@@ -1801,9 +1923,12 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                 </div>
               </Card>
             );
-          })}
-        </div>
-      )}
+                })}
+              </div>
+            )}
+          </>
+        );
+      })()}
       {/* Start confirmation + template preview -- the actual "review
           before you send" step. Previously "Start now" fired immediately
           with zero confirmation, the only bulk-send action in this tab

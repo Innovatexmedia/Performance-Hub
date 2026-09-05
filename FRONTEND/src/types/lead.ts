@@ -1,4 +1,3 @@
-
 export type LeadStatus =
   | 'New' | 'Contacted' | 'Qualified' | 'Booked' | 'Call Completed'
   | 'Proposal Sent' | 'Won' | 'Lost' | 'Nurture' | 'Ghosted';
@@ -215,13 +214,29 @@ export interface LeadConstants {
 }
 
 /**
- * POST /api/leads/import response -- see import.service.js importRows().
- * `errors[].line` is the CSV line number (1-indexed, +1 for the header row).
+ * POST /api/leads/import response -- now immediate (202), since import
+ * processing is real and asynchronous (queues/leadImport.worker.js).
+ * Poll GET /api/leads/import/:id (ImportStatus below) for live progress.
  */
-export interface ImportSummary {
-  total: number;
-  created: number;
-  skipped: number;
-  failed: number;
+export interface ImportStartResult {
+  importId: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  totalRows: number;
+}
+
+/**
+ * GET /api/leads/import/:id response -- `errors[].line` is the CSV line
+ * number (1-indexed, +1 for the header row). Capped at 200 sample
+ * entries server-side even for a much larger failedCount.
+ */
+export interface ImportStatus {
+  id: string;
+  status: 'QUEUED' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  fileName: string;
+  totalRows: number;
+  processedCount: number;
+  createdCount: number;
+  skippedCount: number;
+  failedCount: number;
   errors: { line: number; error: string }[];
 }

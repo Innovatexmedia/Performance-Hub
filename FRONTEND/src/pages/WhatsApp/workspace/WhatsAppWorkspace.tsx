@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Menu, PanelLeftClose, PanelLeftOpen, X, Zap } from 'lucide-react';
-import { Button, Modal, cn } from '@/components/ui';
+import { cn } from '@/components/ui';
 import { WhatsAppPanel } from '../WhatsAppPanel';
 import { WhatsAppSidebarNav } from './WhatsAppSidebarNav';
 import { getLastRoute } from './lastRoute';
@@ -40,7 +40,6 @@ export function WhatsAppWorkspace() {
   const [activeTab, setActiveTab] = useState(readInitialTab);
   const [collapsed, setCollapsed] = useState(readInitialCollapsed);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const [exitOpen, setExitOpen] = useState(false);
   const [approvalBadgeCount, setApprovalBadgeCount] = useState(0);
   const exitButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -85,26 +84,28 @@ export function WhatsAppWorkspace() {
     setMobileNavOpen(false);
   };
 
-  const requestExit = () => setExitOpen(true);
-  const confirmExit = () => {
-    setExitOpen(false);
-    navigate(getLastRoute());
-  };
+  // Exit is now direct -- no confirmation step. It never protected
+  // against real data loss (its own copy just reassured "you can return
+  // anytime"), and having it on this button but not on the browser's
+  // native back button (which reaches the same place with no dialog at
+  // all) was a real, confusing inconsistency. Matches how leaving any
+  // other section of the app already works.
+  const exit = () => navigate(getLastRoute());
 
-  // Escape exits back to a confirmation, but only when the user isn't
-  // mid-typing (search boxes, the composer, etc.) and no other dialog is
-  // already open -- so it never fights with existing input/modal behavior.
+  // Escape exits directly too, same reasoning as the X button above --
+  // but only when the user isn't mid-typing (search boxes, the
+  // composer, etc.), so it never fights with existing input behavior.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || exitOpen) return;
+      if (e.key !== 'Escape') return;
       const el = document.activeElement;
       const isTyping = el instanceof HTMLElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
       if (isTyping) return;
-      requestExit();
+      exit();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [exitOpen]);
+  }, []);
 
   return (
     <div
@@ -147,7 +148,7 @@ export function WhatsAppWorkspace() {
           <button
             ref={exitButtonRef}
             type="button"
-            onClick={requestExit}
+            onClick={exit}
             title="Exit WhatsApp Workspace"
             aria-label="Exit WhatsApp Workspace"
             className="rounded-lg bg-white/10 p-2 text-white transition hover:bg-red-500/90 hover:text-white"
@@ -204,49 +205,6 @@ export function WhatsAppWorkspace() {
           <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} />
         </main>
       </div>
-
-      <ExitWorkspaceDialog open={exitOpen} onCancel={() => setExitOpen(false)} onConfirm={confirmExit} />
     </div>
-  );
-}
-
-function ExitWorkspaceDialog({ open, onCancel, onConfirm }: { open: boolean; onCancel: () => void; onConfirm: () => void }) {
-  const cancelRef = useRef<HTMLButtonElement>(null);
-  const confirmRef = useRef<HTMLButtonElement>(null);
-
-  // Minimal focus trap: only two real actions in this dialog (Cancel /
-  // Exit Workspace), so Tab / Shift+Tab just cycles between them instead
-  // of escaping to whatever is (invisibly, underneath this fixed overlay)
-  // still mounted in the page behind it.
-  useEffect(() => {
-    if (!open) return;
-    cancelRef.current?.focus();
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Tab') return;
-      e.preventDefault();
-      const focusCancel = document.activeElement !== cancelRef.current;
-      (focusCancel ? cancelRef.current : confirmRef.current)?.focus();
-    };
-    document.addEventListener('keydown', handler);
-    return () => document.removeEventListener('keydown', handler);
-  }, [open]);
-
-  return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title="Exit WhatsApp Workspace?"
-      size="sm"
-      footer={
-        <>
-          <Button ref={cancelRef} variant="secondary" onClick={onCancel}>Cancel</Button>
-          <Button ref={confirmRef} onClick={onConfirm}>Exit Workspace</Button>
-        </>
-      }
-    >
-      <p className="text-sm text-ink-600">
-        Are you sure you want to exit the WhatsApp workspace? You can return to WhatsApp anytime from the main InnovateX workspace.
-      </p>
-    </Modal>
   );
 }

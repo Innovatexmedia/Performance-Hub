@@ -517,6 +517,18 @@ export const broadcastsService = {
     if (!existing) throw new AppError(404, 'Broadcast not found');
     this.validateStatusTransition(existing.status, BROADCAST_STATUS.CANCELLED);
 
+    // Same fix as campaigns.service.js's cancelCampaign -- a small/fast
+    // broadcast can finish processing every recipient within seconds of
+    // "Start", and cancelling after that point has nothing left to stop.
+    const alreadyFullyProcessed = existing.recipientCount > 0
+      && (existing.sentCount + existing.failedCount + existing.skippedCount) >= existing.recipientCount;
+    if (alreadyFullyProcessed) {
+      throw new AppError(
+        400,
+        `This broadcast has already finished sending to all ${existing.recipientCount} recipient(s) -- there is nothing left to cancel. Refresh to see its final status.`,
+      );
+    }
+
     const auditEntry = buildAuditEntry(existing.status, BROADCAST_STATUS.CANCELLED, BROADCAST_ACTION.CANCEL, ctx.userId, comment);
     const updated = await broadcastsRepository.cancelBroadcast(ctx.tenantId, id, {
       performedBy: ctx.userId, auditEntry,

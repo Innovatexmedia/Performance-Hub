@@ -43,6 +43,10 @@ const config = {
   // of per-loop.
   CAMPAIGN_SEND_RATE_MAX: parseInt(process.env.CAMPAIGN_SEND_RATE_MAX ?? '20', 10),
   CAMPAIGN_SEND_RATE_DURATION_MS: parseInt(process.env.CAMPAIGN_SEND_RATE_DURATION_MS ?? '1000', 10),
+  // CSV lead import -- higher default concurrency than campaign sending
+  // is fine here since each job only does DB writes (no external Meta
+  // API call to rate-limit against).
+  LEAD_IMPORT_CONCURRENCY: parseInt(process.env.LEAD_IMPORT_CONCURRENCY ?? '10', 10),
   // Cloudinary -- stores media (images/documents/voice notes) sent and
   // received over WhatsApp. Required for real media messaging; text-only
   // messaging works fine without it (upload attempts fail with a clear

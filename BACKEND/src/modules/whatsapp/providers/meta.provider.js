@@ -1,4 +1,3 @@
-
 import { WhatsAppProvider } from './provider.interface.js';
 import { normalizePhoneNumber } from '../../../shared/helpers/phone.helpers.js';
 
@@ -198,6 +197,15 @@ export class MetaProvider extends WhatsAppProvider {
 
   /** Shared POST + response-normalization for sendMessage/sendTemplate. */
   async _post(body) {
+    // 20s timeout -- was completely unbounded before this fix, meaning a
+    // single hung/slow request to Meta's API could stall this recipient's
+    // job (and the worker slot processing it) forever, with no failure
+    // ever occurring to trigger BullMQ's retry/backoff. This is the
+    // confirmed cause of a campaign stuck at "Sending... 0/N" indefinitely
+    // -- a timeout at least turns that into a real, retryable failure.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+
     let response;
     try {
       response = await fetch(this.baseUrl, {
@@ -207,9 +215,15 @@ export class MetaProvider extends WhatsAppProvider {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
     } catch (networkError) {
+      if (networkError.name === 'AbortError') {
+        throw new Error('MetaProvider: request to Graph API timed out after 20s');
+      }
       throw new Error(`MetaProvider: network error calling Graph API -- ${networkError.message}`);
+    } finally {
+      clearTimeout(timeout);
     }
 
     const json = await response.json().catch(() => ({}));
