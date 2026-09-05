@@ -18,6 +18,9 @@ import { Message, MESSAGE_STATUS } from '../../messages/message.model.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
 import { campaignSenderService } from '../../campaignSender.service.js';
 import { campaignsRepository } from './campaigns.repository.js';
+import Tenant from '../../../auth/models/Tenant.js';
+import { Campaign } from '../../../campaigns/campaign.model.js';
+import { WhatsAppCampaign } from './campaigns.model.js';
 import {
   CAMPAIGN_STATUS,
   CAMPAIGN_ACTION,
@@ -143,6 +146,45 @@ export function buildAudienceQuery(tenantId, filters = {}, includedContacts = []
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export const campaignsService = {
+  /**
+   * assertCampaignQuota — the actual enforcement that was completely
+   * missing before this fix (see settings.service.js's getLiveUsageCounts
+   * for the matching display-side bug this pairs with). Scoped to the
+   * WHOLE ACCOUNT, not just this one tenant/workspace -- mirrors exactly
+   * how the Billing page's own campaign count is computed (every
+   * workspace sharing a billing account draws from the same
+   * maxCampaigns pool), so a tenant can never see "24/25" on Billing
+   * while still being allowed to create a 26th from here because this
+   * check counted differently.
+   *
+   * Sums BOTH Campaign models for the same reason the display fix does:
+   * this codebase has two of them (the generic CRM `Campaign` and this
+   * module's own `WhatsAppCampaign`), and a real campaign created either
+   * way should count against the same plan limit.
+   */
+  async assertCampaignQuota(ctx) {
+    const tenant = await Tenant.findById(ctx.tenantId);
+    if (!tenant) throw AppError.notFound('Tenant not found');
+
+    const accountTenantIds = tenant.accountId
+      ? (await Tenant.find({ accountId: tenant.accountId }).distinct('_id'))
+      : [tenant._id];
+    const tenantIdStrings = accountTenantIds.map(String);
+
+    const [genericCount, whatsappCount] = await Promise.all([
+      Campaign.countDocuments({ tenant_id: { $in: tenantIdStrings } }),
+      WhatsAppCampaign.countDocuments({ tenantId: { $in: tenantIdStrings } }),
+    ]);
+    const currentCount = genericCount + whatsappCount;
+
+    if (currentCount >= tenant.maxCampaigns) {
+      throw AppError.planLimitExceeded(
+        `Your plan allows up to ${tenant.maxCampaigns} campaigns (currently using ${currentCount} across your account). Upgrade your plan to create more.`,
+        { resource: 'campaigns', limit: tenant.maxCampaigns, current: currentCount },
+      );
+    }
+  },
+
   // ── Validation helpers ──────────────────────────────────────────────────
 
   validateStatusTransition(fromStatus, toStatus) {
@@ -200,6 +242,12 @@ export const campaignsService = {
   // ── CRUD ────────────────────────────────────────────────────────────────
 
   async createCampaign(ctx, data) {
+    // Real enforcement -- was completely missing before this fix (see
+    // assertCampaignQuota's own comment for why). Checked first, before
+    // any other validation, since there's no point validating a template
+    // for a campaign that can't be created anyway.
+    await this.assertCampaignQuota(ctx);
+
     const { templateId } = data;
 
     // Template must be provider-approved.

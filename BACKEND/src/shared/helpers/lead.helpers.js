@@ -31,6 +31,23 @@ export class AppError extends Error {
   static conflict(message = 'Conflict', details) {
     return new AppError(409, message, details);
   }
+  /**
+   * planLimitExceeded — the shared shape for every "you've hit your
+   * plan's limit" error (campaigns today; the same helper is available
+   * for leads/users/workspaces wherever real enforcement gets added).
+   * Sets a stable `code` the frontend can reliably check for (see
+   * errorHandler.middleware.js's `response.code` passthrough) to show a
+   * dedicated upgrade modal instead of a generic error toast, without
+   * fragile string-matching on the human-readable message.
+   */
+  static planLimitExceeded(message, { resource, limit, current } = {}) {
+    const err = new AppError(400, message);
+    err.code = 'PLAN_LIMIT_EXCEEDED';
+    err.resource = resource;
+    err.limit = limit;
+    err.current = current;
+    return err;
+  }
 }
 
 export const asyncHandler = (fn) => (req, res, next) =>

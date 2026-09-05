@@ -55,6 +55,14 @@ export interface ApiEnvelope<T> {
   data: T;
   errors?: { field: string; message: string }[];
   meta?: { pagination?: unknown };
+  /** Stable machine-readable error code (e.g. 'PLAN_LIMIT_EXCEEDED') --
+   * see BACKEND's errorHandler.middleware.js's `response.code` passthrough.
+   * Lets the frontend reliably detect a specific error kind without
+   * fragile string-matching on `message`. */
+  code?: string;
+  resource?: string;
+  limit?: number;
+  current?: number;
 }
 
 export interface LoginPayload {

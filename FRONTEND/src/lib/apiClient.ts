@@ -10,12 +10,26 @@ const BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/
 export class ApiError extends Error {
   status: number;
   errors?: { field: string; message: string }[];
+  /** See ApiEnvelope's matching fields -- lets a caller reliably detect a
+   * specific error kind (e.g. 'PLAN_LIMIT_EXCEEDED') to show dedicated
+   * UI for it, without fragile string-matching on `message`. */
+  code?: string;
+  resource?: string;
+  limit?: number;
+  current?: number;
 
-  constructor(message: string, status: number, errors?: { field: string; message: string }[]) {
+  constructor(
+    message: string, status: number, errors?: { field: string; message: string }[],
+    extra?: { code?: string; resource?: string; limit?: number; current?: number },
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.errors = errors;
+    this.code = extra?.code;
+    this.resource = extra?.resource;
+    this.limit = extra?.limit;
+    this.current = extra?.current;
   }
 }
 
@@ -155,7 +169,9 @@ export async function throwIfError(res: Response): Promise<void> {
   } catch {
     throw new ApiError('Server returned an unreadable response', res.status);
   }
-  throw new ApiError(body.message || 'Request failed', res.status, body.errors);
+  throw new ApiError(body.message || 'Request failed', res.status, body.errors, {
+    code: body.code, resource: body.resource, limit: body.limit, current: body.current,
+  });
 }
 
 export interface PaginationMeta {
@@ -180,7 +196,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   const envelope = (await res.json()) as ApiEnvelope<T>;
   if (!envelope.success) {
-    throw new ApiError(envelope.message || 'Request failed', res.status, envelope.errors);
+    throw new ApiError(envelope.message || 'Request failed', res.status, envelope.errors, { code: envelope.code, resource: envelope.resource, limit: envelope.limit, current: envelope.current });
   }
   return envelope.data;
 }
@@ -199,7 +215,7 @@ export async function requestPaginated<T>(path: string, options: RequestOptions 
 
   const envelope = (await res.json()) as ApiEnvelope<T[]> & { meta?: { pagination?: PaginationMeta } };
   if (!envelope.success) {
-    throw new ApiError(envelope.message || 'Request failed', res.status, envelope.errors);
+    throw new ApiError(envelope.message || 'Request failed', res.status, envelope.errors, { code: envelope.code, resource: envelope.resource, limit: envelope.limit, current: envelope.current });
   }
   const pagination = envelope.meta?.pagination ?? {
     page: 1, limit: envelope.data.length, total: envelope.data.length, totalPages: 1, hasNext: false, hasPrev: false,

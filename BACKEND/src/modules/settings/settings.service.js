@@ -4,6 +4,7 @@ import Account from '../plans/account.model.js';
 import User from '../auth/models/User.js';
 import { Lead } from '../leads/lead/lead.model.js';
 import { Campaign } from '../campaigns/campaign.model.js';
+import { WhatsAppCampaign } from '../whatsapp/submodules/campaigns/campaigns.model.js';
 import { syncTenantsFromAccount } from '../plans/plan.service.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 import { USER_STATUS } from '../auth/constants/auth.constants.js';
@@ -72,7 +73,7 @@ const getAccountTenantIds = async (tenant) => {
  */
 const getLiveUsageCounts = async (tenantIds) => {
   const tenantIdStrings = tenantIds.map(String);
-  const [userCount, leadCount, campaignCount] = await Promise.all([
+  const [userCount, leadCount, genericCampaignCount, whatsappCampaignCount] = await Promise.all([
     // Excludes soft-deleted members (status: 'deleted') -- same
     // exclusion team.service.js's getTeamMembers applies, so a deleted
     // member disappearing from the Team list and freeing up a Users
@@ -80,9 +81,25 @@ const getLiveUsageCounts = async (tenantIds) => {
     // ones that can drift out of sync.
     User.countDocuments({ tenantId: { $in: tenantIds }, status: { $ne: USER_STATUS.DELETED } }),
     Lead.countDocuments({ tenant_id: { $in: tenantIdStrings } }),
+    // CRITICAL FIX: this codebase has TWO separate Campaign models --
+    // the generic CRM `Campaign` (campaigns/campaign.model.js, tracked
+    // by tenant_id) and the REAL WhatsApp bulk-send `WhatsAppCampaign`
+    // (whatsapp/submodules/campaigns/campaigns.model.js, its own
+    // MongoDB collection, tracked by tenantId -- different field name
+    // too). This previously counted ONLY the generic one, meaning every
+    // real WhatsApp campaign a tenant actually sent -- the flagship,
+    // most-used feature of this whole product -- was invisible to their
+    // own usage count and the maxCampaigns limit entirely. A tenant
+    // could send unlimited real campaigns while Billing showed they'd
+    // barely touched their plan, with no upgrade prompt ever
+    // triggering -- confirmed in practice (4+ real campaigns sent,
+    // Billing showed 1, from an unrelated generic campaign). Both are
+    // real, tenant-created campaigns and both now count toward the
+    // same plan limit.
     Campaign.countDocuments({ tenant_id: { $in: tenantIdStrings } }),
+    WhatsAppCampaign.countDocuments({ tenantId: { $in: tenantIdStrings } }),
   ]);
-  return { userCount, leadCount, campaignCount };
+  return { userCount, leadCount, campaignCount: genericCampaignCount + whatsappCampaignCount };
 };
 
 /**

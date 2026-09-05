@@ -46,15 +46,29 @@ function avatarColor(key: string): string {
   return AVATAR_PALETTE[hash % AVATAR_PALETTE.length];
 }
 
-export function Inbox() {
+export function Inbox({ onGoToSettings }: { onGoToSettings?: () => void }) {
   const { members, nameById } = useTeamMembers();
   // "Simulate inbound" fakes a customer reply -- only safe to show while
   // the tenant is actually on Simulation Mode. If they've connected a
   // real provider (Meta, Twilio, etc.), this button would silently inject
   // a fake message into a real conversation with no way to tell it apart
   // from an actual reply -- hiding it once real data is flowing.
-  const { settings: whatsappSettings } = useWhatsAppSettings();
+  const { settings: whatsappSettings, loading: settingsLoading, error: settingsError } = useWhatsAppSettings();
   const isSimulationMode = whatsappSettings?.provider === 'SIMULATION';
+  // Genuinely "not connected yet" -- the REAL signal is providerMode, not
+  // provider. These are two different fields: `provider` is WHICH
+  // service is selected (META_CLOUD, TWILIO, SIMULATION, ...); `providerMode`
+  // is whether that selection has actually been PROVEN working
+  // ('LIVE' only after a successful Test Connection -- defaults to
+  // 'SIMULATION' otherwise, confirmed in whatsappSettings.model.js).
+  // A tenant can perfectly well have provider: 'META_CLOUD' set (they
+  // picked Meta, entered credentials, maybe even tested webhooks
+  // manually outside the app) while providerMode is STILL 'SIMULATION'
+  // because they never actually ran Test Connection in the app itself --
+  // checking `provider === 'SIMULATION'` alone missed this exact case
+  // entirely, which is why the setup prompt never appeared despite
+  // nothing being genuinely connected yet.
+  const isNotConnected = !settingsLoading && (!!settingsError || !whatsappSettings || whatsappSettings.providerMode !== 'LIVE');
   const location = useLocation();
   const requestedConversationId = (location.state as { conversationId?: string } | null)?.conversationId ?? null;
 
@@ -253,7 +267,17 @@ export function Inbox() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           {listError && <p className="p-4 text-center text-xs text-red-600">{listError}</p>}
           {listLoading && conversations.length === 0 && <p className="p-4 text-center text-xs text-ink-400">Loading…</p>}
-          {!listLoading && conversations.length === 0 && !listError && <p className="p-4 text-center text-xs text-ink-400">No conversations found.</p>}
+          {!listLoading && conversations.length === 0 && !listError && (
+            isNotConnected ? (
+              <div className="flex flex-col items-center gap-2 p-6 text-center">
+                <MessageSquarePlus size={20} className="text-ink-300" />
+                <p className="text-xs font-medium text-ink-600">WhatsApp isn't connected yet</p>
+                <Button variant="secondary" className="mt-1 px-2.5 py-1 text-xs" onClick={onGoToSettings}>Connect now</Button>
+              </div>
+            ) : (
+              <p className="p-4 text-center text-xs text-ink-400">No conversations found.</p>
+            )
+          )}
           {conversations.map((c) => (
             <button key={c.id} onClick={() => setActiveId(c.id)} className={cn('flex w-full gap-2.5 border-b border-ink-50 px-3 py-3 text-left hover:bg-ink-50', c.id === activeId && 'bg-brand-50/50')}>
               <Avatar name={c.contact_name || c.phone} color={avatarColor(c.phone)} size={38} />
@@ -384,6 +408,21 @@ export function Inbox() {
             )}
             <Composer conversationId={active.id} onSend={sendMessage} messages={messages} leadContext={leadContext} />
           </>
+        ) : isNotConnected ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-brand-50">
+              <MessageSquarePlus size={22} className="text-brand-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-ink-900">
+                {settingsError ? 'Could not load WhatsApp settings' : 'Connect WhatsApp to start messaging'}
+              </p>
+              <p className="mt-1 max-w-xs text-xs text-ink-500">
+                {settingsError ? settingsError : 'Link your WhatsApp Business number to send and receive real messages here.'}
+              </p>
+            </div>
+            <Button onClick={onGoToSettings} className="mt-1">Go to WhatsApp Settings</Button>
+          </div>
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-ink-400">Select a conversation</div>
         )}

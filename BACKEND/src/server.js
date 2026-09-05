@@ -19,6 +19,7 @@ import connectDB from '../src/config/db.js';
 import { initSocketServer } from './realtime/socket.js';
 import { startNurtureScheduler } from './modules/whatsapp/submodules/nurtures/nurtureScheduler.js';
 import { startBookingReminderScheduler } from './modules/bookings/bookingReminderScheduler.js';
+import { startSubscriptionReconciliationScheduler } from './modules/plans/subscriptionReconciliationScheduler.js';
 import { startConsentReconciliationJob } from './modules/whatsapp/submodules/consent/consentReconciliation.job.js';
 import { ensureSeeded as ensurePlansSeeded, backfillTenantPlans, migratePlansToInr, backfillAccounts } from './modules/plans/plan.service.js';
 import dns from 'dns';
@@ -82,6 +83,16 @@ const startServer = async () => {
     // for why this exists (real-time sync is best-effort, this guarantees
     // eventual consistency between WhatsAppConsent and Lead).
     startConsentReconciliationJob();
+
+    // Subscription reconciliation safety net -- same "real-time sync is
+    // best-effort" reasoning as consent reconciliation above, applied to
+    // billing: Cashfree's webhook is the primary way a lapsed
+    // subscription gets detected, but webhook delivery was previously
+    // the ONLY way -- there was no independent check on our own side at
+    // all. This closes that gap (once daily, re-verifies every
+    // still-"ACTIVE" account directly against Cashfree). See
+    // subscriptionReconciliationScheduler.js for the full reasoning.
+    startSubscriptionReconciliationScheduler();
 
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 InnovateX Revenue OS API`);

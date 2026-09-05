@@ -23,6 +23,7 @@ import {
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, LineChartCard, DonutChartCard } from '@/components/charts';
 import { Inbox } from './Inbox';
+import { UpgradeRequiredModal } from '@/components/UpgradeRequiredModal';
 import { TemplateBuilder, TemplatePreview } from './TemplateBuilder';
 import { syncFromProvider } from '@/services/whatsappService';
 import { formatDateTime, timeAgo, percent } from '@/utils/formatters';
@@ -120,7 +121,7 @@ export const TAB_ICONS: Record<string, React.ReactNode> = {
  * (the old PageHeader + horizontal Tabs bar) moved out, in favor of the
  * workspace's vertical navigation using the same TABS/TAB_ICONS above.
  */
-export function WhatsAppPanel({ tab, onApprovalBadgeChange }: { tab: string; onApprovalBadgeChange?: (count: number) => void }) {
+export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab }: { tab: string; onApprovalBadgeChange?: (count: number) => void; onNavigateTab?: (tabId: string) => void }) {
   const currentUser = useAuthStore((s) => s.user);
   const canApproveTemplates = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
@@ -176,7 +177,7 @@ export function WhatsAppPanel({ tab, onApprovalBadgeChange }: { tab: string; onA
   // scrolling (see Inbox.tsx), so it renders edge-to-edge with no extra
   // padding/scroll container. Every other tab keeps the padded, natively
   // page-scrolling layout it already had.
-  if (tab === 'inbox') return <Inbox />;
+  if (tab === 'inbox') return <Inbox onGoToSettings={() => onNavigateTab?.('settings')} />;
 
   return (
     <div className="h-full overflow-y-auto p-4 lg:p-6">
@@ -1566,6 +1567,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   );
 
   const [show, setShow] = useState(false);
+  const [upgradeModal, setUpgradeModal] = useState<{ message: string; resource?: string; limit?: number; current?: number } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -1720,7 +1722,15 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
       setShow(false);
       resetForm();
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : `Failed to ${editingId ? 'update' : 'create'}`);
+      // A real plan-limit hit gets the dedicated upgrade modal (a
+      // dismissible toast undersells the one moment someone might
+      // actually pay to remove the limit) -- every other error still
+      // gets the normal toast.
+      if (err instanceof ApiError && err.code === 'PLAN_LIMIT_EXCEEDED') {
+        setUpgradeModal({ message: err.message, resource: err.resource, limit: err.limit, current: err.current });
+      } else {
+        toast.error(err instanceof ApiError ? err.message : `Failed to ${editingId ? 'update' : 'create'}`);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -2173,6 +2183,14 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
           </div>
         </Modal>
       )}
+      <UpgradeRequiredModal
+        open={!!upgradeModal}
+        onClose={() => setUpgradeModal(null)}
+        message={upgradeModal?.message ?? ''}
+        resource={upgradeModal?.resource}
+        limit={upgradeModal?.limit}
+        current={upgradeModal?.current}
+      />
     </div>
   );
 }

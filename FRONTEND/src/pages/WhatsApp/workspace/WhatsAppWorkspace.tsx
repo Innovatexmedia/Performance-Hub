@@ -202,7 +202,7 @@ export function WhatsAppWorkspace() {
 
         {/* ---- Active view ---- */}
         <main className="min-w-0 flex-1 overflow-hidden bg-ink-50">
-          <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} />
+          <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} onNavigateTab={selectTab} />
         </main>
       </div>
     </div>

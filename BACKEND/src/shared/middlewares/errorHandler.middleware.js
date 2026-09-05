@@ -112,6 +112,20 @@ export const errorHandler = (err, req, res, next) => {
     message: error.isOperational ? error.message : 'Something went wrong. Please try again.',
   };
 
+  // Structured, stable machine-readable code -- separate from `details`
+  // (which is array-shaped, for field-level validation errors -- passing
+  // a plain object there gets silently dropped since `.length` is
+  // undefined on it). Lets the frontend reliably detect a SPECIFIC kind
+  // of error (e.g. 'PLAN_LIMIT_EXCEEDED') to show a dedicated UI for it,
+  // instead of fragile string-matching on the human-readable message,
+  // which breaks the moment that wording changes.
+  if (error.code) {
+    response.code = error.code;
+    if (error.resource !== undefined) response.resource = error.resource;
+    if (error.limit !== undefined) response.limit = error.limit;
+    if (error.current !== undefined) response.current = error.current;
+  }
+
   if (error.details && error.details.length > 0) {
     response.errors = error.details;
   } else if (error.errors && error.errors.length > 0) {

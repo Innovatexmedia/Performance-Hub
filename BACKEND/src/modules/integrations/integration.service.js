@@ -273,10 +273,25 @@ const REAL_INTEGRATION_KEYS = new Set([
  * in this codebase already gives its real fields. Entries in
  * REAL_INTEGRATION_KEYS are left untouched -- their overlay function
  * already replaced `config` with a purpose-built safe object.
+ *
+ * Normalizes to a plain object via .toObject() FIRST, same defensive
+ * pattern every overlay function above already uses -- for the ~17
+ * genuinely generic entries, all three overlay functions return their
+ * doc completely unchanged (they only touch their own specific known
+ * keys), so this is the FIRST place in the whole chain that would ever
+ * touch these entries at all. Spreading a live Mongoose document
+ * directly ({ ...doc }) instead of calling .toObject() first doesn't
+ * reliably copy schema-defined fields -- confirmed in practice: doing
+ * that here silently dropped `name` for every generic integration,
+ * which then crashed the Integrations page with "Cannot read
+ * properties of undefined (reading '0')" the moment the frontend tried
+ * to render the first letter of a now-undefined name.
  */
 const stripUnsafeGenericConfig = (doc) => {
-  if (!doc || REAL_INTEGRATION_KEYS.has(doc.key)) return doc;
-  return { ...doc, config: { hasConfig: hasRealConfig(doc.config) } };
+  if (!doc) return doc;
+  const plain = doc.toObject ? doc.toObject() : doc;
+  if (REAL_INTEGRATION_KEYS.has(plain.key)) return plain;
+  return { ...plain, config: { hasConfig: hasRealConfig(plain.config) } };
 };
 
 // =============================================================================

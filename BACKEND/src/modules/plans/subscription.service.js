@@ -343,34 +343,30 @@ const lockToDefaultPlan = async (account) => {
 };
 
 /**
- * handleWebhookEvent — looks up the ACCOUNT by cashfreeSubscriptionId
- * (not a tenant -- a subscription belongs to an account now), and every
- * change here propagates to every tenant that account covers.
- *
- * Only SUBSCRIPTION_STATUS_CHANGE actually drives plan changes --
- * SUBSCRIPTION_PAYMENT_SUCCESS/FAILED fire per individual recurring
- * charge and don't by themselves mean the mandate's overall status
- * changed (Cashfree retries failed charges before ever moving the
- * subscription to a lapsed status), so this deliberately ignores them
- * for plan-switching purposes.
+ * applyStatusToAccount — the actual reconciliation logic, shared by TWO
+ * callers with different trust levels but the same real trigger: Cashfree
+ * telling us (or us confirming for ourselves) what a subscription's true
+ * current status is.
+ *  - handleWebhookEvent (below): reactive, status comes from Cashfree's
+ *    own webhook push.
+ *  - subscriptionReconciliationScheduler.js: proactive, status comes from
+ *    US polling Cashfree's API directly -- the safety net for exactly
+ *    the case a webhook never arrives at all (a delivery failure, a
+ *    brief outage on either side, anything). Without this second path,
+ *    a tenant whose mandate silently lapsed on Cashfree's side could
+ *    keep full paid access indefinitely with no further charge ever
+ *    landing -- real revenue leakage with no error, no signal, nothing
+ *    to notice until someone happens to check.
+ * Extracted into one function specifically so both paths can never
+ * silently drift into applying the lock/sync logic differently.
  */
-export const handleWebhookEvent = async (event) => {
-  if (event?.type !== 'SUBSCRIPTION_STATUS_CHANGE') return;
-
-  const subscriptionDetails = event?.data?.subscription_details;
-  const subscriptionId = subscriptionDetails?.subscription_id || subscriptionDetails?.gateway_subscription_id;
-  if (!subscriptionId) return;
-
-  const account = await Account.findOne({ cashfreeSubscriptionId: subscriptionId });
-  if (!account) return;
-
-  const status = subscriptionDetails.subscription_status;
+const applyStatusToAccount = async (account, status, expiryTime) => {
   const wasActive = account.cashfreeSubscriptionStatus === 'ACTIVE';
 
   if (ACTIVE_STATUSES.has(status)) {
     account.cashfreeSubscriptionStatus = status;
-    if (subscriptionDetails.subscription_expiry_time) {
-      account.currentPeriodEnd = new Date(subscriptionDetails.subscription_expiry_time);
+    if (expiryTime) {
+      account.currentPeriodEnd = new Date(expiryTime);
     }
     if (account.pendingPlanId) {
       await account.upgradePlan(account.pendingPlanId);
@@ -410,4 +406,48 @@ export const handleWebhookEvent = async (event) => {
     account.cashfreeSubscriptionStatus = status;
     await account.save();
   }
+};
+
+/**
+ * handleWebhookEvent — looks up the ACCOUNT by cashfreeSubscriptionId
+ * (not a tenant -- a subscription belongs to an account now). Thin
+ * wrapper: parses the webhook payload, then delegates the actual
+ * reconciliation to applyStatusToAccount (shared with the reconciliation
+ * scheduler -- see its own comment above).
+ *
+ * Only SUBSCRIPTION_STATUS_CHANGE actually drives plan changes --
+ * SUBSCRIPTION_PAYMENT_SUCCESS/FAILED fire per individual recurring
+ * charge and don't by themselves mean the mandate's overall status
+ * changed (Cashfree retries failed charges before ever moving the
+ * subscription to a lapsed status), so this deliberately ignores them
+ * for plan-switching purposes.
+ */
+export const handleWebhookEvent = async (event) => {
+  if (event?.type !== 'SUBSCRIPTION_STATUS_CHANGE') return;
+
+  const subscriptionDetails = event?.data?.subscription_details;
+  const subscriptionId = subscriptionDetails?.subscription_id || subscriptionDetails?.gateway_subscription_id;
+  if (!subscriptionId) return;
+
+  const account = await Account.findOne({ cashfreeSubscriptionId: subscriptionId });
+  if (!account) return;
+
+  await applyStatusToAccount(account, subscriptionDetails.subscription_status, subscriptionDetails.subscription_expiry_time);
+};
+
+/**
+ * reconcileOneAccount — used by subscriptionReconciliationScheduler.js.
+ * Fetches this account's subscription status DIRECTLY from Cashfree
+ * (not trusting whatever's already cached in cashfreeSubscriptionStatus)
+ * and applies it through the exact same logic a webhook would have
+ * triggered. Safe to call repeatedly/on a schedule -- if Cashfree's
+ * status matches what we already have, applyStatusToAccount's own
+ * wasActive/pendingPlanId checks mean this is a no-op.
+ */
+export const reconcileOneAccount = async (account) => {
+  if (!account.cashfreeSubReferenceId) return;
+  const fetched = await cashfreeV2Request(`/api/v2/subscriptions/${account.cashfreeSubReferenceId}`);
+  const subscription = fetched?.subscription;
+  if (!subscription?.status) return;
+  await applyStatusToAccount(account, subscription.status, null);
 };
