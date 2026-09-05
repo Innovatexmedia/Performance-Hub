@@ -103,6 +103,31 @@ export const otpVerifyRateLimit = rateLimit({
 });
 
 /**
+ * publicBookingRateLimit — 10 booking attempts per 10 minutes per IP.
+ * Applied ONLY to POST /:tenantId/book (the actual write), not the
+ * read-only slot/event-type/workspace lookups on the same public router
+ * -- those stay on the general '/api' floor since they don't create
+ * anything. This endpoint is fully unauthenticated by design (a real
+ * prospect booking a call has no account yet) and, unlike most of what
+ * generalApiRateLimit protects, a single call here cascades into a real
+ * Cal.com booking plus a real Lead status change and Deal
+ * creation/advance (see booking.service.js) -- 300/min from the general
+ * floor is a reasonable ceiling for ordinary authenticated app usage,
+ * but too loose for an anonymous endpoint that writes that much real
+ * downstream state per call. 10/10min is generous for a genuine
+ * prospect (including a couple of retries after a failed attempt)
+ * while stopping a scripted flood of fake bookings well before it does
+ * real damage to a tenant's calendar or lead data.
+ */
+export const publicBookingRateLimit = rateLimit({
+  windowMs:        10 * 60 * 1000,
+  max:             10,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  handler:         rateLimitHandler,
+});
+
+/**
  * generalApiRateLimit — applied globally in app.js for all /api routes.
  * 300 requests per 1 minute per IP (see RATE_LIMITS in auth.constants.js
  * for the real reasoning: a short window with a generous cap recovers

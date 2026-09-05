@@ -130,6 +130,30 @@ export const decrypt = (encryptedString) => {
 };
 
 /**
+ * safeDecrypt — for reading a field that started plaintext and had
+ * encryption added to it LATER (every credential field touched in this
+ * pass: WhatsApp settings, ad tracking Meta/Google tokens, generic
+ * integration config). Any tenant's existing value saved BEFORE that
+ * change shipped is genuine plaintext, not "<iv>:<authTag>:<ciphertext>"
+ * -- decrypt() correctly throws on that shape, and letting it escape
+ * uncaught turns every read for an already-existing tenant into a 500
+ * (confirmed in practice immediately after the WhatsApp settings fix
+ * went live: GET /api/whatsapp/settings started failing for a tenant
+ * with pre-existing plaintext credentials). Falls back to the raw value
+ * on any decrypt failure -- self-healing, since every write path
+ * already encrypts unconditionally, so the field becomes real
+ * ciphertext the next time this tenant saves.
+ */
+export const safeDecrypt = (value) => {
+  if (!value) return value;
+  try {
+    return decrypt(value);
+  } catch {
+    return value;
+  }
+};
+
+/**
  * hashToken — creates a SHA-256 hash of a token for safe DB storage.
  * Used for: refresh tokens, password reset tokens, email verification tokens.
  * The plain token is sent to the user; only the hash is stored in MongoDB.

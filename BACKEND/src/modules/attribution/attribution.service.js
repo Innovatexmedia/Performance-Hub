@@ -31,6 +31,7 @@ import AdTrackingSettings from './adTrackingSettings.model.js';
 import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
 import { MetaConversionsProvider } from './providers/metaConversions.provider.js';
 import { GoogleAnalyticsProvider } from './providers/googleAnalytics.provider.js';
+import { safeDecrypt } from '../../utils/crypto.js';
 
 // ── Import Lead model to enrich events with UTM data ─────────────────────────
 import { Lead } from '../leads/lead/lead.model.js';
@@ -123,7 +124,9 @@ const sendToMeta = async (settings, event, lead) => {
 
   const provider = new MetaConversionsProvider({
     pixelId:       settings.meta.pixelId,
-    accessToken:   settings.meta.accessToken,
+    // Stored encrypted at rest (see adTrackingSettings.service.js) --
+    // decrypted here, in memory, only for this one real API call.
+    accessToken:   safeDecrypt(settings.meta.accessToken),
     testEventCode: settings.meta.testEventCode || undefined,
   });
 
@@ -157,7 +160,9 @@ const sendToGoogle = async (settings, event, lead) => {
 
   const provider = new GoogleAnalyticsProvider({
     measurementId: settings.google.measurementId,
-    apiSecret:     settings.google.apiSecret,
+    // Stored encrypted at rest (see adTrackingSettings.service.js) --
+    // decrypted here, in memory, only for this one real API call.
+    apiSecret:     safeDecrypt(settings.google.apiSecret),
   });
 
   try {

@@ -40,9 +40,22 @@ export const asyncHandler = (fn) => (req, res, next) =>
  * getContext — derives tenantId, userId, role from the request.
  *
  * Priority:
- * 1. req.user (set by authenticate JWT middleware) — used by booking routes
- * 2. x-tenant-id / x-user-id / x-user-role headers — used by lead/pipeline routes
- * 3. environment defaults — for local dev without auth
+ * 1. req.user (set by authenticate JWT middleware) — the only path
+ *    allowed in production.
+ * 2. x-tenant-id / x-user-id / x-user-role headers — DEV-ONLY
+ *    convenience for testing lead/pipeline routes without a full auth
+ *    flow.
+ *
+ * SECURITY: the header/default fallback below is now hard-gated to
+ * non-production environments. It previously ran unconditionally,
+ * which meant any route using withContext WITHOUT authenticate running
+ * first (a real, recurring class of bug in this project -- see e.g.
+ * plan.routes.js and cashfreeWebhook.routes.js, both found existing as
+ * files but never actually mounted in app.js) would let a caller
+ * impersonate any tenant/role simply by setting those headers directly,
+ * or fall through to a hardcoded demo-tenant-owner identity with no
+ * headers at all. In production there is now no fallback: missing
+ * req.user is treated as unauthenticated, full stop.
  *
  * This ensures lead.service.js ctx.tenantId matches booking.service.js ctx.tenantId
  * when both are called in the same user session.
@@ -55,6 +68,11 @@ export function getContext(req) {
       role:     req.user.role,
     };
   }
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new AppError(401, 'Authentication required.');
+  }
+
   return {
     tenantId: req.header('x-tenant-id') || DEFAULT_TENANT_ID,
     userId:   req.header('x-user-id')   || null,

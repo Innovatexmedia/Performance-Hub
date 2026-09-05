@@ -247,6 +247,38 @@ const hasRealConfig = (config) => {
   return Object.values(config).some((v) => v !== undefined && v !== null && v !== '');
 };
 
+/**
+ * REAL_INTEGRATION_KEYS -- every catalog key that has its own dedicated,
+ * already-encrypted settings model and always gets a freshly-built,
+ * safe `config` object from one of the overlay functions above
+ * (overlayRealWhatsAppStatus / overlayRealAdTrackingStatus /
+ * overlayRealPlatformStatus). Reused below to decide which entries
+ * still need their raw `config` stripped before a response leaves the
+ * server -- everything NOT in this set is one of the generic
+ * "simulation mode" catalog entries with no real backend at all (see
+ * integration.repository.js's header comment for the full reasoning).
+ */
+const REAL_INTEGRATION_KEYS = new Set([
+  META_CLOUD_KEY, DIALOG360_KEY, TWILIO_WA_KEY, INTERAKT_KEY,
+  META_ADS_KEY, GOOGLE_ADS_KEY, GOOGLE_ADS_CAMPAIGNS_KEY, CALCOM_KEY, SHOPIFY_KEY, SENDGRID_NURTURE_KEY,
+  SENDGRID_KEY,
+]);
+
+/**
+ * stripUnsafeGenericConfig -- the final step in every read path. For the
+ * generic, non-overlaid catalog entries, replaces the real (now
+ * correctly decrypted-in-memory, but never meant to leave the server)
+ * config object with just a `hasConfig` boolean -- same "reveal
+ * existence, not value" treatment every other credential-holding model
+ * in this codebase already gives its real fields. Entries in
+ * REAL_INTEGRATION_KEYS are left untouched -- their overlay function
+ * already replaced `config` with a purpose-built safe object.
+ */
+const stripUnsafeGenericConfig = (doc) => {
+  if (!doc || REAL_INTEGRATION_KEYS.has(doc.key)) return doc;
+  return { ...doc, config: { hasConfig: hasRealConfig(doc.config) } };
+};
+
 // =============================================================================
 // READ (auto-seeds the catalog first)
 // =============================================================================
@@ -264,7 +296,7 @@ export const listIntegrations = async (tenantId, filter, options, userId) => {
     integrations.map(async (doc) => {
       const withWhatsApp = await overlayRealWhatsAppStatus(tenantId, userId, doc);
       const withAdTracking = await overlayRealAdTrackingStatus(tenantId, userId, withWhatsApp);
-      return overlayRealPlatformStatus(withAdTracking);
+      return stripUnsafeGenericConfig(overlayRealPlatformStatus(withAdTracking));
     }),
   );
 
@@ -277,7 +309,7 @@ export const getIntegration = async (tenantId, id, userId) => {
   if (!integration) throw AppError.notFound('Integration not found');
   const withWhatsApp = await overlayRealWhatsAppStatus(tenantId, userId, integration);
   const withAdTracking = await overlayRealAdTrackingStatus(tenantId, userId, withWhatsApp);
-  return overlayRealPlatformStatus(withAdTracking);
+  return stripUnsafeGenericConfig(overlayRealPlatformStatus(withAdTracking));
 };
 
 export const getCategoryCounts = async (tenantId, filter) => {
@@ -462,11 +494,11 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     newStatus = INTEGRATION_STATUS.DISCONNECTED;
   }
 
-  return integrationRepo.update(tenantId, id, {
+  return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
     status: newStatus,
     last_sync: new Date(),
     updated_by: userId,
-  });
+  }));
 };
 
 // =============================================================================
@@ -523,10 +555,10 @@ export const syncIntegration = async (tenantId, userId, id) => {
     throw AppError.badRequest('Cannot sync a disconnected integration');
   }
 
-  return integrationRepo.update(tenantId, id, {
+  return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
     last_sync: new Date(),
     updated_by: userId,
-  });
+  }));
 };
 
 // =============================================================================
@@ -670,8 +702,8 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
 
   const mergedConfig = Object.assign({}, existing.config, configPatch || {});
 
-  return integrationRepo.update(tenantId, id, {
+  return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
     config: mergedConfig,
     updated_by: userId,
-  });
+  }));
 };

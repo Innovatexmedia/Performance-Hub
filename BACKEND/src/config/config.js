@@ -195,4 +195,28 @@ if (!process.env.API_BASE_URL) {
   );
 }
 
+// CLIENT_URL drives app.js's CORS origin check. Missing it there falls
+// back to `origin: '*'` while `credentials: true` stays on -- an
+// inconsistent, effectively-undefined security posture rather than an
+// explicit policy (most browsers refuse to honor credentialed requests
+// against a wildcard origin per the Fetch spec, so the likely real
+// failure mode is a confusing outage -- cookies silently rejected --
+// not a clean error pointing at the actual cause). In production this
+// now fails loudly at boot instead of silently degrading; in
+// development it stays a warning, since CLIENT_URL is reasonably often
+// left unset while testing locally.
+if (!process.env.CLIENT_URL) {
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'CLIENT_URL is not set. Refusing to start in production with CORS falling back to a wildcard origin -- ' +
+      'set CLIENT_URL to your real frontend origin (e.g. https://app.yourdomain.com).'
+    );
+  }
+  console.warn(
+    '\n⚠️  CLIENT_URL is not set.' +
+    '\n   CORS is falling back to a wildcard origin (*) with credentials enabled -- fine for quick local testing,' +
+    '\n   but this will refuse to start at all in production (NODE_ENV=production) until CLIENT_URL is set.\n'
+  );
+}
+
 export default config;

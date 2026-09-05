@@ -80,7 +80,7 @@ export const TABS = [
   // a Type within it, not a separate feature/page). The standalone
   // Broadcasts backend module is untouched for existing data; new
   // Broadcast-type sends now go through Campaigns end-to-end.
-  { id: 'rules', label: 'Automation Rules' },
+  { id: 'rules', label: 'Automation Rules (Beta)' },
   { id: 'consent', label: 'Opt-Out / Consent' },
   { id: 'logs', label: 'Delivery Logs' },
   { id: 'analytics', label: 'WhatsApp Analytics' },
@@ -2550,7 +2550,15 @@ function RulesTab() {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader icon={TAB_ICONS.rules} title="WhatsApp Automation Rules" subtitle="Trigger-based actions -- runs automatically, or manually with 'Run now'." />
+        <CardHeader
+          icon={TAB_ICONS.rules}
+          title="WhatsApp Automation Rules"
+          subtitle="Trigger-based actions -- rules save, toggle, and log runs correctly, but see the notice below before relying on them."
+          action={<Badge tone="amber">Beta</Badge>}
+        />
+        <div className="mx-5 mb-1 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <strong>Actions don't execute for real yet.</strong> Creating and activating a rule works, and "Run now" logs a result — but every action type (send template, start/stop nurture, assign user, change pipeline stage, add tag, etc.) currently records what it <em>would</em> do without actually doing it. Nurture sequences created separately in the Nurture tab already send real WhatsApp messages -- this is specifically about rules triggered here.
+        </div>
         <div className="flex flex-wrap items-center gap-2 px-5 pb-4">
           <IconInput icon={<Search size={14} />} value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search rules…" className="max-w-xs" />
           <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as RuleStatus | 'all')} className="w-40">
