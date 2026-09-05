@@ -15,6 +15,7 @@ import { dealRepository } from './deal.repository.js';
 import { pipelineEvents } from '../../../shared/events/pipeline.events.js';
 import { automationRulesService } from '../../whatsapp/submodules/automationRules/automationRules.service.js';
 import { TRIGGER_TYPE as AUTOMATION_TRIGGER_TYPE } from '../../whatsapp/submodules/automationRules/automationRules.constants.js';
+import { leadEventBus, LEAD_EVENTS } from '../../../shared/events/lead.events.js';
 import {
   DEAL_STAGE,
   DEAL_STAGE_VALUES,
@@ -307,3 +308,46 @@ export const dealService = {
     return board;
   },
 };
+
+/**
+ * Auto-create a "New Lead" stage deal the moment a lead is created, so
+ * the Pipeline reflects the WHOLE active funnel from first contact --
+ * not just the subset someone remembered to manually add, or that
+ * happened to reach a booking. This was a real gap: booking.service.js
+ * (and similarly qualification) already correctly "create or advance"
+ * an OPEN deal for a lead rather than ever double-creating one (see its
+ * `openDeal` lookup by lead_id before deciding to update vs. create) --
+ * but nothing ever created that FIRST deal for a brand-new lead, so
+ * every lead sat with zero pipeline representation until it happened to
+ * reach one of those later stages. Every subsequent stage-advancing
+ * action already finds and advances the deal created here instead of
+ * creating a second one, since this is the only deal that could
+ * possibly exist for a lead at the moment it's this fresh.
+ *
+ * Subscribes to the in-process lead event bus (see
+ * shared/events/lead.events.js's own comment on why this bus exists:
+ * "subscribers ... react without the Lead module knowing about them")
+ * rather than calling dealService directly from lead.service.js --
+ * deal.service.js already imports leadService (for read-only lookups),
+ * so the reverse import would be a circular dependency. Best-effort: a
+ * failure here must never surface back to lead creation, which has
+ * already fully succeeded by the time this fires.
+ */
+leadEventBus.on(LEAD_EVENTS.LEAD_CREATED, async (payload) => {
+  try {
+    const lead = payload.lead || {};
+    await dealService.createDeal(
+      { tenantId: payload.tenantId, userId: payload.actor },
+      {
+        lead_id:          payload.leadId,
+        title:            lead.name || lead.email || lead.phone || 'New Lead',
+        stage:            DEAL_STAGE.NEW_LEAD,
+        value:            lead.value || 0,
+        source:           lead.source || null,
+        assigned_user_id: lead.assigned_user_id || null,
+      },
+    );
+  } catch (err) {
+    console.warn(`[pipeline] auto-create deal on LEAD_CREATED failed for lead ${payload.leadId}: ${err.message}`);
+  }
+});

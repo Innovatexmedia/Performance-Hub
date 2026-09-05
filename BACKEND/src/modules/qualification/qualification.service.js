@@ -314,6 +314,32 @@ export const applyResult = async (qualificationId, reqUser) => {
         },
       }
     );
+  } else {
+    // No open deal for this lead at all -- create one directly at
+    // 'Qualified' rather than silently doing nothing. This branch was
+    // missing here even though this file's own header comment claims
+    // "Pattern matches booking.service.js and call.service.js exactly"
+    // -- those two files DO create a deal when none exists; this one
+    // only ever advanced an existing one, so a lead qualified before it
+    // had any deal (or whose deal was somehow missing) never got pipeline
+    // representation at all, with nothing surfacing the gap -- exactly
+    // the mismatch that showed up as "24 Qualified on the Dashboard, 1
+    // Qualified on the Pipeline".
+    await Deal.create({
+      tenant_id:        String(ctx.tenantId),
+      lead_id:          leadId,
+      assigned_user_id: updatedLead.assigned_user_id || null,
+      title:            updatedLead.name || updatedLead.email || updatedLead.phone || 'Lead',
+      stage:            PIPELINE_STAGE_ON_QUALIFY,
+      probability:      25,
+      source:           updatedLead.source || null,
+      value:            updatedLead.value || 0,
+      stageHistory: [{
+        stage:   PIPELINE_STAGE_ON_QUALIFY,
+        movedAt: new Date(),
+        movedBy: ctx.userId,
+      }],
+    });
   }
 
   // ── 4. Mark qualification applied ─────────────────────────────────────────

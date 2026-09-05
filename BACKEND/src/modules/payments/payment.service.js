@@ -318,6 +318,39 @@ export const markPaid = async (id, tenantId, reqUser) => {
       ).catch((err) => {
         console.error('[nurture] failed to pause enrollments on conversion for lead', String(leadId), err);
       });
+    } else {
+      // No open deal for this lead at all (and no deal_id on the
+      // payment either) -- create one directly at the paid/Won stage
+      // rather than silently doing nothing. Mirrors the same missing
+      // branch fixed in qualification.service.js -- without this, a
+      // lead paid before it ever had a deal (or whose deal somehow went
+      // missing) never got pipeline representation for its own
+      // conversion, the single most important stage to get right.
+      deal = await Deal.create({
+        tenant_id:        String(tenantId),
+        lead_id:          leadId,
+        assigned_user_id: lead?.assigned_user_id || null,
+        title:            lead?.name || lead?.email || lead?.phone || 'Lead',
+        stage:            DEAL_STAGE_ON_PAID,
+        probability:      100,
+        source:           lead?.source || null,
+        value:            amount,
+        stageHistory: [{
+          stage:   DEAL_STAGE_ON_PAID,
+          movedAt: new Date(),
+          movedBy: ctx.userId,
+        }],
+      });
+
+      await NurtureEnrollment.updateMany(
+        { tenantId: String(tenantId), leadId, status: ENROLLMENT_STATUS.ACTIVE },
+        {
+          $set: { status: ENROLLMENT_STATUS.PAUSED, pauseReason: 'CONVERTED', nextExecutionAt: null },
+          $push: { auditLog: { action: 'PAUSE', performedAt: new Date(), note: 'Lead converted (payment marked paid)' } },
+        },
+      ).catch((err) => {
+        console.error('[nurture] failed to pause enrollments on conversion for lead', String(leadId), err);
+      });
     }
   }
 
