@@ -57,6 +57,20 @@ import { generalApiRateLimit }           from './shared/middlewares/rateLimit.mi
 
 const app = express();
 
+// Render (like Heroku/Railway) sits the app behind a reverse proxy --
+// the real client IP arrives via X-Forwarded-For, not the raw socket
+// connection. Express doesn't trust that header by default (a genuine
+// security default: blindly trusting it would let any client spoof
+// their own IP by just setting the header themselves, if the app
+// WEREN'T actually behind a real proxy). Confirmed in practice on
+// Render's own logs: express-rate-limit refused to start correctly and
+// logged "X-Forwarded-For header is set but trust proxy is false",
+// meaning every one of this app's rate limiters (general API, login,
+// public booking) was NOT reliably identifying real per-client IPs in
+// production -- 1 trusts exactly one hop, the right, standard setting
+// for this exact single-reverse-proxy deployment shape.
+app.set('trust proxy', 1);
+
 // PUBLIC, mounted BEFORE helmet/cors/body-parsers -- this is Cashfree's
 // hosted checkout page redirecting the customer's browser back after
 // the mandate flow. Confirmed in practice: that redirect is a genuine
