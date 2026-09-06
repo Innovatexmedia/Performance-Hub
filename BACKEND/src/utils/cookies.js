@@ -18,20 +18,43 @@
  * SECURITY ATTRIBUTES
  * ───────────────────
  * httpOnly: true   — inaccessible to JavaScript (prevents XSS token theft)
- * secure: true     — HTTPS only in production
- * sameSite: lax    — blocks cross-site POST/PUT/DELETE (CSRF protection),
- *                     while still allowing this cookie on a top-level GET
- *                     navigation arriving from a cross-site redirect (e.g.
- *                     an OAuth provider like Shopify/Google redirecting
- *                     back to our own callback) -- 'strict' was tried
- *                     first and confirmed to break exactly that case,
- *                     logging users out immediately after starting any
- *                     OAuth flow in production.
+ * secure: true     — HTTPS only in production (REQUIRED for sameSite:'none'
+ *                     to work at all -- modern browsers refuse a
+ *                     SameSite=None cookie without Secure)
+ * sameSite: production ? 'none' : 'lax' — see below for why this differs
+ *                     by environment.
  * path: /          — cookie available on all routes
+ *
+ * WHY sameSite DIFFERS BY ENVIRONMENT
+ * ─────────────────────────────────────
+ * 'strict' was tried first and confirmed to break OAuth flows -- it
+ * blocks the cookie on ANY top-level navigation arriving from a
+ * cross-site redirect, including a legitimate OAuth provider (Shopify,
+ * Google Ads) redirecting back to our own callback, logging users out
+ * immediately after starting any OAuth flow.
+ *
+ * 'lax' was the fix for that -- but 'lax' STILL blocks the cookie on
+ * cross-site background fetch/XHR calls (not full-page navigations),
+ * which is exactly how the frontend calls /api/auth/refresh on page
+ * load to resume a session. This was invisible locally (frontend and
+ * backend both on localhost, effectively same-site regardless of port)
+ * but confirmed broken the moment frontend (vercel.app) and backend
+ * (onrender.com) became genuinely different registrable domains in
+ * production: refresh-token cookie silently never sent on that
+ * background call, /api/auth/refresh always 401s, and every page
+ * reload logged the user out.
+ *
+ * 'none' (production only) is the actual correct setting for this real
+ * cross-origin-frontend-and-backend deployment topology -- it's
+ * strictly MORE permissive than 'lax', so anything that already worked
+ * under 'lax' (including the OAuth redirect case above) keeps working;
+ * it additionally allows the cookie on cross-site background requests,
+ * which is what this app actually needs. Kept as 'lax' in development,
+ * since 'none' requires Secure (HTTPS), which local dev doesn't have.
  *
  * ENVIRONMENT VARIABLES
  * ──────────────────────
- * NODE_ENV — "production" enables secure flag
+ * NODE_ENV — "production" enables secure flag AND switches sameSite to 'none'
  * =============================================================================
  */
 
@@ -46,15 +69,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 export const getRefreshTokenCookieOptions = () => ({
   httpOnly: true,
   secure:   isProduction,
-  // 'lax' in both environments -- 'strict' blocks this cookie on any
-  // top-level navigation arriving from a cross-site redirect, which
-  // includes a legitimate OAuth provider (Shopify, Google Ads) redirecting
-  // back to our own callback. Confirmed as the real cause of users being
-  // logged out immediately after starting an OAuth flow in production.
-  // Lax still blocks cross-site POST/PUT/DELETE, so CSRF protection is
-  // unaffected -- this is the standard setting used specifically because
-  // it survives OAuth/external-redirect flows.
-  sameSite: 'lax',
+  sameSite: isProduction ? 'none' : 'lax',
   maxAge:   TOKEN_EXPIRY.REFRESH_TOKEN_SECONDS * 1000, // milliseconds
   path:     '/',
 });
@@ -74,14 +89,16 @@ export const setRefreshTokenCookie = (res, refreshToken) => {
 
 /**
  * clearRefreshTokenCookie — clears the refresh token cookie (logout/session revocation).
- * Must use identical path and domain as the set call.
+ * Must use identical path, sameSite, and domain as the set call -- a
+ * mismatched sameSite/secure here means the browser treats this as a
+ * DIFFERENT cookie and the real one never actually gets cleared on logout.
  * @param {Object} res — Express response object
  */
 export const clearRefreshTokenCookie = (res) => {
   res.clearCookie(COOKIE_NAMES.REFRESH_TOKEN, {
     httpOnly: true,
     secure:   isProduction,
-    sameSite: 'lax',
+    sameSite: isProduction ? 'none' : 'lax',
     path:     '/',
   });
 };
