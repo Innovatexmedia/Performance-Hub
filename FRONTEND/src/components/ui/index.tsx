@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, forwardRef } from 'react';
 import { X, ChevronRight, Search, Inbox, Eye, EyeOff, Copy, Check, Info } from 'lucide-react';
 import { initials } from '@/utils/formatters';
 
@@ -207,12 +207,27 @@ export function Field({
     </div>
   );
 }
-export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn('input', props.className)} {...props} />;
-}
-export function Textarea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return <textarea className={cn('input', props.className)} {...props} />;
-}
+/**
+ * Input/Textarea — forwardRef so callers that genuinely need direct DOM
+ * access (e.g. Nurture.tsx's cursor-position-aware "insert variable"
+ * picker, which needs a real ref to know where to insert text) can pass
+ * one. Plain function components can't receive a ref at all -- React
+ * silently drops it -- which is exactly why TypeScript correctly
+ * rejected `ref={...}` on the old versions of these (surfaced as a hard
+ * build failure, not just a dev-time warning, since `tsc -b` runs full
+ * type-checking that Vite's dev server skips). Every existing call site
+ * that doesn't pass a ref keeps working completely unchanged -- this is
+ * purely additive.
+ */
+export const Input = forwardRef<HTMLInputElement, React.InputHTMLAttributes<HTMLInputElement>>(
+  ({ className, ...props }, ref) => <input ref={ref} className={cn('input', className)} {...props} />
+);
+Input.displayName = 'Input';
+
+export const Textarea = forwardRef<HTMLTextAreaElement, React.TextareaHTMLAttributes<HTMLTextAreaElement>>(
+  ({ className, ...props }, ref) => <textarea ref={ref} className={cn('input', className)} {...props} />
+);
+Textarea.displayName = 'Textarea';
 export function Select({ children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return (
     <select className={cn('input', props.className)} {...props}>

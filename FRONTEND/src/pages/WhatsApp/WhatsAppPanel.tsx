@@ -6,6 +6,7 @@ import {
   ShieldCheck, Megaphone, Repeat, Radio, Zap, ScrollText, BarChart3, Settings as SettingsIcon,
   Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X, Eye,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
 import { aiReplyAssistantApi } from '@/lib/aiReplyAssistantApi';
@@ -1840,7 +1841,7 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
                   </div>
                 )}
                 {(() => {
-                  const funnelSteps: [string, number, React.ComponentType<{ size?: number; className?: string }>, string][] = [
+                  const funnelSteps: [string, number, LucideIcon, string][] = [
                     ['Sent', m.sentCount, Send, 'bg-ink-300'],
                     ['Delivered', m.deliveredCount, CheckCircle2, 'bg-ink-400'],
                     ['Read', m.readCount, Eye, 'bg-brand-400'],

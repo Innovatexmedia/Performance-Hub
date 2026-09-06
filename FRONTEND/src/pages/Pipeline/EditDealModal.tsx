@@ -3,7 +3,7 @@ import { Modal, Button, Field, Input, Select, Textarea } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
 import { STAGE_ORDER } from '@/types/deal';
-import { usePipelineStageLabels } from '@/hooks/usePipelineStageLabels';
+import { usePipelineStageLabels } from '@/hooks/Usepipelinestagelabels';
 import type { Deal, DealInput, DealStage } from '@/types/deal';
 
 /**
