@@ -23,7 +23,7 @@ export default defineConfig({
 
     proxy: {
       '/api': {
-        target: 'http://localhost:4001',
+        target: 'https://performance-hub-6dn7.onrender.com/',
         changeOrigin: true,
         secure: false,
       },
