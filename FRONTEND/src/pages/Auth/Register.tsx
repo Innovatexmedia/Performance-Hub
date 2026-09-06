@@ -27,8 +27,18 @@ export function Register() {
     setLoading(true);
     try {
       const user = await register({ ...form, role: 'tenant_owner' });
-      toast.success(`Welcome, ${user.firstName}!`, 'Your workspace is ready.');
-      navigate('/dashboard');
+      // null now means the real, normal case for a fresh signup:
+      // verification is required before any session exists (see
+      // authStore.ts register()'s comment) -- route to /verify-email
+      // instead of assuming a session was already established.
+      if (user) {
+        toast.success(`Welcome, ${user.firstName}!`, 'Your workspace is ready.');
+        navigate('/dashboard');
+      } else {
+        const pending = useAuthStore.getState().pendingEmailVerification;
+        toast.success('Account created!', 'Please verify your email to continue.');
+        navigate(`/verify-email${pending ? `?email=${encodeURIComponent(pending.email)}` : ''}`);
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Could not create your account. Please try again.';
       toast.error('Sign up failed', message);

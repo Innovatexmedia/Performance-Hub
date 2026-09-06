@@ -1,22 +1,4 @@
-/**
- * Real auth types — match the ACTUAL backend response shapes exactly.
- *
- * These are intentionally separate from the legacy `User` type in
- * `@/types/index.ts`, which describes the old client-side demo user
- * (has a plaintext `password` field, Title-Case role, single `name` field --
- * none of which exist on the real backend). That legacy type is still used
- * by every other page's mock `db.users` lookups and will be retired
- * module-by-module as each page is rewired to the real API.
- *
- * SOURCE OF TRUTH: src/modules/auth/models/User.js toJSON() transform
- * (strips password/loginAttempts/lockUntil, renames _id -> id) and
- * src/config/jwt.js token payload comment.
- */
 
-/**
- * The 5 real roles, exactly as stored on the backend (lowercase snake_case).
- * SOURCE: src/modules/auth/constants/roles.js
- */
 export type AuthRole =
   | 'super_admin'
   | 'tenant_owner'
@@ -119,10 +101,31 @@ export interface WorkspaceSelectionResult {
   workspaces: WorkspaceOption[];
 }
 
-export type LoginResult = AuthResult | WorkspaceSelectionResult;
+export type LoginResult = AuthResult | WorkspaceSelectionResult | EmailVerificationRequiredResult;
 
 export function isWorkspaceSelectionResult(result: LoginResult): result is WorkspaceSelectionResult {
   return 'requiresWorkspaceSelection' in result && result.requiresWorkspaceSelection === true;
+}
+
+/**
+ * The branch of /auth/login AND /auth/register's response returned when
+ * the account exists but hasn't proven ownership of its email yet -- no
+ * token issued, same "prove identity before granting access" principle
+ * as WorkspaceSelectionResult, just for a different gate. SOURCE:
+ * src/modules/auth/services/auth.service.js's real isEmailVerified check
+ * in login(), and register() no longer issuing a session at all.
+ */
+export interface EmailVerificationRequiredResult {
+  requiresEmailVerification: true;
+  email: string;
+}
+
+export type RegisterResult = AuthResult | EmailVerificationRequiredResult;
+
+export function isEmailVerificationRequiredResult(
+  result: LoginResult | RegisterResult,
+): result is EmailVerificationRequiredResult {
+  return 'requiresEmailVerification' in result && result.requiresEmailVerification === true;
 }
 
 /** Human-readable label for a role -- UI display only, never sent to the backend. */

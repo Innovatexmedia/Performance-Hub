@@ -3,8 +3,8 @@ import { authApi } from '@/lib/authApi';
 import { ApiError, setAuthHandlers } from '@/lib/apiClient';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { toast } from '@/store/toastStore';
-import { isWorkspaceSelectionResult } from '@/types/auth';
-import type { AuthUser, LoginPayload, RegisterPayload, WorkspaceOption, WorkspaceSelectionResult } from '@/types/auth';
+import { isWorkspaceSelectionResult, isEmailVerificationRequiredResult } from '@/types/auth';
+import type { AuthUser, LoginPayload, RegisterPayload, WorkspaceOption, WorkspaceSelectionResult, EmailVerificationRequiredResult } from '@/types/auth';
 
 export type AuthStatus = 'idle' | 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -45,6 +45,9 @@ interface AuthState {
    */
   pendingWorkspaceSelection: WorkspaceSelectionResult | null;
 
+  /** Set when login OR register returns requiresEmailVerification -- no session exists yet, the UI should route to /verify-email using this email. */
+  pendingEmailVerification: EmailVerificationRequiredResult | null;
+
   /** Every workspace the current user belongs to -- populated by loadWorkspaces(), used by the Topbar switcher dropdown. */
   workspaces: WorkspaceOption[];
   /** True only while the initial fetch is actually in flight -- distinct from workspaces being an empty array after a successful fetch that found nothing. */
@@ -52,10 +55,11 @@ interface AuthState {
 
   initialize: () => Promise<void>;
 
-  /** Throws ApiError on failure (invalid credentials, suspended account, etc.) -- callers should catch and display err.message. Returns null (not a user) when a workspace pick is required -- check pendingWorkspaceSelection in that case instead. */
+  /** Throws ApiError on failure (invalid credentials, suspended account, etc.) -- callers should catch and display err.message. Returns null (not a user) when a workspace pick OR email verification is required -- check pendingWorkspaceSelection / pendingEmailVerification in that case instead. */
   login: (payload: LoginPayload) => Promise<AuthUser | null>;
 
-  register: (payload: RegisterPayload) => Promise<AuthUser>;
+  /** Returns null (not a user) when email verification is required -- the normal case for a fresh signup; check pendingEmailVerification and route to /verify-email. */
+  register: (payload: RegisterPayload) => Promise<AuthUser | null>;
 
   /** Completes login after the multi-workspace branch -- uses pendingWorkspaceSelection's selectionToken. */
   selectWorkspace: (tenantId: string) => Promise<AuthUser>;
@@ -95,6 +99,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   status: 'idle',
   error: null,
   pendingWorkspaceSelection: null,
+  pendingEmailVerification: null,
   workspaces: [],
   workspacesLoading: true,
 
@@ -115,6 +120,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const result = await authApi.login(payload);
 
+      if (isEmailVerificationRequiredResult(result)) {
+        // Real gate, not a workaround -- password was already confirmed
+        // correct by this point (see auth.service.js login()'s comment
+        // on check ordering), the account just hasn't proven it owns
+        // this email address yet. No token issued.
+        set({ pendingEmailVerification: result, status: 'unauthenticated', error: null });
+        return null;
+      }
+
       if (isWorkspaceSelectionResult(result)) {
         // Multi-workspace case: no token issued yet. Every account that
         // existed before this feature shipped never reaches this branch
@@ -125,7 +139,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const { user, accessToken } = result;
-      set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null });
+      set({ user, accessToken, status: 'authenticated', error: null, pendingWorkspaceSelection: null, pendingEmailVerification: null });
       connectSocketAndListen();
       return user;
     } catch (err) {
@@ -138,7 +152,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   register: async (payload) => {
     set({ status: 'loading', error: null });
     try {
-      const { user, accessToken } = await authApi.register(payload);
+      const result = await authApi.register(payload);
+
+      if (isEmailVerificationRequiredResult(result)) {
+        // The normal case for a fresh signup now -- see
+        // auth.service.js register()'s comment. Not an error: the
+        // workspace/account/membership already exist for real, the UI
+        // just needs to route to /verify-email instead of the dashboard.
+        set({ pendingEmailVerification: result, status: 'unauthenticated', error: null });
+        return null;
+      }
+
+      const { user, accessToken } = result;
       set({ user, accessToken, status: 'authenticated', error: null });
       connectSocketAndListen();
       return user;
@@ -225,7 +250,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   setSessionFromTokens: (user, accessToken) => {
-    set({ user, accessToken, status: 'authenticated', error: null });
+    set({ user, accessToken, status: 'authenticated', error: null, pendingEmailVerification: null });
     connectSocketAndListen();
   },
 

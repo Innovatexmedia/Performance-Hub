@@ -161,10 +161,20 @@ export const createSubscriptionCheckout = async (tenantId, planId, reqUser) => {
       await cashfreeV2Request(`/api/v2/subscriptions/${account.cashfreeSubReferenceId}/cancel`, { method: 'POST' });
     } catch (err) {
       // Already cancelled/expired on Cashfree's side (e.g. via a webhook
-      // we haven't processed yet) is fine to ignore -- anything else
-      // should stop the new checkout rather than risk two concurrent
-      // mandates both billing this account.
-      const alreadyGone = err instanceof CashfreeApiError && /already|not.*found|invalid/i.test(err.message || '');
+      // we haven't processed yet, or a stale subReferenceId left over
+      // from switching between sandbox and live -- sandbox and live are
+      // entirely separate systems, so an ID that was real in one is
+      // genuinely unrecognized in the other) is fine to ignore --
+      // anything else should stop the new checkout rather than risk two
+      // concurrent mandates both billing this account.
+      //
+      // Confirmed in practice: Cashfree's real wording for this case is
+      // "Subscription Does not exist for subReferenceId : ..." -- which
+      // contains "not" and "exist" but NOT "found", so the original
+      // /not.*found/ pattern never actually matched it, turning a
+      // perfectly recoverable "nothing to cancel" case into a hard
+      // checkout failure.
+      const alreadyGone = err instanceof CashfreeApiError && /already|not.*found|not.*exist|invalid/i.test(err.message || '');
       if (!alreadyGone) throw asCashfreeError(err, 'Could not cancel the existing subscription before switching plans');
     }
   }

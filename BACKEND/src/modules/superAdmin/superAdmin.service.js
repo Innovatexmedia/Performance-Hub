@@ -1,24 +1,3 @@
-/**
- * =============================================================================
- * InnovateX Revenue OS — Super Admin Service
- * =============================================================================
- *
- * FILE: src/modules/superAdmin/superAdmin.service.js
- *
- * SOURCE: MASTER_SPEC.md B19, FRONTEND_SPEC.md §20. Exactly 5 tabs' worth
- * of real functionality -- nothing beyond what spec calls for (no delete
- * tenant, no platform settings tab, neither exists in spec).
- *
- * Every function here operates WITHOUT a tenantId filter deliberately --
- * this is the one real, legitimate place in the codebase that queries
- * across every tenant. All routes calling into this service are gated
- * `requireExactRole('super_admin')` (see superAdmin.routes.js), and
- * resolveTenant already skips tenant loading entirely for this role
- * (see tenant.middleware.js) -- there is no tenant context to scope by
- * here, by design.
- * =============================================================================
- */
-
 import mongoose from 'mongoose';
 import Tenant from '../auth/models/Tenant.js';
 import User from '../auth/models/User.js';
@@ -202,6 +181,14 @@ export const createTenant = async (data, actorUserId) => {
         role: ROLES.TENANT_OWNER,
         tenantId: tenant._id,
         status: USER_STATUS.ACTIVE,
+        // A platform admin creating this account directly (not via
+        // self-registration) is its own form of identity vouching --
+        // same reasoning as invitation.service.js's acceptInvitation.
+        // Without this, login()'s new isEmailVerified gate would lock
+        // out every super-admin-provisioned account with no way to
+        // verify at all, since this path never calls
+        // issueVerificationEmail the way self-registration does.
+        isEmailVerified: true,
       }], { session }))[0];
 
       // A Super-Admin-created tenant always gets a fresh Account --

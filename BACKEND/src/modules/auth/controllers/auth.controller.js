@@ -29,6 +29,15 @@ import asyncHandler from '../../../utils/asyncHandler.js';
 export const register = asyncHandler(async (req, res) => {
   const result = await authService.register(req.body, req);
 
+  // Real verification gate: no session issued at registration anymore --
+  // see auth.service.js register()'s comment.
+  if (result.requiresEmailVerification) {
+    return sendCreated(res, {
+      requiresEmailVerification: true,
+      email: result.email,
+    }, 'Account created. Please verify your email to continue.');
+  }
+
   setRefreshTokenCookie(res, result.refreshToken);
 
   return sendCreated(res, {
@@ -43,6 +52,16 @@ export const register = asyncHandler(async (req, res) => {
 export const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   const result = await authService.login({ email, password }, req);
+
+  // Real verification gate -- checked first in the service (before the
+  // multi-workspace branch below), so this and requiresWorkspaceSelection
+  // never both apply to the same response.
+  if (result.requiresEmailVerification) {
+    return sendSuccess(res, {
+      requiresEmailVerification: true,
+      email: result.email,
+    }, 'Please verify your email to continue');
+  }
 
   // Multi-workspace case: no tokens issued yet, nothing to set a cookie
   // from -- the client shows a workspace picker and calls switchWorkspace
@@ -261,8 +280,9 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
  * verifyEmail — POST /auth/verify-email
  */
 export const verifyEmail = asyncHandler(async (req, res) => {
-  const user = await authService.verifyEmail(req.body.token);
-  return sendSuccess(res, { user }, 'Email verified successfully. Welcome to InnovateX!');
+  const result = await authService.verifyEmail(req.body.token, req);
+  setRefreshTokenCookie(res, result.refreshToken);
+  return sendSuccess(res, { user: result.user, accessToken: result.accessToken }, 'Email verified successfully. Welcome to InnovateX!');
 });
 
 /**
@@ -271,8 +291,9 @@ export const verifyEmail = asyncHandler(async (req, res) => {
  * (see auth.service.js's verifyEmailOtp).
  */
 export const verifyEmailWithOtp = asyncHandler(async (req, res) => {
-  const user = await authService.verifyEmailOtp(req.body.email, req.body.otp);
-  return sendSuccess(res, { user }, 'Email verified successfully. Welcome to InnovateX!');
+  const result = await authService.verifyEmailOtp(req.body.email, req.body.otp, req);
+  setRefreshTokenCookie(res, result.refreshToken);
+  return sendSuccess(res, { user: result.user, accessToken: result.accessToken }, 'Email verified successfully. Welcome to InnovateX!');
 });
 
 /**

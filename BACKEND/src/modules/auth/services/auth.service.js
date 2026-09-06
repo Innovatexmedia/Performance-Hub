@@ -80,7 +80,7 @@ const issueVerificationEmail = async (user) => {
  * ceiling. Never logs the plain OTP anywhere -- only its SHA-256 hash is
  * ever compared or stored.
  */
-export const verifyEmailOtp = async (email, otp) => {
+export const verifyEmailOtp = async (email, otp, req) => {
   const record = await tokenRepo.findLatestEmailVerificationOtpRecord(email);
   if (!record) throw new AppError('Invalid or expired verification code', 400);
 
@@ -99,13 +99,16 @@ export const verifyEmailOtp = async (email, otp) => {
 
   // Matches verifyEmail() (the link-based flow) exactly, so the two entry
   // points converge on identical real behavior -- same real user-update
-  // call, same welcome email, same public-profile response shape.
+  // call, same welcome email, same public-profile response shape, and
+  // now the same real session-issuance too.
   await userRepo.verifyEmail(user._id);
   await tokenRepo.markEmailVerificationTokenUsed(record._id);
 
   await sendWelcomeEmail({ email: user.email, firstName: user.firstName });
 
-  return user.getPublicProfile();
+  const meta = getClientMeta(req);
+  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(user, meta);
+  return { user: user.getPublicProfile(), accessToken, refreshToken };
 };
 
 // =============================================================================
@@ -231,23 +234,14 @@ async function _registerSuperAdmin({ firstName, lastName, email, password }, met
 
   await issueVerificationEmail(user);
 
-  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(user, meta);
-
-  await createAuditLog({
-    userId:  user._id,
-    tenantId: null,
-    email:   user.email,
-    event:   AUDIT_EVENTS.LOGIN_SUCCESS,
-    success: true,
-    ...meta,
-  });
-
-  return {
-    user:         user.getPublicProfile(),
-    accessToken,
-    refreshToken,
-    tenant:       null,
-  };
+  // Real email verification gate: registration no longer issues a session
+  // -- previously it did, meaning ANY email address (real or fake) got
+  // immediate full product access with zero proof of ownership. The
+  // verification email/OTP was already being sent every time; nothing
+  // ever actually required completing it. tokens are now issued at
+  // verifyEmail()/verifyEmailOtp() instead, the first genuine point the
+  // user has proven they own this address.
+  return { requiresEmailVerification: true, email: user.email };
 }
 
 /**
@@ -321,31 +315,12 @@ async function _registerTenantOwner(
 
   await issueVerificationEmail(user);
 
-  const { accessToken, refreshToken } =
-    await tokenSvc.issueTokenPair(user, meta);
-
-  await createAuditLog({
-    userId: user._id,
-    tenantId: tenant._id,
-    email: user.email,
-    event: AUDIT_EVENTS.LOGIN_SUCCESS,
-    success: true,
-    ...meta,
-  });
-
-  return {
-    user: user.getPublicProfile(),
-    accessToken,
-    refreshToken,
-    tenant: {
-      id: tenant._id,
-      name: tenant.name,
-      slug: tenant.slug,
-      plan: tenant.plan,
-      subscriptionStatus: tenant.subscriptionStatus,
-      trialEndsAt: tenant.trialEndsAt,
-    },
-  };
+  // Same real verification gate as _registerSuperAdmin -- see its comment.
+  // The tenant/account/membership above are still fully created (a real
+  // workspace genuinely exists the moment this returns); what changes is
+  // that no session token is issued until the owner actually verifies
+  // this email address.
+  return { requiresEmailVerification: true, email: user.email };
 }
 
 // =============================================================================
@@ -431,6 +406,18 @@ export const login = async ({ email, password }, req) => {
   // Successful login — reset lockout state
   await user.resetLoginAttempts();
   await userRepo.updateLastLogin(user._id);
+
+  // Real email verification gate -- checked AFTER the password is
+  // confirmed correct (so a wrong-password attempt on an unverified
+  // account still gets the generic "Invalid email or password", not a
+  // hint that this specific address exists and is just unverified),
+  // but BEFORE the multi-workspace branch below -- verifying the
+  // person owns this email is more fundamental than which of their
+  // workspaces they're about to pick. No token issued here; the client
+  // is sent to the same real verify-email flow registration uses.
+  if (!user.isEmailVerified) {
+    return { requiresEmailVerification: true, email: user.email };
+  }
 
   // ── Multi-workspace check ────────────────────────────────────────────────
   // 0 or 1 active memberships -> proceed exactly as before (this covers
@@ -965,10 +952,15 @@ export const changePassword = async (
 // =============================================================================
 
 /**
- * verifyEmail — validates the email verification token, marks email as verified.
+ * verifyEmail — validates the email verification token, marks email as
+ * verified, and issues a real session -- this is now the first genuine
+ * point a self-registered user has proven they own their email (see
+ * register()'s comment), so it's the right moment to actually log them
+ * in, not just mark a flag.
  * @param {string} plainToken — from URL query param
+ * @param {Object} req — for getClientMeta (audit log + token issuance)
  */
-export const verifyEmail = async (plainToken) => {
+export const verifyEmail = async (plainToken, req) => {
   const tokenRecord = await tokenRepo.findEmailVerificationToken(plainToken);
   if (!tokenRecord) {
     throw new AppError('Invalid or expired verification link', 400);
@@ -983,7 +975,9 @@ export const verifyEmail = async (plainToken) => {
 
   await sendWelcomeEmail({ email: user.email, firstName: user.firstName });
 
-  return user.getPublicProfile();
+  const meta = getClientMeta(req);
+  const { accessToken, refreshToken } = await tokenSvc.issueTokenPair(user, meta);
+  return { user: user.getPublicProfile(), accessToken, refreshToken };
 };
 
 /**

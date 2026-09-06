@@ -110,6 +110,19 @@ export const cashfreeV2Request = async (path, { method = 'GET', body } = {}) => 
   // The v2 API returns 200 with a body `status` field for some errors
   // rather than always using the HTTP status code -- check both.
   if (!response.ok || data?.status === 'ERROR') {
+    // Real, complete logging of every Cashfree failure -- previously
+    // the full response (status + body) was captured on the thrown
+    // error but never actually printed anywhere, so a failure only ever
+    // showed up as a generic 400 in Render's access log (method, path,
+    // status, byte count) with zero indication of WHAT Cashfree actually
+    // said. Confirmed in practice: a live-mode subscription-creation
+    // failure showed nothing more specific than "Cashfree request
+    // failed" client-side, with no way to diagnose it further without
+    // this.
+    console.error(
+      `[cashfree] ${method} ${path} failed -- HTTP ${response.status}, body:`,
+      JSON.stringify(data ?? text).slice(0, 2000),
+    );
     throw new CashfreeApiError(data?.message || 'Cashfree request failed', { status: response.status, body: data });
   }
   return data;

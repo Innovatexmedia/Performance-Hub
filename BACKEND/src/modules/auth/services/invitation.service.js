@@ -1,23 +1,3 @@
-/**
- * =============================================================================
- * InnovateX Revenue OS — Invitation Service
- * =============================================================================
- *
- * FILE: src/modules/auth/services/invitation.service.js
- *
- * PURPOSE
- * ───────
- * Invitation preview and acceptance flows. Mirrors password.service.js's
- * structure exactly (token generation lives in team.service.js's
- * addTeamMember, same as password reset's token generation lives in
- * requestPasswordReset -- this file owns the OTHER half: validating a
- * token and completing the flow it started).
- *
- * COORDINATES: token validation → password set → user/membership
- * activation → real login token issuance → audit log.
- * =============================================================================
- */
-
 import { hashPassword }        from '../../../utils/password.js';
 import * as tokenRepo          from '../repositories/token.repository.js';
 import * as userRepo           from '../repositories/user.repository.js';
@@ -105,7 +85,15 @@ export const acceptInvitation = async ({ token, password }, req) => {
   await userRepo.updatePassword(user._id, hashedPassword);
 
   const activatedUser = await userRepo.updateById(user._id, {
-    $set: { status: USER_STATUS.ACTIVE },
+    // isEmailVerified: true here too, not just status -- accepting an
+    // invitation via its real emailed link IS proof of owning this
+    // inbox, the same real thing self-registration's OTP/link verifies.
+    // Without this, every invited team member would be silently blocked
+    // by login()'s new isEmailVerified gate despite never having been
+    // sent a separate verification email at all (only registration's
+    // own paths call issueVerificationEmail) -- a real login-lockout for
+    // every legitimately invited user, not just self-registered ones.
+    $set: { status: USER_STATUS.ACTIVE, isEmailVerified: true },
   });
 
   await Membership.updateOne(

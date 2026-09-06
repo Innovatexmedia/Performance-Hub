@@ -21,13 +21,25 @@ export function Login() {
     setLoading(true);
     try {
       const user = await login({ email, password });
-      // null = multi-workspace case -- pendingWorkspaceSelection is now
-      // set, the form below switches to showing the picker instead.
-      // Every account that existed before this feature shipped never
-      // returns null here (see authStore.ts login()'s comment).
+      // null has two real cases now, both set their own store state
+      // rather than the component branching on the error message:
+      //   - pendingWorkspaceSelection: the form below switches to the
+      //     picker in place, no navigation needed.
+      //   - pendingEmailVerification: routes to /verify-email, the
+      //     account exists and the password was correct, it just hasn't
+      //     proven ownership of this email yet.
+      // Every account that existed before either feature shipped never
+      // returns null here at all (see authStore.ts login()'s comment).
       if (user) {
         toast.success(`Welcome back, ${user.firstName}!`, `Signed in as ${user.email}`);
         navigate(user.role === 'super_admin' ? '/super-admin' : '/dashboard');
+      } else {
+        // Read fresh from the store directly rather than the subscribed
+        // `pendingEmailVerification` above -- that hook value is from
+        // BEFORE this login() call resolved and updated the store, a
+        // stale closure that would never see the state login() just set.
+        const fresh = useAuthStore.getState().pendingEmailVerification;
+        if (fresh) navigate(`/verify-email?email=${encodeURIComponent(fresh.email)}`);
       }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : 'Unable to sign in. Please try again.';

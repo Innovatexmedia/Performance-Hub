@@ -1,5 +1,5 @@
 import { apiClient } from '@/lib/apiClient';
-import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, WorkspaceOption, Session } from '@/types/auth';
+import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, RegisterResult, WorkspaceOption, Session } from '@/types/auth';
 
 /**
  * Thin, typed functions -- one per backend route. No business logic here;
@@ -7,9 +7,10 @@ import type { AuthResult, AuthUser, LoginPayload, LoginResult, RegisterPayload, 
  * SOURCE: src/modules/auth/controllers/auth.controller.js
  */
 export const authApi = {
-  register: (payload: RegisterPayload) => apiClient.post<AuthResult>('/auth/register', payload),
+  /** May return AuthResult (email already verified -- rare, e.g. an admin-provisioned account) or EmailVerificationRequiredResult (the normal case) -- see isEmailVerificationRequiredResult() to distinguish. */
+  register: (payload: RegisterPayload) => apiClient.post<RegisterResult>('/auth/register', payload),
 
-  /** May return AuthResult (normal login) or WorkspaceSelectionResult (2+ active memberships) -- see isWorkspaceSelectionResult() to distinguish. */
+  /** May return AuthResult (normal login), WorkspaceSelectionResult (2+ active memberships), or EmailVerificationRequiredResult -- see isWorkspaceSelectionResult()/isEmailVerificationRequiredResult() to distinguish. */
   login: (payload: LoginPayload) => apiClient.post<LoginResult>('/auth/login', payload),
 
   /**
@@ -49,10 +50,10 @@ export const authApi = {
   resetPasswordWithOtp: (email: string, otp: string, password: string) =>
     apiClient.post<null>('/auth/reset-password/otp', { email, otp, password }),
 
-  verifyEmail: (token: string) => apiClient.post<{ user: AuthUser }>('/auth/verify-email', { token }),
+  verifyEmail: (token: string) => apiClient.post<AuthResult>('/auth/verify-email', { token }),
 
-  /** OTP variant, alongside the existing link -- same backend document/lifecycle, see auth.service.js's verifyEmailOtp. */
-  verifyEmailOtp: (email: string, otp: string) => apiClient.post<{ user: AuthUser }>('/auth/verify-email/otp', { email, otp }),
+  /** OTP variant, alongside the existing link -- same backend document/lifecycle, see auth.service.js's verifyEmailOtp. Now issues a real session too, same as verifyEmail above -- this is the first genuine proof-of-ownership moment for a self-registered account. */
+  verifyEmailOtp: (email: string, otp: string) => apiClient.post<AuthResult>('/auth/verify-email/otp', { email, otp }),
 
   resendVerification: () => apiClient.post<null>('/auth/resend-verification'),
 
