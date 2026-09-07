@@ -71,6 +71,28 @@ export function useRedisEmitterFallback() {
 function getRedisEmitter() {
   if (!redisEmitter) {
     const pub = new Redis(config.REDIS_URL, { lazyConnect: true });
+    // Real error handler -- CRITICAL FIX (confirmed via production audit
+    // + a real localhost crash report). Every ioredis client is a
+    // Node.js EventEmitter; an 'error' event fired with ZERO listeners
+    // attached is a documented Node.js behavior that THROWS and crashes
+    // the process, not just logs. This client had none, and this exact
+    // gap (not "Redis is missing", the missing HANDLER) was the real
+    // cause of "ECONNREFUSED 127.0.0.1:6379" + "missing 'error' handler
+    // on this Redis client" + eventual nodemon crash on localhost (no
+    // REDIS_URL set there -- see config.js's own fallback to
+    // 'redis://127.0.0.1:6379' when unset), and a latent crash risk in
+    // production too from any transient Redis network blip, independent
+    // of whether Redis itself is genuinely configured correctly.
+    // Same safe, non-spammy "log once until it recovers" pattern already
+    // proven in queues/redis.js.
+    let loggedFailure = false;
+    pub.on('error', (err) => {
+      if (!loggedFailure) {
+        console.error('[REDIS emitter] connection error -- cross-process realtime events (worker -> connected clients) will not work until this is resolved:', err.message);
+        loggedFailure = true;
+      }
+    });
+    pub.on('connect', () => { loggedFailure = false; });
     redisEmitter = new Emitter(pub);
   }
   return redisEmitter;
@@ -119,9 +141,45 @@ export function initSocketServer(httpServer) {
   // Also the standard way to horizontally scale the API itself across
   // multiple instances (a client connected to instance A still receives
   // an event emitted from instance B) -- same fix, second benefit.
+  //
+  // CRITICAL FIX (confirmed via production audit + a real localhost
+  // crash report): pubClient/subClient previously had NO 'error'
+  // handler and no lazyConnect -- ioredis clients are Node.js
+  // EventEmitters, and Node.js throws (crashing the whole process) if
+  // an 'error' event fires with zero listeners attached. The
+  // surrounding try/catch below only ever covered the SYNCHRONOUS setup
+  // call (io.adapter(...)); the actual TCP connection attempt (and any
+  // failure) happens asynchronously afterward, completely outside that
+  // try/catch's scope -- exactly why the real crash happened ~10-15s
+  // after boot (matching ioredis's default retry/backoff timing before
+  // giving up), not immediately. lazyConnect: true added too, matching
+  // queues/redis.js's own established pattern -- the API server (and
+  // Socket.io itself) should boot and serve requests fine even before
+  // Redis is reachable; only the CROSS-PROCESS relay this adapter
+  // enables actually needs it. With both fixes, an unavailable/failing
+  // Redis now degrades this one specific feature (worker -> connected
+  // clients realtime relay, and multi-instance horizontal scaling) with
+  // a clear log line, instead of crashing the entire Node process and
+  // taking down every in-flight request (including registration --
+  // this is the same real mechanism that could make a genuinely
+  // successful signup appear to fail: the MongoDB write completes, then
+  // an unrelated Redis-triggered crash interrupts the HTTP response
+  // before the client receives it).
   try {
-    const pubClient = new Redis(config.REDIS_URL);
+    const pubClient = new Redis(config.REDIS_URL, { lazyConnect: true });
     const subClient = pubClient.duplicate();
+
+    let loggedFailure = false;
+    const onRedisError = (label) => (err) => {
+      if (!loggedFailure) {
+        console.error(`⚠️  Socket.io Redis adapter (${label}) connection error -- realtime events from the campaign-send worker process, and cross-instance broadcast, will not work until this is resolved:`, err.message);
+        loggedFailure = true;
+      }
+    };
+    pubClient.on('error', onRedisError('pub'));
+    subClient.on('error', onRedisError('sub'));
+    pubClient.on('connect', () => { loggedFailure = false; });
+
     io.adapter(createAdapter(pubClient, subClient));
     console.log('🔌 Socket.io Redis adapter attached');
   } catch (err) {
