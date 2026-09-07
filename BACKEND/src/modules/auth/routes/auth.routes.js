@@ -78,4 +78,11 @@ router.post('/workspaces',          authenticate, requireRole('tenant_admin'), a
 router.patch('/change-password',    authenticate, validateChangePassword, authController.changePassword);
 router.post('/resend-verification', authenticate, otpGenerationRateLimit, authController.resendVerification);
 
+// Public/unauthenticated variant -- for a user who has no session at all
+// yet (register() no longer issues one until verification succeeds).
+// Same rate limiter as the authenticated version -- if anything, this
+// one being unauthenticated makes real per-IP throttling MORE
+// important, not less, since it has no per-user session to key off of.
+router.post('/resend-verification/public', otpGenerationRateLimit, authController.resendVerificationPublic);
+
 export default router;

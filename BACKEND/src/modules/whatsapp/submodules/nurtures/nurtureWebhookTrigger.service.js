@@ -104,7 +104,22 @@ export const handleIncomingWebhook = async ({ sequenceId, token, rawBody, payloa
   // Real, deliberate anti-enumeration: identical response whether the
   // sequence doesn't exist or the token is simply wrong -- doesn't
   // confirm to an unauthenticated caller which case it is.
-  if (!sequence || !sequence.webhookToken || sequence.webhookToken !== token) {
+  //
+  // Timing-safe comparison -- confirmed missing here, but present for
+  // the exact same class of problem (verifying a secret from an
+  // untrusted caller) in this codebase's own metaWebhook.service.js and
+  // cashfree.js, both via crypto.timingSafeEqual. A plain !== comparison
+  // isn't guaranteed constant-time in JS, so this closes the same real
+  // gap those two already correctly closed, rather than introducing a
+  // new security bar this codebase doesn't otherwise hold itself to.
+  const tokenMatches = (() => {
+    if (!sequence?.webhookToken || typeof token !== 'string') return false;
+    const expected = Buffer.from(sequence.webhookToken);
+    const received = Buffer.from(token);
+    if (expected.length !== received.length) return false;
+    return crypto.timingSafeEqual(expected, received);
+  })();
+  if (!sequence || !tokenMatches) {
     throw AppError.notFound('Not found');
   }
   if (sequence.status !== SEQUENCE_STATUS.ACTIVE) {

@@ -16,7 +16,7 @@
  */
 
 import SendGridSettings from './sendgridSettings.model.js';
-import { encrypt, decrypt } from '../../utils/crypto.js';
+import { encrypt, decrypt, safeDecrypt } from '../../utils/crypto.js';
 import { verifyApiKey } from './providers/sendgrid.provider.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 
@@ -49,7 +49,7 @@ export const sendgridSettingsService = {
     const doc = await SendGridSettings.findOne({ tenantId });
     if (!doc || !doc.connected || !doc.apiKey) return null;
     return {
-      apiKey: decrypt(doc.apiKey),
+      apiKey: safeDecrypt(doc.apiKey),
       from: { email: doc.verifiedSenderEmail, name: doc.fromName || undefined },
       replyTo: doc.replyTo || undefined,
     };
@@ -75,7 +75,7 @@ export const sendgridSettingsService = {
     if (replyTo !== undefined) doc.replyTo = replyTo || null;
 
     try {
-      await verifyApiKey(decrypt(doc.apiKey));
+      await verifyApiKey(safeDecrypt(doc.apiKey));
       doc.connected = true;
       doc.connectedAt = doc.connectedAt || new Date();
       doc.lastVerifiedAt = new Date();
@@ -107,7 +107,7 @@ export const sendgridSettingsService = {
     const doc = await SendGridSettings.findOne({ tenantId });
     if (!doc || !doc.apiKey) throw AppError.badRequest('No SendGrid API key configured for this workspace yet');
     try {
-      const result = await verifyApiKey(decrypt(doc.apiKey));
+      const result = await verifyApiKey(safeDecrypt(doc.apiKey));
       doc.connected = true;
       doc.lastVerifiedAt = new Date();
       doc.lastSyncError = null;

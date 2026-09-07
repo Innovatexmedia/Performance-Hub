@@ -232,7 +232,27 @@ async function _registerSuperAdmin({ firstName, lastName, email, password }, met
     status:      USER_STATUS.ACTIVE,
   });
 
-  await issueVerificationEmail(user);
+  // Real resilience fix -- confirmed in practice: the user/tenant/account
+  // are already committed to the database by this point, but if
+  // issueVerificationEmail() throws for ANY reason (a token-record write
+  // failure, a transient DB blip, anything -- NOT the actual email send
+  // itself, which sendMail() already safely falls back on failure rather
+  // than throwing), that exception was propagating all the way up
+  // uncaught, making the whole registration look like it failed to the
+  // client with a generic "Could not create your account" -- while the
+  // account genuinely existed underneath. Trying to register again with
+  // the same email then correctly hits "already exists", which is
+  // technically true but deeply confusing given the client was just told
+  // creation failed outright. A real account that exists deserves a
+  // real, honest response either way -- if this fails, the user can
+  // still use "resend verification" once they do reach the verify-email
+  // screen, same fallback path a legitimately slow/lost email already
+  // needs.
+  try {
+    await issueVerificationEmail(user);
+  } catch (err) {
+    console.error('[auth] issueVerificationEmail failed post-registration for', user.email, '-- account was still created:', err.message);
+  }
 
   // Real email verification gate: registration no longer issues a session
   // -- previously it did, meaning ANY email address (real or fake) got
@@ -313,7 +333,17 @@ async function _registerTenantOwner(
     throw error;
   }
 
-  await issueVerificationEmail(user);
+  // Same real resilience fix as _registerSuperAdmin -- see its comment.
+  // Especially important here: the tenant/account/membership above are
+  // ALSO already committed by this point, not just the user -- letting
+  // an email-verification-record write failure propagate up would have
+  // made an entire real, successfully-created workspace look like a
+  // failed signup.
+  try {
+    await issueVerificationEmail(user);
+  } catch (err) {
+    console.error('[auth] issueVerificationEmail failed post-registration for', user.email, '-- account/tenant were still created:', err.message);
+  }
 
   // Same real verification gate as _registerSuperAdmin -- see its comment.
   // The tenant/account/membership above are still fully created (a real
@@ -992,4 +1022,33 @@ export const resendVerificationEmail = async (userId) => {
 
   await tokenRepo.invalidateExistingVerificationTokens(userId);
   await issueVerificationEmail(user);
+};
+
+/**
+ * resendVerificationEmailByEmail — the PUBLIC, unauthenticated variant,
+ * for the exact gap resendVerificationEmail(userId) above can't cover:
+ * someone who just registered but has no session at all yet (register()
+ * no longer issues one until verification succeeds -- see this file's
+ * register() comment), including the specific case where the
+ * verification email/OTP record itself failed to get created the first
+ * time (a real, confirmed-in-practice failure mode -- see
+ * _registerTenantOwner's try/catch around issueVerificationEmail).
+ * Without this, that user would be permanently stuck: their account is
+ * real, but they'd have no session to call the authenticated
+ * resend-verification route, and no way to request a fresh one at all.
+ *
+ * Same security posture as "forgot password" flows: never reveals via
+ * the response whether an account with this email exists, or whether it
+ * exists but is already verified -- always resolves the same way either
+ * way, so this can't be used to enumerate registered emails.
+ */
+export const resendVerificationEmailByEmail = async (email) => {
+  const user = await userRepo.findByEmail(email);
+  if (user && !user.isEmailVerified) {
+    await tokenRepo.invalidateExistingVerificationTokens(user._id);
+    await issueVerificationEmail(user);
+  }
+  // Deliberately no branch on "not found" or "already verified" -- same
+  // generic outcome either way, same reasoning as password-reset's own
+  // email-enumeration protection elsewhere in this file.
 };

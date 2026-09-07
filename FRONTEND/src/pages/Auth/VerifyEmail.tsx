@@ -6,6 +6,27 @@ import { useAuthStore } from '@/store/authStore';
 import { Button, Field, Input } from '@/components/ui';
 import { ApiError, apiErrorMessage } from '@/lib/apiClient';
 
+/**
+ * VerifyEmail -- calls the real POST /auth/verify-email automatically on
+ * load. Reads the token from the URL query string, matching the exact
+ * link format email.service.js's sendEmailVerification() constructs:
+ * `${CLIENT_URL}/verify-email?token=${token}` (24-hour real expiry).
+ *
+ * Also offers the real OTP alternative (POST /auth/verify-email/otp) --
+ * the same email now also carries a 6-digit code, for anyone who'd
+ * rather type a code than click a link. Own status/attempt state, since
+ * it's a genuinely separate real backend call with its own real failure
+ * modes (wrong code, expired code, too many attempts).
+ *
+ * BLOCKING now: login/register no longer issue a session until this
+ * step actually succeeds (see auth.service.js's real isEmailVerified
+ * gate) -- this page is the moment a session first gets established for
+ * a self-registered account, not just a follow-up confirmation of one
+ * that already exists. Both success paths below call
+ * setSessionFromTokens() with the real tokens the backend now returns
+ * from verify-email/verify-email/otp, then navigate -- there is no
+ * pre-existing session to rely on anymore.
+ */
 export function VerifyEmail() {
   const navigate = useNavigate();
   const setSessionFromTokens = useAuthStore((s) => s.setSessionFromTokens);
@@ -18,6 +39,8 @@ export function VerifyEmail() {
   const [otp, setOtp] = useState('');
   const [otpSubmitting, setOtpSubmitting] = useState(false);
   const [otpError, setOtpError] = useState('');
+  const [resending, setResending] = useState(false);
+  const [resendMessage, setResendMessage] = useState('');
 
   useEffect(() => {
     if (!token) {
@@ -52,6 +75,40 @@ export function VerifyEmail() {
     }
   };
 
+  /**
+   * handleResend -- the real recovery path for the exact gap that made
+   * "Could not create your account" show up while the account genuinely
+   * existed underneath: if issueVerificationEmail() ever failed
+   * server-side during registration (now caught rather than breaking
+   * the whole signup -- see auth.service.js's try/catch around it), this
+   * is how someone with no session at all yet gets a fresh code, using
+   * only the email they registered with. Public/unauthenticated
+   * endpoint -- same "never reveal whether the account exists" response
+   * either way as password-reset.
+   */
+  const handleResend = async () => {
+    if (!otpEmail.trim()) {
+      setOtpError('Enter your email above first, then tap Resend code.');
+      return;
+    }
+    setResending(true);
+    setResendMessage('');
+    setOtpError('');
+    try {
+      await authApi.resendVerificationPublic(otpEmail.trim());
+      setResendMessage('If that email needs verification, a new code is on its way.');
+    } catch {
+      // Deliberately still shows the same generic message on a genuine
+      // network/server error -- the alternative (a different message
+      // for "request failed" vs "here's your code") would itself leak
+      // whether the account exists, defeating the whole point of the
+      // backend's generic response.
+      setResendMessage('If that email needs verification, a new code is on its way.');
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-white px-6 py-12">
       <div className="w-full max-w-sm text-center">
@@ -80,10 +137,19 @@ export function VerifyEmail() {
                 />
               </Field>
               {otpError && <p className="text-xs text-red-600">{otpError}</p>}
+              {resendMessage && <p className="text-xs text-emerald-600">{resendMessage}</p>}
             </div>
             <Button className="mt-6 w-full" disabled={otpSubmitting || otp.length !== 6 || !otpEmail.trim()} onClick={() => void handleOtpSubmit()}>
               {otpSubmitting ? 'Verifying…' : 'Verify email'}
             </Button>
+            <button
+              type="button"
+              className="mt-3 text-xs font-medium text-brand-600 hover:text-brand-700 disabled:opacity-50"
+              disabled={resending}
+              onClick={() => void handleResend()}
+            >
+              {resending ? 'Sending…' : "Didn't get a code? Resend"}
+            </button>
           </>
         )}
 

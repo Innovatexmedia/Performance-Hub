@@ -55,6 +55,9 @@ export const authApi = {
   /** OTP variant, alongside the existing link -- same backend document/lifecycle, see auth.service.js's verifyEmailOtp. Now issues a real session too, same as verifyEmail above -- this is the first genuine proof-of-ownership moment for a self-registered account. */
   verifyEmailOtp: (email: string, otp: string) => apiClient.post<AuthResult>('/auth/verify-email/otp', { email, otp }),
 
+  /** Public/unauthenticated -- for a user with no session yet (the normal post-register case). Same generic response regardless of whether the account exists or is already verified, same as password-reset. SOURCE: auth.controller.js's resendVerificationPublic. */
+  resendVerificationPublic: (email: string) => apiClient.post<null>('/auth/resend-verification/public', { email }),
+
   resendVerification: () => apiClient.post<null>('/auth/resend-verification'),
 
   getInvitationPreview: (token: string) =>

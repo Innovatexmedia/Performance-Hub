@@ -181,3 +181,75 @@ export const generateOTP = (digits = 6) => {
   const otp = crypto.randomInt(0, max);
   return String(otp).padStart(digits, '0');
 };
+
+/**
+ * signState / verifySignedState — real OAuth CSRF protection for a
+ * redirect-based flow, without needing a separate pending-authorization
+ * DB table.
+ *
+ * CONFIRMED VULNERABILITY this closes (found via production audit):
+ * both googleAdsOAuth.controller.js and shopifyOAuth.controller.js used
+ * the RAW tenantId itself as the OAuth `state` parameter, with zero
+ * signing or verification. Their own callback endpoints are
+ * necessarily fully public (Google/Shopify redirect the browser here
+ * directly, with no session or Authorization header) -- meaning
+ * anything reachable is reachable by ANYONE, not just the tenant admin
+ * who clicked "Connect". Since tenant IDs are ordinary MongoDB
+ * ObjectIds (visible in URLs/API responses, not secrets), an attacker
+ * could complete their OWN OAuth consent with Google/Shopify to obtain
+ * a genuinely valid `code` for their OWN account, then call the
+ * callback URL directly with `state=<any tenant ID they know>` --
+ * no victim browser or session involved at all. The backend would
+ * exchange the attacker's own code for real tokens and silently save
+ * them under the VICTIM tenant, connecting the attacker's ad/Shopify
+ * account to someone else's workspace (wrong dashboard data at
+ * minimum; a real path to a further cross-tenant data issue if any
+ * later feature ever pushes conversion/customer data back out through
+ * that connection).
+ *
+ * Real fix: `state` is now a signed, time-limited token
+ * (HMAC-SHA256 over tenantId+timestamp, keyed by the same real
+ * ENCRYPTION_KEY secret already used for at-rest encryption elsewhere
+ * in this codebase -- a distinct cryptographic USE of that secret, not
+ * a reuse of the AES encryption itself) -- forging a state for an
+ * arbitrary tenantId now requires knowing ENCRYPTION_KEY, which an
+ * external attacker never has. Deliberately stateless (no new DB
+ * table) so this drops into the existing buildAuthorizationUrl/
+ * handleCallback functions with no schema change.
+ */
+const STATE_MAX_AGE_MS = 10 * 60 * 1000; // 10 minutes -- generous for a real "click Connect, go authorize" human flow, tight enough to bound replay
+
+export const signState = (tenantId) => {
+  const key = getEncryptionKey();
+  const payload = `${tenantId}.${Date.now()}`;
+  const signature = crypto.createHmac('sha256', key).update(payload).digest('hex');
+  return Buffer.from(`${payload}.${signature}`).toString('base64url');
+};
+
+export const verifySignedState = (state) => {
+  try {
+    const decoded = Buffer.from(String(state), 'base64url').toString('utf8');
+    const lastDot = decoded.lastIndexOf('.');
+    const secondLastDot = decoded.lastIndexOf('.', lastDot - 1);
+    if (lastDot === -1 || secondLastDot === -1) return null;
+
+    const tenantId = decoded.slice(0, secondLastDot);
+    const timestamp = decoded.slice(secondLastDot + 1, lastDot);
+    const signature = decoded.slice(lastDot + 1);
+    const payload = `${tenantId}.${timestamp}`;
+
+    const key = getEncryptionKey();
+    const expected = crypto.createHmac('sha256', key).update(payload).digest('hex');
+
+    const expectedBuf = Buffer.from(expected);
+    const receivedBuf = Buffer.from(signature);
+    if (expectedBuf.length !== receivedBuf.length) return null;
+    if (!crypto.timingSafeEqual(expectedBuf, receivedBuf)) return null;
+
+    if (Date.now() - Number(timestamp) > STATE_MAX_AGE_MS) return null;
+
+    return tenantId;
+  } catch {
+    return null;
+  }
+};

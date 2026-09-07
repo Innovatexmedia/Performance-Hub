@@ -7,13 +7,13 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-  "start": "node src/server.js",
-  "dev": "npx nodemon src/server.js",
-  "seed:test": "node scripts/seed-test-data.mjs",
-  "worker": "node src/worker.js",
-  "worker:dev": "npx nodemon src/worker.js",
-  "test": "echo \"Error: no test specified\" && exit 1"
-},
+    "start": "node src/server.js",
+    "dev": "npx nodemon src/server.js",
+    "seed:test": "node scripts/seed-test-data.mjs",
+    "worker": "node src/worker.js",
+    "worker:dev": "npx nodemon src/worker.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
     "@socket.io/redis-emitter": "^5.1.0",

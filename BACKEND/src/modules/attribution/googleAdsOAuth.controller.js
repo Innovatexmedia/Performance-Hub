@@ -7,6 +7,7 @@
  */
 
 import { googleAdsSettingsService } from './googleAdsSettings.service.js';
+import { verifySignedState } from '../../utils/crypto.js';
 import { sendSuccess } from '../../utils/apiResponse.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 
@@ -44,9 +45,25 @@ export const handleCallback = asyncHandler(async (req, res) => {
     return res.redirect(`${frontendUrl}?google_ads_error=missing_code_or_state`);
   }
 
+  // Real CSRF verification -- confirmed vulnerability this closes: state
+  // used to be the raw tenantId with zero signing, and this callback is
+  // necessarily fully public (Google redirects the browser here
+  // directly, no session/Authorization header of its own). An attacker
+  // could previously complete their OWN Google consent to get a genuine
+  // `code`, then call this URL directly with state=<any tenant ID they
+  // know> -- no victim involved at all -- silently connecting their own
+  // ad account to someone else's tenant. verifySignedState rejects
+  // anything not signed with this server's own ENCRYPTION_KEY, so
+  // forging a state for an arbitrary tenant now requires a secret an
+  // external attacker never has.
+  const tenantId = verifySignedState(state);
+  if (!tenantId) {
+    return res.redirect(`${frontendUrl}?google_ads_error=invalid_or_expired_state`);
+  }
+
   try {
     const { customerIds } = await googleAdsSettingsService.completeAuthorization({
-      tenantId: state,
+      tenantId,
       userId: null, // the real user who clicked Connect isn't identifiable on this specific request; selectAccount() (the next real step) is authenticated and records updatedBy correctly
       code,
     });

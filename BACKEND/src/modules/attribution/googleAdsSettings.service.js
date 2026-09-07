@@ -14,7 +14,8 @@
 import GoogleAdsSettings from './googleAdsSettings.model.js';
 import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
 import { GoogleAdsProvider } from './providers/googleAds.provider.js';
-import { encrypt, decrypt } from '../../utils/crypto.js';
+import { encrypt, safeDecrypt } from '../../utils/crypto.js';
+import { signState } from '../../utils/crypto.js';
 import config from '../../config/config.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 
@@ -51,7 +52,7 @@ const getValidAccessToken = async (doc) => {
   const bufferMs = 2 * 60 * 1000; // refresh 2 minutes before real expiry, not exactly at the edge
 
   if (doc.accessToken && doc.accessTokenExpiresAt && doc.accessTokenExpiresAt.getTime() - bufferMs > now) {
-    return decrypt(doc.accessToken);
+    return safeDecrypt(doc.accessToken);
   }
 
   if (!doc.refreshToken) {
@@ -59,7 +60,7 @@ const getValidAccessToken = async (doc) => {
   }
 
   const provider = buildProvider(doc.clientCustomerId);
-  const { accessToken, expiresInSeconds } = await provider.refreshAccessToken(decrypt(doc.refreshToken));
+  const { accessToken, expiresInSeconds } = await provider.refreshAccessToken(safeDecrypt(doc.refreshToken));
 
   doc.accessToken = encrypt(accessToken);
   doc.accessTokenExpiresAt = new Date(now + expiresInSeconds * 1000);
@@ -97,7 +98,12 @@ export const googleAdsSettingsService = {
       // already authenticated with their OWN Google account and
       // explicitly granted consent, so a forged state can't grant
       // access to anything the attacker doesn't already control.
-      state: String(ctx.tenantId),
+      // Real, signed, time-limited state -- see crypto.js's signState/
+      // verifySignedState for the confirmed CSRF vulnerability this
+      // closes (the raw tenantId was previously used directly, and this
+      // callback is necessarily fully public with no session of its
+      // own to verify against).
+      state: signState(String(ctx.tenantId)),
     });
     return `https://accounts.google.com/o/oauth2/auth?${params.toString()}`;
   },

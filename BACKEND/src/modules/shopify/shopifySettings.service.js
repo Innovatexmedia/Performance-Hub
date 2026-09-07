@@ -26,7 +26,7 @@ import { conversationService } from '../whatsapp/conversations/conversation.serv
 import { messageService } from '../whatsapp/messages/message.service.js';
 import { MESSAGE_TYPE } from '../whatsapp/messages/message.model.js';
 import { Lead } from '../leads/lead/lead.model.js';
-import { encrypt, decrypt, generateSecureToken } from '../../utils/crypto.js';
+import { encrypt, decrypt, generateSecureToken, signState } from '../../utils/crypto.js';
 import { AppError } from '../../shared/helpers/lead.helpers.js';
 import config from '../../config/config.js';
 
@@ -102,7 +102,11 @@ export const shopifySettingsService = {
       client_id: config.SHOPIFY_CLIENT_ID,
       scope: REQUIRED_SCOPES,
       redirect_uri: config.SHOPIFY_OAUTH_REDIRECT_URI,
-      state: String(ctx.tenantId),
+      // Real, signed, time-limited state -- same confirmed CSRF
+      // vulnerability closed here as googleAdsSettings.service.js's
+      // identical fix (see crypto.js's signState/verifySignedState for
+      // the full reasoning) -- this callback is equally fully public.
+      state: signState(String(ctx.tenantId)),
     });
     return `https://${normalizedShop}/admin/oauth/authorize?${params.toString()}`;
   },

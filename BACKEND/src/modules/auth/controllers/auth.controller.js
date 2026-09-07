@@ -303,3 +303,16 @@ export const resendVerification = asyncHandler(async (req, res) => {
   await authService.resendVerificationEmail(req.user.sub);
   return sendSuccess(res, null, 'Verification email sent. Please check your inbox.');
 });
+
+/**
+ * resendVerificationPublic — POST /auth/resend-verification/public
+ * Unauthenticated variant for a user with no session yet -- see
+ * auth.service.js's resendVerificationEmailByEmail for why this exists.
+ * Same generic response regardless of whether the account exists or is
+ * already verified, matching password-reset's own email-enumeration
+ * protection.
+ */
+export const resendVerificationPublic = asyncHandler(async (req, res) => {
+  await authService.resendVerificationEmailByEmail(req.body.email);
+  return sendSuccess(res, null, 'If an account with that email exists and needs verification, a new code has been sent.');
+});

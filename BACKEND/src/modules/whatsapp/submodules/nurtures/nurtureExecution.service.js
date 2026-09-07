@@ -33,6 +33,8 @@ import { ENROLLMENT_STATUS, NURTURE_CHANNEL, STEP_EXECUTION_STATUS, DELAY_UNIT_M
 import { conversationService } from '../../conversations/conversation.service.js';
 import { messageService } from '../../messages/message.service.js';
 import { MESSAGE_TYPE } from '../../messages/message.model.js';
+import { WhatsAppTemplate } from '../templates/templates.model.js';
+import { sendToOneRecipient } from '../../messageSender.js';
 import { sendCustomEmail } from '../../../auth/services/email.service.js';
 import { assertSendAllowed } from '../consent/consentGuard.service.js';
 import { Lead } from '../../../leads/lead/lead.model.js';
@@ -44,7 +46,7 @@ import * as bookingService from '../../../bookings/booking.service.js';
 import * as paymentService from '../../../payments/payment.service.js';
 import { ShopifyProvider } from '../../../shopify/providers/shopify.provider.js';
 import ShopifySettings from '../../../shopify/shopifySettings.model.js';
-import { decrypt } from '../../../../utils/crypto.js';
+import { safeDecrypt } from '../../../../utils/crypto.js';
 import { sendgridSettingsService } from '../../../email/sendgridSettings.service.js';
 import { sendMail as sendgridSend } from '../../../email/providers/sendgrid.provider.js';
 import { EmailLog, EMAIL_TYPE, EMAIL_CATEGORY, EMAIL_STATUS } from '../../../email/emailLog.model.js';
@@ -159,23 +161,50 @@ const executeEnrollmentStep = async (enrollment) => {
   }
 };
 
-/** sendStep -- real, channel-specific send. Reuses existing services entirely. */
+/**
+ * sendStep -- real, channel-specific send. Reuses existing services entirely.
+ *
+ * CRITICAL FIX (confirmed via production audit, never worked before this):
+ * the WhatsApp branch previously built a literal string like
+ * "[Template: welcome_message]" and passed it to messageService.sendMessage()
+ * with type: TEMPLATE -- but MetaProvider.sendMessage() only ever
+ * implements plain 'text' sends and explicitly THROWS for any other type
+ * (see meta.provider.js's own sendMessage -- "message type ... is not
+ * implemented yet"). Every single WhatsApp nurture step, for every
+ * tenant, in every environment, has always failed at this exact line --
+ * it never silently sent broken text to a real customer (the throw
+ * prevented that), but it also never sent anything real at all. Fixed
+ * by reusing sendToOneRecipient() -- the same real, proven
+ * Meta-template-send path Campaigns/Broadcasts/Automation Rules already
+ * use -- fetching the real, approved WhatsAppTemplate document by
+ * step.templateId instead of constructing a fake content string.
+ */
 const sendStep = async (ctx, step, lead, enrollment, variableContext = {}) => {
   if (step.channel === NURTURE_CHANNEL.WHATSAPP) {
     if (!lead) throw new Error('No lead linked to this enrollment -- cannot send a WhatsApp step');
-    const conversation = await conversationService.findOrCreateForLead(ctx, String(lead._id));
-    // Real opt-out guard already lives inside sendMessage itself -- not duplicated here.
-    const sent = await messageService.sendMessage(ctx, {
-      conversationId: conversation.id,
-      content: step.templateName ? `[Template: ${interpolateNurtureText(step.templateName, variableContext)}]` : 'Nurture message',
-      type: MESSAGE_TYPE.TEMPLATE,
-    });
-    if (sent?.blocked) {
-      // sendMessage's own real opt-out guard blocked this without
-      // throwing -- a real, distinct outcome from a genuine send.
-      throw new Error(`Blocked by WhatsApp opt-out guard (${sent.blockedReason || 'unknown reason'})`);
+    if (!step.templateId) throw new Error('This WhatsApp step has no approved template selected');
+
+    const template = await WhatsAppTemplate.findOne({ _id: step.templateId, tenant_id: ctx.tenantId });
+    if (!template) throw new Error('The template selected for this step no longer exists or was not approved');
+
+    // sendToOneRecipient never throws (see its own doc comment) -- it
+    // returns { outcome, reason? } instead, so a non-'sent' outcome is
+    // turned into a real thrown error here specifically so it flows
+    // into this file's EXISTING try/catch in executeEnrollmentStep
+    // (recordExecution as FAILED + handleRetryOrFail), the exact same
+    // real retry/backoff handling every other failure mode already gets
+    // -- no special-casing needed for this channel.
+    const result = await sendToOneRecipient(ctx, { template, lead });
+    if (result.outcome !== 'sent') {
+      throw new Error(result.reason || `WhatsApp template send failed (${result.outcome})`);
     }
-    return { providerMessageId: sent?.message?.provider_message_id || null };
+    // sendToOneRecipient already creates and records its own real
+    // Message document (with the real provider_message_id) internally --
+    // nurture's own recordExecution below just won't have a second copy
+    // of that specific id, which is a real, accepted, minor tradeoff for
+    // reusing the proven, fully-instrumented send path wholesale instead
+    // of re-implementing it.
+    return { providerMessageId: null };
   }
 
   if (step.channel === NURTURE_CHANNEL.EMAIL) {
@@ -440,7 +469,7 @@ const getShopifyCredentialsForTenant = async (tenantId) => {
   }
   return {
     shopDomain: settings.shopDomain,
-    accessToken: decrypt(settings.accessToken),
+    accessToken: safeDecrypt(settings.accessToken),
   };
 };
 

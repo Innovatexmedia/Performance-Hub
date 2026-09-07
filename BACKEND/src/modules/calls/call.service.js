@@ -403,11 +403,39 @@ export const createCall = async (data, reqUser) => {
 // UPDATE CALL
 // =============================================================================
 
+/**
+ * ALLOWED_UPDATE_FIELDS -- real, explicit whitelist for PATCH /api/calls/:id.
+ *
+ * CRITICAL FIX (confirmed via production audit): updateCall previously
+ * spread the ENTIRE raw request body straight into a MongoDB $set with
+ * no field restriction -- express-validator's validateUpdateCall only
+ * checks the SHAPE of named fields IF present, it does not strip or
+ * reject any additional, unlisted fields from req.body. Combined with
+ * callRepo.updateById's own `{ $set: patch }` (also unrestricted), any
+ * authenticated sales_user could include extra fields in their request
+ * body -- including tenant_id itself -- and have them written directly
+ * to the document. The query filter only controls WHICH document gets
+ * matched; it does not restrict what a $set payload can contain, so a
+ * crafted tenant_id in the body could genuinely move a call record to a
+ * different tenant. Whitelisted to exactly the fields
+ * validateUpdateCall already legitimately validates -- closing the gap
+ * between "what the validator checks the shape of" and "what actually
+ * reaches the database", rather than inventing a new, separate set of
+ * allowed fields.
+ */
+const ALLOWED_UPDATE_FIELDS = ['outcome', 'call_date', 'duration_minutes', 'transcript', 'summary', 'score'];
+
 export const updateCall = async (tenantId, id, patch, reqUser) => {
   const ctx = buildCtx(reqUser);
   const call = await callRepo.findById(tenantId, id);
   if (!call) throw AppError.notFound('Call not found');
-  return callRepo.updateById(tenantId, id, { ...patch, updated_by: ctx.userId });
+
+  const safePatch = {};
+  for (const key of ALLOWED_UPDATE_FIELDS) {
+    if (patch[key] !== undefined) safePatch[key] = patch[key];
+  }
+
+  return callRepo.updateById(tenantId, id, { ...safePatch, updated_by: ctx.userId });
 };
 
 // =============================================================================

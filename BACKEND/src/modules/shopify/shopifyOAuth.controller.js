@@ -7,6 +7,7 @@
  */
 
 import { shopifySettingsService } from './shopifySettings.service.js';
+import { verifySignedState } from '../../utils/crypto.js';
 import { sendSuccess } from '../../utils/apiResponse.js';
 import asyncHandler from '../../utils/asyncHandler.js';
 
@@ -53,8 +54,20 @@ export const handleCallback = asyncHandler(async (req, res) => {
     return res.redirect(`${frontendUrl}?shopify_error=missing_required_params`);
   }
 
+  // Real CSRF verification -- same confirmed vulnerability closed here
+  // as googleAdsOAuth.controller.js's identical fix (see crypto.js's
+  // signState/verifySignedState). This callback is fully public with
+  // no session of its own; an attacker completing their OWN Shopify
+  // app install could previously call this URL directly with
+  // state=<any tenant ID they know> and connect their own store to a
+  // victim tenant.
+  const tenantId = verifySignedState(state);
+  if (!tenantId) {
+    return res.redirect(`${frontendUrl}?shopify_error=invalid_or_expired_state`);
+  }
+
   try {
-    const result = await shopifySettingsService.completeAuthorization({ tenantId: state, shopDomain: shop, code });
+    const result = await shopifySettingsService.completeAuthorization({ tenantId, shopDomain: shop, code });
     return res.redirect(`${frontendUrl}?shopify_connected=1&shop_name=${encodeURIComponent(result.shopName || '')}`);
   } catch (err) {
     return res.redirect(`${frontendUrl}?shopify_error=${encodeURIComponent(err.message)}`);
