@@ -4,7 +4,7 @@ import { Zap, ArrowRight, MessageCircle, Sparkles, TrendingUp } from 'lucide-rea
 import { useAuthStore } from '@/store/authStore';
 import { Button, Input, Field } from '@/components/ui';
 import { toast } from '@/store/toastStore';
-import { ApiError } from '@/lib/apiClient';
+import { apiErrorMessage } from '@/lib/apiClient';
 
 /**
  * Register -- new tenant owner self-registration (creates a new workspace).
@@ -40,7 +40,7 @@ export function Register() {
         navigate(`/verify-email${pending ? `?email=${encodeURIComponent(pending.email)}` : ''}`);
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'Could not create your account. Please try again.';
+      const message = apiErrorMessage(err, 'Could not create your account. Please try again.');
       toast.error('Sign up failed', message);
     } finally {
       setLoading(false);

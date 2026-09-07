@@ -70,7 +70,23 @@ export function useRedisEmitterFallback() {
 
 function getRedisEmitter() {
   if (!redisEmitter) {
-    const pub = new Redis(config.REDIS_URL, { lazyConnect: true });
+    const pub = new Redis(config.REDIS_URL, {
+      lazyConnect: true,
+      // CRITICAL, second fix (confirmed via a real crash report after
+      // the first round of fixes): lazyConnect + an 'error' handler
+      // stops the raw CONNECTION-level crash, but doesn't stop a
+      // separate, different failure mode -- ioredis rejects an
+      // individual COMMAND's own promise with MaxRetriesPerRequestError
+      // once that command's own retry budget (default 20) is used up
+      // while the client can't connect. That's a promise REJECTION on
+      // whichever call issued the command, not an EventEmitter 'error'
+      // event -- .on('error', ...) never sees it at all. null here
+      // removes the retry LIMIT entirely (commands queue indefinitely
+      // instead of ever rejecting for this reason) -- the exact same
+      // real fix queues/redis.js already uses, for the identical reason
+      // (its own comment: "BullMQ's own recommended setting").
+      maxRetriesPerRequest: null,
+    });
     // Real error handler -- CRITICAL FIX (confirmed via production audit
     // + a real localhost crash report). Every ioredis client is a
     // Node.js EventEmitter; an 'error' event fired with ZERO listeners
@@ -166,8 +182,20 @@ export function initSocketServer(httpServer) {
   // an unrelated Redis-triggered crash interrupts the HTTP response
   // before the client receives it).
   try {
-    const pubClient = new Redis(config.REDIS_URL, { lazyConnect: true });
-    const subClient = pubClient.duplicate();
+    const pubClient = new Redis(config.REDIS_URL, {
+      lazyConnect: true,
+      // Same second, critical fix as getRedisEmitter() above --
+      // @socket.io/redis-adapter's createAdapter() issues its own
+      // internal subscribe() command on subClient immediately, which is
+      // exactly what produced the real "MaxRetriesPerRequestError:
+      // Reached the max retries per request limit (which is 20)"
+      // unhandled rejection crash -- a command-level promise rejection,
+      // not a connection-level 'error' event, so the handlers below
+      // alone don't catch it. null removes that retry limit so the
+      // command queues instead of ever rejecting for this reason.
+      maxRetriesPerRequest: null,
+    });
+    const subClient = pubClient.duplicate({ maxRetriesPerRequest: null }); // explicit, not relying on .duplicate() inheriting the parent's options correctly -- subClient is the one @socket.io/redis-adapter actually calls subscribe() on, so this is the more critical of the two to get right
 
     let loggedFailure = false;
     const onRedisError = (label) => (err) => {

@@ -4,7 +4,7 @@ import { Zap, ArrowRight, TrendingUp, MessageCircle, Sparkles, Building2, Chevro
 import { useAuthStore } from '@/store/authStore';
 import { Button, Input, Field } from '@/components/ui';
 import { toast } from '@/store/toastStore';
-import { ApiError } from '@/lib/apiClient';
+import { apiErrorMessage } from '@/lib/apiClient';
 import { ROLE_LABELS } from '@/types/auth';
 
 export function Login() {
@@ -42,7 +42,7 @@ export function Login() {
         if (fresh) navigate(`/verify-email?email=${encodeURIComponent(fresh.email)}`);
       }
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'Unable to sign in. Please try again.';
+      const message = apiErrorMessage(err, 'Unable to sign in. Please try again.');
       toast.error('Sign in failed', message);
     } finally {
       setLoading(false);
@@ -56,7 +56,7 @@ export function Login() {
       toast.success(`Welcome back, ${user.firstName}!`);
       navigate(user.role === 'super_admin' ? '/super-admin' : '/dashboard');
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : 'Could not enter that workspace. Please try again.';
+      const message = apiErrorMessage(err, 'Could not enter that workspace. Please try again.');
       toast.error('Could not switch workspace', message);
     } finally {
       setLoading(false);
