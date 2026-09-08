@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  VERCEL_PROJECT_ID: prj_rcrM3fxz6om1iNmXSY0M8w8QON9q
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
   deploy:
