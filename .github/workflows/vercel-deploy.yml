@@ -18,6 +18,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Strip Git metadata
+        run: rm -rf .git
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -31,8 +34,8 @@ jobs:
         run: |
           vercel pull --yes \
             --environment=production \
-            --project=${{ secrets.VERCEL_PROJECT_ID }} \
-            --token=${{ secrets.VERCEL_TOKEN }}
+            --token=${{ secrets.VERCEL_TOKEN }} \
+            --debug
 
       - name: Build Vercel Project
         working-directory: FRONTEND
