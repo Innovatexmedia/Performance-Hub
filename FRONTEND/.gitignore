@@ -7,3 +7,6 @@ dist-ssr
 
 # build info
 tsconfig.tsbuildinfo
+
+# Vercel local configuration
+.vercel/

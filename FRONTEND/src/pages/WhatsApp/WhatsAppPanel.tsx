@@ -57,6 +57,27 @@ import type { WhatsAppProvider as WhatsAppProviderReal, PanelMode, WhatsAppSetti
 import { ApiError } from '@/lib/apiClient';
 import type { WhatsAppTemplate, WhatsAppProvider } from '@/types';
 import { useTemplateApproval } from '@/hooks/useTemplateApproval';
+
+/**
+ * submitToProviderToastMessage -- the real fix for the confirmed bug:
+ * a tenant with no genuine WhatsApp connection (still in Simulation
+ * Mode) could click "Submit to Provider" and see the exact same
+ * "Submitted to provider" success toast a real Meta submission would
+ * show, with nothing telling them their template never actually left
+ * this app. providerMetadata.providerTemplateId is only ever set when
+ * Meta's real API genuinely returned one (see this repo's
+ * templateApproval.service.js's submitTemplateToMeta) -- null/absent
+ * here is a reliable, already-existing signal that this specific
+ * submission was simulated, not a new field invented for this fix.
+ */
+function submitToProviderToastMessage(result: unknown): string {
+  const template = result as WhatsAppTemplateReal | null | undefined;
+  if (template?.providerMetadata?.providerTemplateId) {
+    return 'Submitted to provider for real review';
+  }
+  return 'Submitted (simulated) -- WhatsApp isn\u2019t connected yet, so this was NOT actually sent to Meta. Connect WhatsApp in Settings to submit for real.';
+}
+
 import { useDeliveryLogs, useDeliveryLogsStats } from '@/hooks/useDeliveryLogs';
 import type { DeliveryLog, DeliveryStatus, DeliveryProvider } from '@/types/whatsappDeliveryLog';
 import { DELIVERY_PROVIDER_VALUES } from '@/types/whatsappDeliveryLog';
@@ -1114,11 +1135,28 @@ function TemplatesTab() {
   // on the real templateApproval route.
   const canSubmitToProvider = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
-  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
+  /**
+   * successMsg can be a plain string, OR a function that inspects the
+   * actual resolved value from action() and returns the right message
+   * for what genuinely happened -- needed for submitToProvider below.
+   *
+   * CONFIRMED BUG this fixes: submitToProvider previously always showed
+   * the same flat "Submitted to provider" toast regardless of whether
+   * Meta was really called. When a tenant has no real WhatsApp
+   * connection (still in Simulation Mode -- see
+   * templateApproval.service.js's submitToProvider, which deliberately
+   * does NOT throw or block in that case, only skips the real Meta
+   * call), the request still succeeds and returns a template with the
+   * exact same approvalStatus a real submission would have -- so the
+   * old flat success toast made a simulated, no-op "submission" look
+   * identical to a genuine one, with nothing telling the user their
+   * template was never actually sent to Meta at all.
+   */
+  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string | ((result: unknown) => string), failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
     setBusyId(id);
     try {
-      await action();
-      toast.success(successMsg);
+      const result = await action();
+      toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
     } catch (err) {
       const raw = err instanceof ApiError ? err.message : 'Please try again.';
       if (parseError && err instanceof ApiError) {
@@ -1204,7 +1242,7 @@ function TemplatesTab() {
                 )}
                 {t.approvalStatus === 'INTERNALLY_APPROVED' && (
                   canSubmitToProvider ? (
-                    <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError)}>
+                    <Button className="px-2.5 py-1 text-xs" disabled={busyId === t.id} onClick={() => void runAction(t.id, () => submitToProvider(t.id), submitToProviderToastMessage, 'Could not submit to provider', parseTemplateSubmissionError)}>
                       <Send size={12} /> Submit to provider
                     </Button>
                   ) : (
@@ -1304,11 +1342,28 @@ function ApprovalTab() {
   const isSelfSubmission = (t: WhatsAppTemplateReal) =>
     !!t.submittedBy && t.submittedBy === currentUser?.id && !atLeast(currentUser?.role, 'tenant_admin');
 
-  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string, failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
+  /**
+   * successMsg can be a plain string, OR a function that inspects the
+   * actual resolved value from action() and returns the right message
+   * for what genuinely happened -- needed for submitToProvider below.
+   *
+   * CONFIRMED BUG this fixes: submitToProvider previously always showed
+   * the same flat "Submitted to provider" toast regardless of whether
+   * Meta was really called. When a tenant has no real WhatsApp
+   * connection (still in Simulation Mode -- see
+   * templateApproval.service.js's submitToProvider, which deliberately
+   * does NOT throw or block in that case, only skips the real Meta
+   * call), the request still succeeds and returns a template with the
+   * exact same approvalStatus a real submission would have -- so the
+   * old flat success toast made a simulated, no-op "submission" look
+   * identical to a genuine one, with nothing telling the user their
+   * template was never actually sent to Meta at all.
+   */
+  const runAction = async (id: string, action: () => Promise<unknown>, successMsg: string | ((result: unknown) => string), failMsg: string, parseError?: (raw: string) => { title: string; description: string }) => {
     setBusyId(id);
     try {
-      await action();
-      toast.success(successMsg);
+      const result = await action();
+      toast.success(typeof successMsg === 'function' ? successMsg(result) : successMsg);
     } catch (err) {
       const raw = err instanceof ApiError ? err.message : 'Please try again.';
       if (parseError && err instanceof ApiError) {
@@ -1345,7 +1400,7 @@ function ApprovalTab() {
   };
 
   const handleSubmitToProvider = (t: WhatsAppTemplateReal) =>
-    runAction(t.id, () => submitToProvider(t.id), 'Submitted to provider', 'Could not submit to provider', parseTemplateSubmissionError);
+    runAction(t.id, () => submitToProvider(t.id), submitToProviderToastMessage, 'Could not submit to provider', parseTemplateSubmissionError);
 
   // A DRAFT template hasn't entered the approval pipeline yet -- there's
   // nothing here for anyone but its own creator to act on (they need to

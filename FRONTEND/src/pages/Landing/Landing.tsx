@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
   Zap, ArrowRight, MessageCircle, Sparkles, TrendingUp, ShieldCheck,
   CheckCircle2, Repeat, GitBranch, BarChart3, Check, Menu, X,
@@ -338,6 +338,11 @@ export function Landing() {
                 </div>
                 <h3 className="text-lg font-bold text-ink-900">WhatsApp Panel</h3>
                 <p className="mt-1 text-sm text-ink-500">Just the conversation layer — leads, messaging, and a simple pipeline.</p>
+                <div className="mt-4 flex items-baseline gap-1.5">
+                  <span className="text-3xl font-bold text-ink-900">₹499</span>
+                  <span className="text-sm text-ink-400">/month, starting</span>
+                </div>
+                <p className="mt-0.5 text-xs text-ink-400">Growth ₹1,499/mo · Scale ₹3,999/mo</p>
                 <ul className="mt-6 flex-1 space-y-2.5">
                   {['WhatsApp inbox & templates', 'Lead capture & management', 'Basic pipeline (Kanban)', 'Campaigns & broadcasts', 'Consent & opt-out handling'].map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-ink-700">
@@ -364,6 +369,11 @@ export function Landing() {
                 </div>
                 <h3 className="text-lg font-bold text-ink-900">Full Access</h3>
                 <p className="mt-1 text-sm text-ink-500">Everything in WhatsApp Panel, plus the full revenue engine.</p>
+                <div className="mt-4 flex items-baseline gap-1.5">
+                  <span className="text-3xl font-bold text-ink-900">₹999</span>
+                  <span className="text-sm text-ink-400">/month, starting</span>
+                </div>
+                <p className="mt-0.5 text-xs text-ink-400">Growth ₹2,999/mo · Scale ₹7,999/mo</p>
                 <ul className="mt-6 flex-1 space-y-2.5">
                   {['Everything in WhatsApp Panel', 'AI lead qualification & call intelligence', 'Nurture sequences & automation rules', 'Bookings, calendar & payments', 'Source-to-revenue attribution & reports'].map((f) => (
                     <li key={f} className="flex items-start gap-2 text-sm text-ink-700">
@@ -472,16 +482,24 @@ export function Landing() {
 
       {/* ---- Footer ---- */}
       <footer className="border-t border-ink-100 px-6 py-8">
-        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 sm:flex-row">
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-4 sm:flex-row sm:justify-between">
           <div className="flex items-center gap-2 text-sm text-ink-500">
             <div className="flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-br from-brand-500 to-violet-500 text-white">
               <Zap size={12} fill="white" />
             </div>
             InnovateX Revenue OS
           </div>
-          <a href="mailto:Innovatexmedia@gmail.com" className="text-xs text-ink-500 hover:text-ink-800 hover:underline">
-            Innovatexmedia@gmail.com
-          </a>
+
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-xs text-ink-500">
+            <Link to="/contact" className="hover:text-ink-800 hover:underline">Contact Us</Link>
+            <Link to="/terms-and-conditions" className="hover:text-ink-800 hover:underline">Terms & Conditions</Link>
+            <Link to="/refund-policy" className="hover:text-ink-800 hover:underline">Refund & Cancellation</Link>
+            <Link to="/privacy-policy" className="hover:text-ink-800 hover:underline">Privacy Policy</Link>
+            <a href="mailto:Innovatexmedia@gmail.com" className="hover:text-ink-800 hover:underline">
+              Innovatexmedia@gmail.com
+            </a>
+          </div>
+
           <p className="text-xs text-ink-400">© 2026 InnovateX Media. All rights reserved.</p>
         </div>
       </footer>

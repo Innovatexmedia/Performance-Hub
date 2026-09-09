@@ -14,6 +14,10 @@ import { RequireRole } from '@/components/auth/RequireRole';
 import { ModuleGate } from '@/components/ModuleGate';
 import { CaptureForm } from '@/pages/Auth/CaptureForm';
 import { PublicBooking } from '@/pages/Public/PublicBooking';
+import { ContactUs } from '@/pages/Legal/ContactUs';
+import { TermsAndConditions } from '@/pages/Legal/TermsAndConditions';
+import { RefundPolicy } from '@/pages/Legal/RefundPolicy';
+import { PrivacyPolicy } from '@/pages/Legal/PrivacyPolicy';
 import { Dashboard } from '@/pages/Dashboard/Dashboard';
 import { Leads } from '@/pages/Leads/Leads';
 import { WhatsAppWorkspace } from '@/pages/WhatsApp/workspace/WhatsAppWorkspace';
@@ -90,6 +94,13 @@ export default function App() {
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
         <Route path="/capture" element={<CaptureForm />} />
         <Route path="/book/:tenantId" element={<PublicBooking />} />
+        {/* Public policy pages -- intentionally outside AppLayout / any auth
+            gate, since payment-gateway whitelisting reviews and general
+            visitors both need these reachable while fully logged out. */}
+        <Route path="/contact" element={<ContactUs />} />
+        <Route path="/terms-and-conditions" element={<TermsAndConditions />} />
+        <Route path="/refund-policy" element={<RefundPolicy />} />
+        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route element={<AppLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/profile" element={<Profile />} />
