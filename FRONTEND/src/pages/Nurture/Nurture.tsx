@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Plus, Play, Pause, Archive, MessageCircle, Mail, Smartphone, CheckSquare, UserPlus, History, Sparkles, Calendar, CreditCard, ShoppingBag, Globe, Link as LinkIcon, Copy, RefreshCw } from 'lucide-react';
+import { Plus, Play, Pause, Archive, Trash2, MessageCircle, Mail, Smartphone, CheckSquare, UserPlus, History, Sparkles, Calendar, CreditCard, ShoppingBag, Globe, Link as LinkIcon, Copy, RefreshCw } from 'lucide-react';
 import { useNurtureSequences, useNurtureEnrollments } from '@/hooks/useNurture';
 import { nurtureApi } from '@/lib/nurtureApi';
 import { useLeads } from '@/hooks/useLeads';
@@ -63,7 +63,7 @@ const sanitizeStepForSubmit = (step: NurtureStep): NurtureStep => {
 };
 
 export function Nurture() {
-  const { sequences, loading, error, activate, pause, archive, create, enroll } = useNurtureSequences();
+  const { sequences, loading, error, activate, pause, archive, remove, create, enroll } = useNurtureSequences();
   // Real refetch, not a page reload: useNurtureEnrollments already exposes
   // this via the same reload-token pattern useNurtureSequences uses -- it
   // just wasn't being called anywhere on this page. Enrolling a lead
@@ -187,6 +187,23 @@ export function Nurture() {
     }
   };
 
+  // BUG FIX: real DELETE endpoint already existed backend-side with no
+  // frontend control anywhere -- see useNurtureSequences' remove(). Same
+  // window.confirm pattern already used for destructive deletes elsewhere
+  // in this app (Team, Templates, WhatsApp Panel), for consistency.
+  const handleDelete = async (seq: NurtureSequence) => {
+    if (!window.confirm(`Delete "${seq.name}"? This cannot be undone -- active enrollments will stop.`)) return;
+    setBusyId(seq.id);
+    try {
+      await remove(seq.id);
+      toast.success('Sequence deleted');
+    } catch (err) {
+      toast.error('Could not delete sequence', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleAssign = async () => {
     if (!assignTo || !selLead) return;
     try {
@@ -300,6 +317,7 @@ export function Nurture() {
                   )}
                   {seq.status === 'PAUSED' && (
                     <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs text-red-600" onClick={() => void handleArchive(seq)}><Archive size={13} /> Archive</Button>
+                    <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs text-red-600" onClick={() => void handleDelete(seq)}><Trash2 size={13} /> Delete</Button>
                   )}
                 </div>
               </div>

@@ -54,11 +54,21 @@ export function useNurtureSequences() {
     return updated;
   }, [refetch]);
 
+  // BUG FIX: a real DELETE /api/whatsapp/nurtures/:id endpoint already
+  // existed backend-side (nurtureApi.remove already wraps it) but had no
+  // frontend control anywhere -- there was genuinely no way for a tenant
+  // to delete a sequence, only archive it. Same refetch pattern as every
+  // other mutation above.
+  const remove = useCallback(async (id: string) => {
+    await nurtureApi.remove(id);
+    refetch();
+  }, [refetch]);
+
   const enroll = useCallback(async (sequenceId: string, leadId: string) => {
     return nurtureApi.enroll(sequenceId, leadId);
   }, []);
 
-  return { sequences, loading, error, refetch, create, activate, pause, archive, enroll };
+  return { sequences, loading, error, refetch, create, activate, pause, archive, remove, enroll };
 }
 
 export function useNurtureEnrollments(query?: Record<string, string>) {
