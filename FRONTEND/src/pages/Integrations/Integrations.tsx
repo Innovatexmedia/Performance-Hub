@@ -102,7 +102,7 @@ export function Integrations() {
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify') && i.status === 'disconnected') {
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify' || i.key === 'gemini') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -268,6 +268,21 @@ export function Integrations() {
           replyTo: sendgridNurtureForm.replyTo,
         });
         toast.success('Connected', 'API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.');
+      } else if (config.key === 'gemini') {
+        // BUG FIX: previously fell into the generic branch below, which
+        // is fine functionally (same encrypted config.api_key storage),
+        // but the modal's generic copy claimed this "runs in simulation
+        // mode... no live connection is made" -- false for this key
+        // specifically. Call Intelligence, AI Reply Assistant, and AI
+        // Qualification all genuinely use this saved key for real Gemini
+        // API calls. Only sends api_key -- Gemini has no webhook.
+        if (!configForm.api_key.trim()) {
+          toast.error('Enter your Gemini API key first');
+          setSaving(false);
+          return;
+        }
+        await updateConfig(config.id, { api_key: configForm.api_key.trim() });
+        toast.success('Gemini key verified & connected', 'This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
         toast.success('Settings saved');
@@ -488,6 +503,19 @@ export function Integrations() {
               ) : (
                 <p className="text-ink-400">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
               )}
+            </div>
+          ) : config.key === 'gemini' ? (
+            <div className="space-y-4">
+              <Field label="Gemini API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Gemini API key…" /></Field>
+              <p className="text-xs text-ink-400">
+                Saving genuinely verifies this key against Google's own API before it's accepted — an invalid or
+                revoked key will show an error here instead of connecting. Once verified, Call Intelligence, AI Reply
+                Assistant, and AI Qualification will all use your own key instead of the platform default, so usage
+                and cost are billed to your own Google account. Get a key from{' '}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                  aistudio.google.com
+                </a>.
+              </p>
             </div>
           ) : (
             <div className="space-y-4">

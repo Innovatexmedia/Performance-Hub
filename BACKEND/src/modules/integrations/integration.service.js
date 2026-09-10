@@ -64,6 +64,35 @@ const SENDGRID_NURTURE_KEY = 'sendgrid_nurture';
 const SHOPIFY_KEY = 'shopify';
 const TWILIO_WA_KEY = 'twilio_wa';
 const INTERAKT_KEY = 'interakt';
+const GEMINI_KEY = 'gemini';
+
+// =============================================================================
+// GEMINI — real key verification
+// =============================================================================
+// BUG FIX: "connecting" this card previously just checked the config
+// object was non-empty (hasRealConfig(), in the generic toggle path below)
+// -- a typo'd, revoked, or entirely fake string looked IDENTICAL to a
+// genuine key, since nothing ever actually called Google's API. Real
+// verification now happens before a key is ever saved as "connected",
+// same standard every other real integration in this file already holds
+// itself to (Meta/360Dialog/Twilio/Interakt/Cal.com/Shopify/Google Ads).
+//
+// Uses Gemini's own models-list endpoint rather than generateContent --
+// genuinely requires a valid key (401/403 on a bad one) without spending
+// any generation tokens just to verify the key works.
+const verifyGeminiApiKey = async (apiKey) => {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+  if (response.ok) return;
+
+  let reason = `HTTP ${response.status}`;
+  try {
+    const body = await response.json();
+    if (body?.error?.message) reason = body.error.message;
+  } catch {
+    // Non-JSON error body -- keep the generic HTTP-status reason above.
+  }
+  throw AppError.badRequest(`Gemini rejected this API key: ${reason}`);
+};
 
 /** Builds a ctx shape matching what whatsappSettingsService expects, from this module's (tenantId, userId) pair. */
 const toWaCtx = (tenantId, userId) => ({ tenantId, userId });
@@ -497,6 +526,24 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
+  if (existing.key === GEMINI_KEY) {
+    // Real disconnect: genuinely clears the stored key rather than just
+    // flipping a status flag, so a "disconnected" card can never still
+    // be silently read and used by resolveGeminiApiKey() in
+    // qualification-ai.service.js / call.service.js / aiReplyAssistant.
+    if (existing.status === INTEGRATION_STATUS.CONNECTED) {
+      return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+        config: {},
+        status: INTEGRATION_STATUS.DISCONNECTED,
+        last_sync: new Date(),
+        updated_by: userId,
+      }));
+    }
+    throw AppError.badRequest(
+      'Enter your real Gemini API key in Settings first — this card cannot be connected with a single click, since it requires real verification against Google\u2019s own API.',
+    );
+  }
+
   let newStatus;
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
     if (!existing.available) {
@@ -564,6 +611,25 @@ export const syncIntegration = async (tenantId, userId, id) => {
     const result = await googleAdsSettingsService.syncCampaigns({ tenantId, userId });
     const overlaid = await overlayRealAdTrackingStatus(tenantId, userId, existing);
     return { ...overlaid, _syncResult: result };
+  }
+
+  if (existing.key === GEMINI_KEY) {
+    if (existing.status !== INTEGRATION_STATUS.CONNECTED) {
+      throw AppError.badRequest('Cannot sync a disconnected integration');
+    }
+    // "Sync" here means "re-verify this key still works" -- there's no
+    // bookings/campaigns to pull for an AI key, but a key can be revoked
+    // or expire on Google's side after it was originally connected; this
+    // gives a real, explicit way to catch that instead of the card
+    // staying "connected" indefinitely on stale trust.
+    const stored = await integrationRepo.findByKey(tenantId, GEMINI_KEY); // decrypted transparently
+    const apiKey = stored?.config?.api_key;
+    if (!apiKey) throw AppError.badRequest('No Gemini API key saved for this workspace');
+    await verifyGeminiApiKey(apiKey);
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
   }
 
   if (existing.status === INTEGRATION_STATUS.DISCONNECTED) {
@@ -713,6 +779,31 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     }
     await googleAdsSettingsService.selectAccount({ tenantId, userId }, clientCustomerId);
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === GEMINI_KEY) {
+    const { api_key } = configPatch || {};
+    if (!api_key || !api_key.trim()) {
+      throw AppError.badRequest('Enter your real Gemini API key first.');
+    }
+
+    // Real, live verification against Google's own API -- throws with
+    // Google's own real rejection reason on an invalid/revoked key.
+    // Never marks a bad key "connected" based on it merely being
+    // non-empty (see verifyGeminiApiKey's header comment).
+    await verifyGeminiApiKey(api_key.trim());
+
+    // Verification succeeded -- save (encrypted transparently by
+    // integrationRepo.update's encryptConfig) and mark genuinely
+    // connected in the same step, since "connected" here now actually
+    // means "we just confirmed this with Google", not "a toggle button
+    // was clicked afterwards".
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      config: { api_key: api_key.trim() },
+      status: INTEGRATION_STATUS.CONNECTED,
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
   }
 
   const mergedConfig = Object.assign({}, existing.config, configPatch || {});

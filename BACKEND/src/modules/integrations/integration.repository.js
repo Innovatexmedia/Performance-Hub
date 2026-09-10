@@ -84,7 +84,8 @@ function decryptDocs(docs) {
 
 /**
  * ensureCatalogSeeded - upserts one Integration doc per catalog entry for
- * this tenant.
+ * this tenant, and removes any tenant row whose key is no longer in the
+ * catalog at all.
  *
  * REAL FIX: previously used $setOnInsert for EVERYTHING, meaning once a
  * tenant's row existed, it could never receive updates to the catalog's
@@ -96,10 +97,22 @@ function decryptDocs(docs) {
  * correct definition. Tenant-owned STATE (status/config/error_logs)
  * still uses $setOnInsert -- set once at creation, never silently
  * overwritten by a later catalog change.
+ *
+ * SECOND FIX: the stale-removal half was missing entirely -- a key taken
+ * OUT of the catalog (e.g. 'gemini', removed because it was a
+ * generic/unencrypted "simulation mode" card being read as if it held a
+ * real, live credential) stayed visible forever for any tenant who'd
+ * already loaded the page, since nothing ever deleted their old row.
+ * Every call now also deletes any row for this tenant whose key isn't in
+ * the current catalog, so a removed card genuinely disappears for
+ * everyone the next time they open Integrations -- no manual DB cleanup
+ * needed.
  */
-export const ensureCatalogSeeded = (tenantId) =>
-  Promise.all(
-    INTEGRATION_CATALOG.map((entry) =>
+export const ensureCatalogSeeded = (tenantId) => {
+  const validKeys = INTEGRATION_CATALOG.map((entry) => entry.key);
+
+  return Promise.all([
+    ...INTEGRATION_CATALOG.map((entry) =>
       Integration.findOneAndUpdate(
         { tenant_id: tenantId, key: entry.key },
         {
@@ -121,7 +134,9 @@ export const ensureCatalogSeeded = (tenantId) =>
         { upsert: true, new: false },
       ),
     ),
-  );
+    Integration.deleteMany({ tenant_id: tenantId, key: { $nin: validKeys } }),
+  ]);
+};
 
 // =============================================================================
 // READ

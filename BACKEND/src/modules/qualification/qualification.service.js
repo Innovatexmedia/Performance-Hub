@@ -208,7 +208,13 @@ export const runQualification = async (leadId, answers, reqUser) => {
   // SOURCE: modules/leads/ai/qualification-ai.service.js
   // Returns: { fitScore, temperature, quality, buyingIntent, urgency,
   //            painPoints, recommendedOffer, nextAction, followUpDraft, isLive }
-  const assessment = await qualificationAiService.assess(lead.toObject(), answers || {});
+  // BUG FIX: tenantId is now passed through so a tenant's own connected
+  // Gemini key (Integrations -> Google Gemini) is tried before falling
+  // back to the server-wide GEMINI_API_KEY env var -- ctx.tenantId was
+  // already available here but was never threaded into assess(), so
+  // this feature silently ignored every tenant's own key. See
+  // qualification-ai.service.js's resolveGeminiApiKey for the fix.
+  const assessment = await qualificationAiService.assess(lead.toObject(), answers || {}, ctx.tenantId);
 
   // ── 3. Determine suggested route from temperature ─────────────────────────
   const suggested_route = getSuggestedRoute(assessment.temperature);
