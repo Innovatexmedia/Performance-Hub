@@ -316,8 +316,10 @@ export function Nurture() {
                     </Button>
                   )}
                   {seq.status === 'PAUSED' && (
+                    <>
                     <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs text-red-600" onClick={() => void handleArchive(seq)}><Archive size={13} /> Archive</Button>
                     <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs text-red-600" onClick={() => void handleDelete(seq)}><Trash2 size={13} /> Delete</Button>
+                    </>
                   )}
                 </div>
               </div>
