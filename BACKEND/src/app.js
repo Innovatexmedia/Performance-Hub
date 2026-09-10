@@ -36,7 +36,7 @@ import reportRoutes  from './modules/reports/report.routes.js';
 import automationRoutes from './modules/automations/automation.routes.js';
 import teamRoutes from './modules/team/team.routes.js';
 import superAdminRoutes from './modules/superAdmin/superAdmin.routes.js';
-import nurtureRoutes from './modules/nurture/nurture.routes.js';
+
 import templateRoutes from './modules/templates/template.routes.js';
 import integrationRoutes from './modules/integrations/integration.routes.js';
 import googleAdsOAuthRoutes from './modules/attribution/googleAdsOAuth.routes.js';
@@ -220,7 +220,7 @@ app.use('/api/reports',    reportRoutes);
 app.use('/api/automations', automationRoutes);
 app.use('/api/team', teamRoutes);
 app.use('/api/super-admin', superAdminRoutes);
-app.use('/api/nurture', nurtureRoutes);
+
 app.use('/api/templates', templateRoutes);
 // Mounted BEFORE integrationRoutes and at a more specific sub-path so
 // Express's route matching hits this first -- otherwise integration.routes.js's
