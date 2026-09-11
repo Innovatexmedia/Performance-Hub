@@ -119,6 +119,20 @@ const config = {
   // alongside this integration.
   GOOGLE_ADS_OAUTH_REDIRECT_URI:  process.env.GOOGLE_ADS_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/google-ads/oauth/callback`,
 
+  // Real Meta Business app credentials for Marketing API (ads reporting)
+  // access -- platform-level (InnovateX's own Meta app), NOT stored
+  // per-tenant, same "one app per company" model as Google Ads above.
+  // Genuinely SEPARATE app/credentials from META_TECH_PROVIDER_* above,
+  // which are for WhatsApp Embedded Signup -- a different Meta product
+  // with its own app registration and scopes (whatsapp_business_management/
+  // whatsapp_business_messaging vs this integration's real
+  // ads_management/ads_read/read_insights/business_management scopes).
+  META_ADS_APP_ID:     process.env.META_ADS_APP_ID || null,
+  META_ADS_APP_SECRET: process.env.META_ADS_APP_SECRET || null,
+  // Must exactly match a URI registered in the Meta app's "Valid OAuth
+  // Redirect URIs" (App Dashboard -> Facebook Login for Business -> Settings).
+  META_ADS_OAUTH_REDIRECT_URI: process.env.META_ADS_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/meta-ads/oauth/callback`,
+
   // Real Shopify Partner app credentials -- platform-level, InnovateX
   // applies for ONE Shopify app (via a Partner account), and each
   // tenant then connects their own store to it via real OAuth.
@@ -168,6 +182,14 @@ if (!process.env.GOOGLE_ADS_DEVELOPER_TOKEN || !process.env.GOOGLE_ADS_OAUTH_CLI
     '\n⚠️  Google Ads API is not fully configured.' +
     '\n   Set GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_MANAGER_CUSTOMER_ID, GOOGLE_ADS_OAUTH_CLIENT_ID, and GOOGLE_ADS_OAUTH_CLIENT_SECRET.' +
     '\n   Until all four are set, tenants cannot connect a real Google Ads account -- the Connect button will show a clear setup-required error.\n'
+  );
+}
+
+if (!process.env.META_ADS_APP_ID || !process.env.META_ADS_APP_SECRET) {
+  console.warn(
+    '\n⚠️  Meta Ads (Marketing API) is not fully configured.' +
+    '\n   Set META_ADS_APP_ID and META_ADS_APP_SECRET (from a real Meta Business app -- separate from META_TECH_PROVIDER_* above, which is for WhatsApp Embedded Signup).' +
+    '\n   Until both are set, tenants cannot connect a real Meta Ads account -- the Connect button will show a clear setup-required error.\n'
   );
 }
 

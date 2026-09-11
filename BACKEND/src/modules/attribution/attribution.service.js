@@ -29,12 +29,14 @@ import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 import { TRACKING_EVENT_TYPE } from './attribution.constants.js';
 import AdTrackingSettings from './adTrackingSettings.model.js';
 import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
+import MetaAdsCampaignMetric from './metaAdsCampaignMetric.model.js';
 import { MetaConversionsProvider } from './providers/metaConversions.provider.js';
 import { GoogleAnalyticsProvider } from './providers/googleAnalytics.provider.js';
 import { safeDecrypt } from '../../utils/crypto.js';
 
 // ── Import Lead model to enrich events with UTM data ─────────────────────────
 import { Lead } from '../leads/lead/lead.model.js';
+import Tenant from '../auth/models/Tenant.js';
 
 // =============================================================================
 // CREATE TRACKING EVENT — called by all modules
@@ -113,13 +115,25 @@ const sendToAdPlatformsIfConfigured = async (event, lead) => {
   const settings = await AdTrackingSettings.findOne({ tenantId: event.tenant_id });
   if (!settings) return;
 
+  // CONFIRMED BUG this fixes: sendToMeta below never passed a currency
+  // to the Conversions API, so MetaConversionsProvider's own
+  // `currency || 'USD'` fallback silently mislabeled every real INR
+  // revenue value as USD -- a real ₹5,000 conversion was reaching Meta
+  // as "$5,000", corrupting both Meta's own ad-bidding optimization
+  // (which uses conversion value) and any ROAS figure Meta shows the
+  // tenant, by the real INR/USD exchange-rate factor. Same real,
+  // tenant-level currency field settings.service.js already uses for
+  // billing -- not a new concept introduced here.
+  const tenant = await Tenant.findById(event.tenant_id).select('currency').lean();
+  const currency = tenant?.currency || 'USD';
+
   await Promise.all([
-    sendToMeta(settings, event, lead),
-    sendToGoogle(settings, event, lead),
+    sendToMeta(settings, event, lead, currency),
+    sendToGoogle(settings, event, lead, currency),
   ]);
 };
 
-const sendToMeta = async (settings, event, lead) => {
+const sendToMeta = async (settings, event, lead, currency) => {
   if (!settings.meta?.connected || !settings.meta?.pixelId || !settings.meta?.accessToken) return;
 
   const provider = new MetaConversionsProvider({
@@ -137,6 +151,7 @@ const sendToMeta = async (settings, event, lead) => {
       email:               lead?.email,
       phone:               lead?.phone,
       value:               event.revenue || undefined,
+      currency,
     });
 
     if (result.sent) {
@@ -154,7 +169,7 @@ const sendToMeta = async (settings, event, lead) => {
   }
 };
 
-const sendToGoogle = async (settings, event, lead) => {
+const sendToGoogle = async (settings, event, lead, currency) => {
   if (!settings.google?.connected || !settings.google?.measurementId || !settings.google?.apiSecret) return;
   if (!lead?._id) return; // GA4 client_id is derived from the lead — nothing to send without one
 
@@ -171,6 +186,7 @@ const sendToGoogle = async (settings, event, lead) => {
       leadId:              lead._id,
       transactionId:       String(event._id),
       value:               event.revenue || undefined,
+      currency,
     });
 
     if (result.sent) {
@@ -327,7 +343,18 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
  * hidden or guessed.
  */
 const getAdSpendSummary = async (tenantId) => {
-  const campaigns = await GoogleAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50);
+  // Real merge of BOTH ad platforms -- Google Ads and Meta Ads campaigns
+  // read from their own separate, provider-specific collections
+  // (GoogleAdsCampaignMetric / MetaAdsCampaignMetric -- see each
+  // provider's own real sync path) but combined into one dashboard view
+  // here, since both were synced into the exact same document shape on
+  // purpose (see metaAdsCampaignMetric.model.js's own comment on this).
+  const [googleCampaigns, metaCampaigns] = await Promise.all([
+    GoogleAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50),
+    MetaAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50),
+  ]);
+  const campaigns = [...googleCampaigns, ...metaCampaigns].sort((a, b) => b.spend - a.spend);
+
   if (campaigns.length === 0) {
     return { connected: false, totalSpend: 0, totalConversions: 0, campaigns: [] };
   }
@@ -341,6 +368,11 @@ const getAdSpendSummary = async (tenantId) => {
     return {
       campaignId: c.campaignId,
       campaignName: c.campaignName,
+      // channelType is the real distinguisher between the two sources
+      // here -- Google's are real values like SEARCH/DISPLAY/VIDEO,
+      // Meta's is the fixed 'META' value set at sync time (see
+      // metaAdsCampaignMetric.model.js), so the frontend can tell them
+      // apart or group by platform without a separate field.
       status: c.status,
       channelType: c.channelType,
       spend: c.spend,
@@ -356,12 +388,13 @@ const getAdSpendSummary = async (tenantId) => {
 
   const totalSpend = campaigns.reduce((sum, c) => sum + c.spend, 0);
   const totalConversions = campaigns.reduce((sum, c) => sum + c.conversions, 0);
+  const lastSyncedAt = campaigns.reduce((latest, c) => (!latest || (c.syncedAt && c.syncedAt > latest) ? c.syncedAt : latest), null);
 
   return {
     connected: true,
     totalSpend,
     totalConversions,
-    lastSyncedAt: campaigns[0]?.syncedAt || null,
+    lastSyncedAt,
     campaigns: enriched,
   };
 };

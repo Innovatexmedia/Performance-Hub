@@ -28,6 +28,7 @@ export function Integrations() {
     useIntegrations(category === 'all' ? {} : { category: category as never });
 
   const [googleAdsAccountPicker, setGoogleAdsAccountPicker] = useState<string[] | null>(null);
+  const [metaAdsAccountPicker, setMetaAdsAccountPicker] = useState<{ adAccountId: string; accountName: string }[] | null>(null);
   const [selectingAccount, setSelectingAccount] = useState(false);
 
   useEffect(() => {
@@ -35,6 +36,9 @@ export function Integrations() {
     const connected = params.get('google_ads_connected');
     const customerIds = params.get('customer_ids');
     const oauthError = params.get('google_ads_error');
+    const metaAdsConnected = params.get('meta_ads_connected');
+    const metaAdsAccounts = params.get('accounts');
+    const metaAdsOauthError = params.get('meta_ads_error');
     const shopifyConnected = params.get('shopify_connected');
     const shopName = params.get('shop_name');
     const shopifyError = params.get('shopify_error');
@@ -45,13 +49,23 @@ export function Integrations() {
       toast.error('Google authorization failed', decodeURIComponent(oauthError));
     }
 
+    if (metaAdsConnected && metaAdsAccounts) {
+      try {
+        setMetaAdsAccountPicker(JSON.parse(decodeURIComponent(metaAdsAccounts)));
+      } catch {
+        toast.error('Meta authorization failed', 'Could not read the returned account list. Please try connecting again.');
+      }
+    } else if (metaAdsOauthError) {
+      toast.error('Meta authorization failed', decodeURIComponent(metaAdsOauthError));
+    }
+
     if (shopifyConnected) {
       toast.success('Shopify connected', shopName ? `Connected to ${decodeURIComponent(shopName)}. Click Sync to pull real data.` : 'Real store connected.');
     } else if (shopifyError) {
       toast.error('Shopify authorization failed', decodeURIComponent(shopifyError));
     }
 
-    if (connected || oauthError || shopifyConnected || shopifyError) {
+    if (connected || oauthError || metaAdsConnected || metaAdsOauthError || shopifyConnected || shopifyError) {
       // Clean the URL so a refresh doesn't re-trigger this.
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -65,6 +79,21 @@ export function Integrations() {
       await updateConfig(card.id, { clientCustomerId: customerId });
       toast.success('Google Ads account connected', `Account ${customerId} is now linked. Click Sync to pull real campaign data.`);
       setGoogleAdsAccountPicker(null);
+    } catch (err) {
+      toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setSelectingAccount(false);
+    }
+  };
+
+  const handleSelectMetaAdsAccount = async (adAccountId: string, accountName: string) => {
+    const card = integrations.find((i) => i.key === 'meta_ads_campaigns');
+    if (!card) return;
+    setSelectingAccount(true);
+    try {
+      await updateConfig(card.id, { adAccountId, accountName });
+      toast.success('Meta Ads account connected', `${accountName || adAccountId} is now linked. Click Sync to pull real campaign data.`);
+      setMetaAdsAccountPicker(null);
     } catch (err) {
       toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
     } finally {
@@ -102,7 +131,16 @@ export function Integrations() {
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify' || i.key === 'gemini') && i.status === 'disconnected') {
+    if (i.key === 'meta_ads_campaigns' && i.status === 'disconnected') {
+      try {
+        const authUrl = await integrationsApi.startMetaAdsCampaignsAuth();
+        window.location.href = authUrl; // real Meta consent screen -- full navigation, not a fetch
+      } catch (err) {
+        toast.error('Could not start Meta authorization', err instanceof ApiError ? err.message : 'Please try again.');
+      }
+      return;
+    }
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -268,21 +306,6 @@ export function Integrations() {
           replyTo: sendgridNurtureForm.replyTo,
         });
         toast.success('Connected', 'API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.');
-      } else if (config.key === 'gemini') {
-        // BUG FIX: previously fell into the generic branch below, which
-        // is fine functionally (same encrypted config.api_key storage),
-        // but the modal's generic copy claimed this "runs in simulation
-        // mode... no live connection is made" -- false for this key
-        // specifically. Call Intelligence, AI Reply Assistant, and AI
-        // Qualification all genuinely use this saved key for real Gemini
-        // API calls. Only sends api_key -- Gemini has no webhook.
-        if (!configForm.api_key.trim()) {
-          toast.error('Enter your Gemini API key first');
-          setSaving(false);
-          return;
-        }
-        await updateConfig(config.id, { api_key: configForm.api_key.trim() });
-        toast.success('Gemini key verified & connected', 'This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.');
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
         toast.success('Settings saved');
@@ -504,19 +527,6 @@ export function Integrations() {
                 <p className="text-ink-400">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
               )}
             </div>
-          ) : config.key === 'gemini' ? (
-            <div className="space-y-4">
-              <Field label="Gemini API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Gemini API key…" /></Field>
-              <p className="text-xs text-ink-400">
-                Saving genuinely verifies this key against Google's own API before it's accepted — an invalid or
-                revoked key will show an error here instead of connecting. Once verified, Call Intelligence, AI Reply
-                Assistant, and AI Qualification will all use your own key instead of the platform default, so usage
-                and cost are billed to your own Google account. Get a key from{' '}
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
-                  aistudio.google.com
-                </a>.
-              </p>
-            </div>
           ) : (
             <div className="space-y-4">
               <Field label="API Key / Token"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter API key…" /></Field>
@@ -555,6 +565,28 @@ export function Integrations() {
                   className="w-full rounded-lg border border-ink-200 px-4 py-3 text-left text-sm font-medium hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
                 >
                   {customerId.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}
+                </button>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {metaAdsAccountPicker && (
+        <Modal open onClose={() => setMetaAdsAccountPicker(null)} title="Choose a Meta Ads account">
+          <p className="mb-4 text-sm text-ink-500">Meta authorized successfully. Choose which real Meta ad account this workspace should sync data from.</p>
+          {metaAdsAccountPicker.length === 0 ? (
+            <p className="text-sm text-ink-400">No accessible Meta ad accounts were found for this login.</p>
+          ) : (
+            <div className="space-y-2">
+              {metaAdsAccountPicker.map((account) => (
+                <button
+                  key={account.adAccountId}
+                  disabled={selectingAccount}
+                  onClick={() => void handleSelectMetaAdsAccount(account.adAccountId, account.accountName)}
+                  className="w-full rounded-lg border border-ink-200 px-4 py-3 text-left text-sm font-medium hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
+                >
+                  {account.accountName || account.adAccountId}
                 </button>
               ))}
             </div>

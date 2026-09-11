@@ -97,17 +97,17 @@ export function Attribution() {
 
           <Card className="mt-4">
             <CardHeader
-              title="Google Ads Spend"
+              title="Ad Spend"
               subtitle={dashboard.adSpend.connected ? `Real, synced campaign data — last synced ${dashboard.adSpend.lastSyncedAt ? formatDateTime(dashboard.adSpend.lastSyncedAt) : 'never'}` : undefined}
             />
             {!dashboard.adSpend.connected ? (
               <EmptyState
-                title="Google Ads not connected"
-                description="Connect your real Google Ads account from the Integrations page to see real spend, clicks, and ROAS here."
+                title="No ad platform connected"
+                description="Connect your real Google Ads or Meta Ads account from the Integrations page to see real spend, clicks, and ROAS here."
                 action={<a href="/integrations"><Button variant="secondary">Go to Integrations</Button></a>}
               />
             ) : dashboard.adSpend.campaigns.length === 0 ? (
-              <EmptyState title="No campaign data synced yet" description="Click Sync on the Google Ads Campaigns card in Integrations." />
+              <EmptyState title="No campaign data synced yet" description="Click Sync on the Google Ads Campaigns or Meta Ads Campaigns card in Integrations." />
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
@@ -117,11 +117,13 @@ export function Attribution() {
                 </div>
                 <Table>
                   <thead>
-                    <tr><Th>Campaign</Th><Th>Status</Th><Th>Spend</Th><Th>Clicks</Th><Th>Impressions</Th><Th>Conversions</Th><Th>Matched Revenue</Th><Th>ROAS</Th></tr>
+                    <tr><Th>Platform</Th><Th>Campaign</Th><Th>Status</Th><Th>Spend</Th><Th>Clicks</Th><Th>Impressions</Th><Th>Conversions</Th><Th>Matched Revenue</Th><Th>ROAS</Th></tr>
                   </thead>
                   <tbody>
                     {dashboard.adSpend.campaigns.map((c) => (
                       <Tr key={c.campaignId}>
+                        {/* channelType is the real distinguisher between the two ad platforms here -- Google's are real values like SEARCH/DISPLAY/VIDEO, Meta's is the fixed 'META' value set at sync time (see metaAdsCampaignMetric.model.js) */}
+                        <Td><Badge tone={c.channelType === 'META' ? 'blue' : 'gray'}>{c.channelType === 'META' ? 'Meta' : 'Google'}</Badge></Td>
                         <Td className="font-medium">{c.campaignName}</Td>
                         <Td><Badge tone={c.status === 'ENABLED' ? 'green' : 'gray'}>{c.status ?? '—'}</Badge></Td>
                         <Td>{formatCurrency(c.spend)}</Td>

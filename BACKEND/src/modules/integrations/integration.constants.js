@@ -101,6 +101,7 @@ export const INTEGRATION_CATALOG = Object.freeze([
   { key: 'google_ads',  name: 'Google Ads', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real-time conversion tracking via GA4 Measurement Protocol.', logo_color: '#4285F4', available: true },
   { key: 'meta_ads',    name: 'Meta Ads',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Server-side conversion tracking via Meta Conversions API.', logo_color: '#0866FF', available: true },
   { key: 'google_ads_campaigns', name: 'Google Ads Campaigns', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real campaign, spend, and conversion sync via the official Google Ads API.', logo_color: '#34A853', available: true },
+  { key: 'meta_ads_campaigns',   name: 'Meta Ads Campaigns',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real campaign, spend, and conversion sync via the official Meta Marketing API.', logo_color: '#0866FF', available: true },
 
   // Ecommerce (1) — new category
   { key: 'shopify', name: 'Shopify', category: INTEGRATION_CATEGORY.ECOMMERCE, description: 'Real customer/order sync, plus automatic WhatsApp cart recovery and order confirmations.', logo_color: '#95BF47', available: true },

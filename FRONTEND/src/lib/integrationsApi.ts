@@ -55,6 +55,15 @@ export const integrationsApi = {
     apiClient.get<{ authUrl: string }>('/integrations/google-ads/oauth/authorize').then((r) => r.authUrl),
 
   /**
+   * startMetaAdsCampaignsAuth -- real OAuth authorize call, same exact
+   * reasoning as startGoogleAdsCampaignsAuth above (returns JSON, not a
+   * server redirect, since a plain browser navigation can't carry this
+   * endpoint's required Authorization header).
+   */
+  startMetaAdsCampaignsAuth: () =>
+    apiClient.get<{ authUrl: string }>('/integrations/meta-ads/oauth/authorize').then((r) => r.authUrl),
+
+  /**
    * startShopifyAuth -- real OAuth authorize call, real shop-specific
    * consent URL. Unlike Google Ads, Shopify's authorization URL depends
    * on the actual store domain, so it's required here.
