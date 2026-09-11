@@ -42,6 +42,8 @@ export function Integrations() {
     const shopifyConnected = params.get('shopify_connected');
     const shopName = params.get('shop_name');
     const shopifyError = params.get('shopify_error');
+    const zohoConnected = params.get('zoho_connected');
+    const zohoError = params.get('zoho_error');
 
     if (connected && customerIds) {
       setGoogleAdsAccountPicker(customerIds.split(',').filter(Boolean));
@@ -65,7 +67,13 @@ export function Integrations() {
       toast.error('Shopify authorization failed', decodeURIComponent(shopifyError));
     }
 
-    if (connected || oauthError || metaAdsConnected || metaAdsOauthError || shopifyConnected || shopifyError) {
+    if (zohoConnected) {
+      toast.success('Zoho CRM connected', 'Click Sync to pull your real leads into InnovateX.');
+    } else if (zohoError) {
+      toast.error('Zoho authorization failed', decodeURIComponent(zohoError));
+    }
+
+    if (connected || oauthError || metaAdsConnected || metaAdsOauthError || shopifyConnected || shopifyError || zohoConnected || zohoError) {
       // Clean the URL so a refresh doesn't re-trigger this.
       window.history.replaceState({}, '', window.location.pathname);
     }
@@ -140,7 +148,16 @@ export function Integrations() {
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify') && i.status === 'disconnected') {
+    if (i.key === 'zoho' && i.status === 'disconnected') {
+      try {
+        const authUrl = await integrationsApi.startZohoAuth();
+        window.location.href = authUrl; // real Zoho consent screen -- full navigation, not a fetch
+      } catch (err) {
+        toast.error('Could not start Zoho authorization', err instanceof ApiError ? err.message : 'Please try again.');
+      }
+      return;
+    }
+    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify' || i.key === 'gemini' || i.key === 'openai' || i.key === 'claude') && i.status === 'disconnected') {
       openConfig(i);
       return;
     }
@@ -171,6 +188,9 @@ export function Integrations() {
     setConfig(i);
     if (i.key === 'google_ads_campaigns') {
       return; // no form -- the JSX below shows real read-only connection info for this key
+    }
+    if (i.key === 'zoho') {
+      return; // no form -- OAuth-only, the JSX below shows real read-only connection info
     }
     if (i.key === 'calcom') {
       setCalcomForm({ apiKey: '' });
@@ -306,6 +326,28 @@ export function Integrations() {
           replyTo: sendgridNurtureForm.replyTo,
         });
         toast.success('Connected', 'API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.');
+      } else if (config.key === 'gemini') {
+        // Real verification happens server-side before this is ever
+        // marked "connected" -- see backend's verifyGeminiApiKey.
+        if (!configForm.api_key.trim()) {
+          toast.error('Enter your Gemini API key first');
+          setSaving(false);
+          return;
+        }
+        await updateConfig(config.id, { api_key: configForm.api_key.trim() });
+        toast.success('Gemini key verified & connected', 'This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.');
+      } else if (config.key === 'openai' || config.key === 'claude') {
+        // Same real-verification pattern as Gemini above. Whichever of
+        // Gemini/OpenAI/Claude was most recently connected/re-verified
+        // becomes the active provider for all three AI features.
+        const label = config.key === 'openai' ? 'OpenAI' : 'Claude';
+        if (!configForm.api_key.trim()) {
+          toast.error(`Enter your ${label} API key first`);
+          setSaving(false);
+          return;
+        }
+        await updateConfig(config.id, { api_key: configForm.api_key.trim() });
+        toast.success(`${label} key verified & connected`, `This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.`);
       } else {
         await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
         toast.success('Settings saved');
@@ -374,7 +416,7 @@ export function Integrations() {
       {config && (
         <Modal
           open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={(config.key === 'google_ads_campaigns' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
+          footer={(config.key === 'google_ads_campaigns' || config.key === 'zoho' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
             ? <Button variant="secondary" onClick={() => setConfig(null)}>Close</Button>
             : <><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
         >
@@ -526,6 +568,56 @@ export function Integrations() {
               ) : (
                 <p className="text-ink-400">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
               )}
+            </div>
+          ) : config.key === 'zoho' ? (
+            <div className="space-y-3 text-sm">
+              <p className="text-xs text-ink-500">Real, one-way lead pull from your Zoho CRM's Leads module — connected through Zoho's own OAuth consent screen, not an API key typed here. Leads only flow into InnovateX; nothing is written back to Zoho.</p>
+              <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Connected org</p><p className="font-medium text-ink-900">{typeof config.config.orgName === 'string' && config.config.orgName ? config.config.orgName : 'Zoho CRM'}</p></div>
+              {typeof config.config.lastSyncLeadCount === 'number' && (
+                <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Last sync</p><p className="font-medium text-ink-900">{config.config.lastSyncLeadCount} new lead{config.config.lastSyncLeadCount === 1 ? '' : 's'} imported</p></div>
+              )}
+              {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
+              )}
+            </div>
+          ) : config.key === 'gemini' ? (
+            <div className="space-y-4">
+              <Field label="Gemini API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Gemini API key…" /></Field>
+              <p className="text-xs text-ink-400">
+                Saving genuinely verifies this key against Google's own API before it's accepted — an invalid or
+                revoked key will show an error here instead of connecting. Once verified, Call Intelligence, AI Reply
+                Assistant, and AI Qualification will all use your own key instead of the platform default, so usage
+                and cost are billed to your own Google account. Get a key from{' '}
+                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                  aistudio.google.com
+                </a>.
+              </p>
+            </div>
+          ) : config.key === 'openai' ? (
+            <div className="space-y-4">
+              <Field label="OpenAI API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your OpenAI API key…" /></Field>
+              <p className="text-xs text-ink-400">
+                Saving genuinely verifies this key against OpenAI's own API before it's accepted — an invalid or
+                revoked key will show an error here instead of connecting. If this becomes your most-recently-connected
+                AI provider, Call Intelligence, AI Reply Assistant, and AI Qualification will all switch to using it.
+                Get a key from{' '}
+                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                  platform.openai.com
+                </a>.
+              </p>
+            </div>
+          ) : config.key === 'claude' ? (
+            <div className="space-y-4">
+              <Field label="Claude API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Anthropic API key…" /></Field>
+              <p className="text-xs text-ink-400">
+                Saving genuinely verifies this key against Anthropic's own API before it's accepted — an invalid or
+                revoked key will show an error here instead of connecting. If this becomes your most-recently-connected
+                AI provider, Call Intelligence, AI Reply Assistant, and AI Qualification will all switch to using it.
+                Get a key from{' '}
+                <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                  console.anthropic.com
+                </a>.
+              </p>
             </div>
           ) : (
             <div className="space-y-4">

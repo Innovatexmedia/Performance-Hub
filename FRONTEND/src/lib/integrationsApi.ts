@@ -70,4 +70,13 @@ export const integrationsApi = {
    */
   startShopifyAuth: (shopDomain: string) =>
     apiClient.get<{ authUrl: string }>(`/shopify/oauth/authorize?shop=${encodeURIComponent(shopDomain)}`).then((r) => r.authUrl),
+
+  /**
+   * startZohoAuth -- real OAuth authorize call, same exact reasoning as
+   * startMetaAdsCampaignsAuth/startGoogleAdsCampaignsAuth above (returns
+   * JSON, not a server redirect, since a plain browser navigation can't
+   * carry this endpoint's required Authorization header).
+   */
+  startZohoAuth: () =>
+    apiClient.get<{ authUrl: string }>('/integrations/zoho/oauth/authorize').then((r) => r.authUrl),
 };

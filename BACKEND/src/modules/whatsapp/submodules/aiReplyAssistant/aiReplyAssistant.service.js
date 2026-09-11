@@ -17,13 +17,13 @@ import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 import { aiReplyAssistantRepository } from './aiReplyAssistant.repository.js';
 import { templatesService } from '../templates/templates.service.js';
 import { findByKey as findIntegrationByKey } from '../../../integrations/integration.repository.js';
+import { resolveActiveAiProvider } from '../../../integrations/aiProviderClient.js';
 import { tenantProfileService } from '../../../tenant/tenantProfile.service.js';
 import {
   PROMPT_CATEGORY,
   TONE,
   REWRITE_STYLE,
   VARIABLE_PATTERN,
-  ACTIVE_AI_PROVIDER,
   AI_PROVIDER,
   DEFAULT_PAGE,
   DEFAULT_LIMIT,
@@ -76,6 +76,20 @@ async function resolveClaudeApiKey(ctx) {
     // DB hiccup -- fall through to the server key rather than fail the whole request.
   }
   return process.env.ANTHROPIC_API_KEY || null;
+}
+
+/** Same real pattern as resolveClaudeApiKey, checking the 'openai' Integrations card instead. */
+async function resolveOpenAiApiKey(ctx) {
+  try {
+    const integration = ctx?.tenantId ? await findIntegrationByKey(ctx.tenantId, 'openai') : null;
+    const tenantKey = integration?.config?.api_key;
+    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
+      return tenantKey.trim();
+    }
+  } catch {
+    // DB hiccup -- fall through to the server key rather than fail the whole request.
+  }
+  return process.env.OPENAI_API_KEY || null;
 }
 
 /** Plain-text Gemini call -- for generate/rewrite/summarize, which just need natural language back, not structured JSON. */
@@ -158,6 +172,43 @@ async function callClaudeText(prompt, apiKey) {
 /** Same real Claude call, but expects the model to return parsable JSON -- same strip-markdown-fences pattern as callGeminiJSON. */
 async function callClaudeJSON(prompt, apiKey) {
   const text = await callClaudeText(prompt, apiKey);
+  const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  return JSON.parse(clean);
+}
+
+const OPENAI_MODEL = 'gpt-4.1-mini'; // fast, cheap, strong at short conversational replies
+
+/**
+ * Plain-text OpenAI call. SOURCE: real OpenAI Chat Completions API --
+ * POST https://api.openai.com/v1/chat/completions, header
+ * Authorization: Bearer <key>. Response text lives at
+ * choices[0].message.content -- NOT content[0].text (that's Anthropic's shape).
+ */
+async function callOpenAiText(prompt, apiKey) {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 512,
+    }),
+  });
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenAI API error ${response.status}: ${err}`);
+  }
+  const data = await response.json();
+  const text = data?.choices?.[0]?.message?.content;
+  if (!text) throw new Error('OpenAI returned empty response');
+  return text.trim();
+}
+
+async function callOpenAiJSON(prompt, apiKey) {
+  const text = await callOpenAiText(prompt, apiKey);
   const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
   return JSON.parse(clean);
 }
@@ -609,50 +660,201 @@ Return ONLY a valid JSON object, no markdown, no explanation:
 });
 
 /**
- * Provider factory.
- * Add new providers here — the rest of the service is unchanged.
- *
- * Real Gemini is used whenever a usable API key is available -- checked
- * in order: the tenant's OWN key (Integrations → Google Gemini), then the
- * server-wide GEMINI_API_KEY env var. Explicitly setting AI_PROVIDER=MOCK
- * still forces mock even with a key present, for local testing without
- * burning real API calls.
+ * createOpenAiProvider -- mirrors createGeminiProvider/createClaudeProvider
+ * exactly: same 4 functions, same prompts, same honest
+ * mock-fallback-on-error behavior. Only the underlying API call
+ * (callOpenAiText/callOpenAiJSON) and the real OpenAI response shape differ.
  */
-async function getProvider(ctx, name = ACTIVE_AI_PROVIDER) {
-  // Real business context (name/description/industry) -- replaces the
-  // previously hardcoded "InnovateX Revenue OS" in every generated prompt
-  // with whatever the TENANT actually told us about their own business
-  // (see tenant/tenantProfile.service.js). Never throws -- returns null on
-  // any lookup failure, and every prompt already handles a null context
-  // gracefully (falls back to generic wording, not an error).
+const createOpenAiProvider = (apiKey, businessContext) => ({
+  async generate({ conversation = [], lead = {}, goal = '', tone = 'Professional', language = 'en' }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no prior conversation history)';
+
+      const businessLine = businessContext?.name
+        ? `You are a helpful, natural-sounding WhatsApp assistant for ${businessContext.name}${businessContext.industry ? ` (${businessContext.industry})` : ''}.${businessContext.description ? ` About this business: ${businessContext.description}` : ''}`
+        : 'You are a helpful, natural-sounding WhatsApp sales assistant.';
+
+      const prompt = `${businessLine}
+
+CONVERSATION SO FAR:
+${history}
+
+LEAD CONTEXT:
+- Name: ${lead.name || 'the customer'}
+- Company: ${lead.company || 'unknown'}
+
+TASK: Write a WhatsApp reply.
+- Tone: ${tone}
+- Goal: ${goal || 'continue the conversation naturally and helpfully'}
+- Language: ${language}
+
+Rules: Sound like a real person texting, not a corporate email. Keep it under 60 words. No markdown, no headers -- just the message text, ready to send as-is. Do not include quotation marks around it.`;
+
+      const text = await callOpenAiText(prompt, apiKey);
+      return { text, provider: AI_PROVIDER.OPENAI, confidence: 0.9, tokens: text.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] OpenAI generate() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).generate({ conversation, lead, goal, tone, language });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async rewrite({ text = '', style = 'PROFESSIONAL' }) {
+    const start = Date.now();
+    try {
+      const styleInstruction = {
+        SHORTER: 'Make it noticeably shorter while keeping the core message.',
+        LONGER: 'Expand it with a bit more helpful detail.',
+        PROFESSIONAL: 'Rewrite it in a more professional, polished tone.',
+        FRIENDLY: 'Rewrite it in a warmer, more friendly and casual tone.',
+        PERSUASIVE: 'Rewrite it to be more persuasive and compelling, without being pushy.',
+        FORMAL: 'Rewrite it in a formal, business-letter style tone.',
+        EMPATHETIC: 'Rewrite it to lead with empathy and understanding.',
+        GRAMMAR: 'Fix any grammar, spelling, or punctuation issues -- keep the meaning and tone exactly the same.',
+        SIMPLIFY: 'Simplify the language -- shorter words, simpler sentences, same meaning.',
+      }[style] || 'Rewrite it to be clearer and more polished.';
+
+      const prompt = `Rewrite this WhatsApp message. ${styleInstruction}
+
+ORIGINAL MESSAGE:
+${text}
+
+Return ONLY the rewritten message, ready to send as-is -- no explanation, no quotation marks, no markdown.`;
+
+      const rewritten = await callOpenAiText(prompt, apiKey);
+      return { text: rewritten, provider: AI_PROVIDER.OPENAI, tokens: rewritten.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] OpenAI rewrite() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).rewrite({ text, style });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async summarize({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Summarize this WhatsApp conversation with ${lead.name || 'a customer'} in 2-3 sentences. Include overall sentiment and a recommended next step.
+
+CONVERSATION:
+${history}
+
+Return ONLY the summary text, no markdown, no headers.`;
+
+      const summary = await callOpenAiText(prompt, apiKey);
+      return { summary, provider: AI_PROVIDER.OPENAI, tokens: summary.split(' ').length, latency: Date.now() - start, isLive: true };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] OpenAI summarize() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).summarize({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+
+  async suggestions({ conversation = [], lead = {} }) {
+    const start = Date.now();
+    try {
+      const history = Array.isArray(conversation) && conversation.length
+        ? conversation.map((m) => `${m.direction === 'INBOUND' ? 'Customer' : 'Us'}: ${m.content || m.text || ''}`).join('\n')
+        : '(no messages yet)';
+
+      const prompt = `Based on this WhatsApp conversation with ${lead.name || 'a customer'}, suggest next steps.
+
+CONVERSATION:
+${history}
+
+Return ONLY a valid JSON object, no markdown, no explanation:
+{
+  "nextAction": "<one sentence recommended next action>",
+  "bookingSuggestion": "<one sentence suggestion for booking a call, or empty string if not relevant>",
+  "paymentSuggestion": "<one sentence suggestion about payment follow-up, or empty string if not relevant>",
+  "followUp": "<a ready-to-send WhatsApp follow-up message>"
+}`;
+
+      const result = await callOpenAiJSON(prompt, apiKey);
+      return {
+        nextAction: result.nextAction || '',
+        bookingSuggestion: result.bookingSuggestion || '',
+        paymentSuggestion: result.paymentSuggestion || '',
+        followUp: result.followUp || '',
+        provider: AI_PROVIDER.OPENAI,
+        latency: Date.now() - start,
+        isLive: true,
+      };
+    } catch (err) {
+      console.warn(`[aiReplyAssistant] OpenAI suggestions() failed, using mock fallback: ${err.message}`);
+      const fallback = await createMockProvider(businessContext).suggestions({ conversation, lead });
+      return { ...fallback, isLive: false };
+    }
+  },
+});
+
+/**
+ * Provider factory.
+ *
+ * BUG FIX #1: OpenAI is now genuinely wired up (it was previously a
+ * commented-out stub -- `// case AI_PROVIDER.OPENAI: return
+ * openaiProvider;` -- meaning OpenAI could never actually be selected no
+ * matter what was connected).
+ *
+ * BUG FIX #2: the default `name` used to be ACTIVE_AI_PROVIDER, which
+ * itself defaults to AI_PROVIDER.MOCK whenever process.env.AI_PROVIDER
+ * isn't set (the normal case) -- and the very first line of this
+ * function forces mock whenever name === AI_PROVIDER.MOCK. That meant
+ * this feature ALWAYS returned mock, unconditionally, regardless of any
+ * tenant-connected key or the platform Gemini fallback, unless
+ * AI_PROVIDER was explicitly set to something else in the environment.
+ * Default is now `undefined` (no override requested) so the
+ * shared-resolver path below is genuinely reachable by default; MOCK is
+ * only forced when a caller (or AI_PROVIDER env var) EXPLICITLY asks for it.
+ *
+ * When no explicit provider is requested (the normal case), this defers
+ * to the same shared resolveActiveAiProvider() used by AI Qualification
+ * and Call Intelligence, so all three features follow one consistent
+ * rule: a tenant "chooses" a provider simply by connecting it (with a
+ * real, verified key) on the Integrations page -- whichever was most
+ * recently connected/re-verified wins if more than one is connected --
+ * and if the tenant hasn't connected ANY of the three, the platform's
+ * .env GEMINI_API_KEY is the one shared fallback for all three features.
+ */
+async function getProvider(ctx, name = process.env.AI_PROVIDER || undefined) {
   const businessContext = await tenantProfileService.getContextForAI(ctx?.tenantId);
 
+  // Only forces mock when EXPLICITLY requested (env var or caller-passed
+  // name) -- no longer the silent default.
   if (name === AI_PROVIDER.MOCK) return createMockProvider(businessContext);
 
-  // Real fix: try the REQUESTED provider's real key first -- the
-  // previous version checked for a Gemini key completely unconditionally
-  // before this point, meaning Claude could never actually be selected
-  // even with a real, connected API key, as long as Gemini also had one.
+  // Explicit override: try the SPECIFICALLY requested provider's own real
+  // key first, before falling back to the tenant's actual active one.
   if (name === AI_PROVIDER.CLAUDE) {
     const claudeKey = await resolveClaudeApiKey(ctx);
     if (claudeKey) return createClaudeProvider(claudeKey, businessContext);
   }
-
-  // Real, sensible fallback -- Gemini remains the default/fallback
-  // provider (unchanged behavior for every tenant already relying on
-  // it), tried whenever the specifically-requested provider (if any)
-  // didn't have a real key configured.
-  const geminiKey = await resolveGeminiApiKey(ctx);
-  if (geminiKey) return createGeminiProvider(geminiKey, businessContext);
-
-  switch (name) {
-    case AI_PROVIDER.MOCK:
-      return createMockProvider(businessContext);
-    // case AI_PROVIDER.OPENAI:
-    //   return openaiProvider;   // import and implement in providers/openai.js
-    default:
-      return createMockProvider(businessContext);
+  if (name === AI_PROVIDER.OPENAI) {
+    const openaiKey = await resolveOpenAiApiKey(ctx);
+    if (openaiKey) return createOpenAiProvider(openaiKey, businessContext);
   }
+  if (name === AI_PROVIDER.GEMINI) {
+    const geminiKey = await resolveGeminiApiKey(ctx);
+    if (geminiKey) return createGeminiProvider(geminiKey, businessContext);
+  }
+
+  // No explicit override resolved (or none was requested) -- defer to
+  // whichever provider this tenant has actually connected, same shared
+  // priority AI Qualification and Call Intelligence use. Falls through to
+  // the platform Gemini .env fallback inside resolveActiveAiProvider
+  // itself if the tenant hasn't connected anything at all.
+  const { provider, apiKey } = await resolveActiveAiProvider(ctx?.tenantId);
+  if (provider === 'claude') return createClaudeProvider(apiKey, businessContext);
+  if (provider === 'openai') return createOpenAiProvider(apiKey, businessContext);
+  if (provider === 'gemini') return createGeminiProvider(apiKey, businessContext);
+
+  return createMockProvider(businessContext);
 }
 
 // ── Service ────────────────────────────────────────────────────────────────────

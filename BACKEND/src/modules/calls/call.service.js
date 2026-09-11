@@ -1,22 +1,22 @@
 /**
- * Call Intelligence Service — Gemini powered.
+ * Call Intelligence Service — multi-provider (Gemini / OpenAI / Claude).
  *
  * FILE: src/modules/calls/call.service.js
  *
  * WHAT CHANGED:
- *   - generateAiSummaryMock renamed to generateAiSummary (now async)
- *   - When a usable Gemini key is available → calls Gemini API with real transcript
- *   - Falls back to deterministic mock when key missing or transcript empty
- *   - All other logic (lead update, deal advance, activity, notification) unchanged
- *
- * BUG FIX: credential resolution now matches the established, real
- * per-tenant pattern already used by aiReplyAssistant.service.js --
- * the tenant's OWN connected Gemini key (Integrations -> Google Gemini)
- * is tried first, falling back to the server-wide GEMINI_API_KEY env var
- * only if the tenant hasn't connected their own. Previously this only
- * ever read the server-wide env var, so a tenant's own connected key was
- * silently ignored for Call Intelligence specifically, even though it
- * already worked for AI Reply Assistant.
+ *   - generateAiSummary now goes through the shared
+ *     resolveActiveAiProvider() (see integrations/aiProviderClient.js)
+ *     instead of being hardcoded to Gemini only -- a tenant "chooses" the
+ *     provider simply by connecting it (with a real, verified key) on
+ *     the Integrations page; whoever was most recently connected/
+ *     re-verified wins if more than one is connected.
+ *   - Falls back to deterministic mock ONLY when no provider is
+ *     available anywhere or there's no real transcript to analyse.
+ *   - Once a provider IS resolved but the real API call fails, this now
+ *     throws a real error instead of silently degrading to mock -- a
+ *     configured key that stops working shouldn't look identical to
+ *     normal mock mode.
+ *   - All other logic (lead update, deal advance, activity, notification) unchanged.
  */
 
 import * as callRepo from './call.repository.js';
@@ -25,7 +25,6 @@ import {
   PIPELINE_STAGE_ON_CALL,
   LEAD_STATUS_ON_CALL,
   TRACKING_EVENT_ON_CALL,
-  AI_API_KEY_ENV,
 } from './call.constants.js';
 
 import { Lead }          from '../leads/lead/lead.model.js';
@@ -34,7 +33,7 @@ import { ACTIVITY_TYPE } from '../leads/activities/activity.model.js';
 import { activityService } from '../leads/activities/activity.service.js';
 import Notification      from '../leads/notifications/notification.model.js';
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
-import { findByKey as findIntegrationByKey } from '../integrations/integration.repository.js';
+import { resolveActiveAiProvider, callProviderJSON } from '../integrations/aiProviderClient.js';
 
 // =============================================================================
 // PRIVATE HELPERS
@@ -73,60 +72,6 @@ const emitTrackingEvent = async (eventType, leadId, tenantId, metadata = {}) => 
 // =============================================================================
 // GEMINI API CALL
 // =============================================================================
-
-const SERVER_GEMINI_API_KEY = () => process.env.GEMINI_API_KEY || process.env[AI_API_KEY_ENV];
-
-/**
- * resolveGeminiApiKey -- BUG FIX: same real pattern as
- * aiReplyAssistant.service.js's resolveGeminiApiKey. Tries the tenant's
- * own connected key first (Integrations -> Google Gemini,
- * config.api_key, only when status === 'connected'), falls back to the
- * server-wide env var. Never throws -- a DB hiccup looking up the
- * integration falls through to the server key rather than failing the
- * whole call-logging request.
- */
-const resolveGeminiApiKey = async (ctx) => {
-  try {
-    const integration = ctx?.tenantId ? await findIntegrationByKey(ctx.tenantId, 'gemini') : null;
-    const tenantKey = integration?.config?.api_key;
-    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
-      return tenantKey.trim();
-    }
-  } catch {
-    // DB hiccup looking up the integration -- fall through to the server key.
-  }
-  return SERVER_GEMINI_API_KEY() || null;
-};
-
-const GEMINI_URL = (apiKey) =>
-  // Real model id -- matches aiReplyAssistant.service.js's GEMINI_MODEL,
-  // the currently-supported Gemini model already in real use elsewhere
-  // in this codebase. gemini-1.5-flash returns 404 on the current API.
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
-
-const callGemini = async (prompt, apiKey) => {
-  const response = await fetch(GEMINI_URL(apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 1024 },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${err}`);
-  }
-
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned empty response');
-
-  // Strip markdown code fences if present
-  const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(clean);
-};
 
 // =============================================================================
 // MOCK FALLBACK
@@ -169,26 +114,25 @@ const mockSummary = (lead, outcome) => {
   };
   const score = scoreMap[outcome] || 5;
 
-  return { summary, objections, next_steps, follow_up_draft, proposal_outline, score, isAiLive: false };
+  return { summary, objections, next_steps, follow_up_draft, proposal_outline, score, isAiLive: false, provider: null };
 };
 
 // =============================================================================
-// MAIN AI SUMMARY FUNCTION — Gemini or mock
+// MAIN AI SUMMARY FUNCTION — Gemini, OpenAI, Claude, or mock
 // =============================================================================
 
 /**
- * generateAiSummary — generates call summary using Gemini when a usable
- * key is available (tenant's own connected key, or server fallback).
- * Falls back to mock when no key resolves or transcript is empty.
- * NOW ASYNC — all callers use await, and now take `ctx` to resolve the
- * right tenant's credentials.
+ * generateAiSummary — generates call summary using whichever AI provider
+ * this tenant has connected (see aiProviderClient.js's
+ * resolveActiveAiProvider). Falls back to mock when no provider resolves
+ * or transcript is empty. Once a provider IS resolved but the real call
+ * fails, this throws a real error instead of silently degrading to mock.
  */
 const generateAiSummary = async (ctx, lead, transcript, outcome) => {
-  const apiKey         = await resolveGeminiApiKey(ctx);
+  const { provider, apiKey } = await resolveActiveAiProvider(ctx?.tenantId);
   const hasTranscript  = transcript && transcript.trim().length > 10;
 
-  // Use mock if no usable key or no real transcript to analyse
-  if (!apiKey || !hasTranscript) {
+  if (!provider || !apiKey || !hasTranscript) {
     return mockSummary(lead, outcome);
   }
 
@@ -217,9 +161,9 @@ Scoring guide for score field:
 - 1-4:  Poor call, objections unresolved, low engagement or no-show`;
 
   try {
-    const result = await callGemini(prompt, apiKey);
+    const result = await callProviderJSON(provider, apiKey, prompt);
 
-    if (!result.summary) throw new Error('Invalid response from Gemini');
+    if (!result.summary) throw new Error(`Invalid response from ${provider}`);
 
     return {
       summary:          result.summary          || '',
@@ -229,10 +173,11 @@ Scoring guide for score field:
       proposal_outline: result.proposal_outline || '',
       score:            Math.max(1, Math.min(10, Math.round(Number(result.score) || 5))),
       isAiLive:         true,
+      provider,
     };
   } catch (err) {
-    console.warn(`[calls] Gemini failed, using mock fallback: ${err.message}`);
-    return mockSummary(lead, outcome);
+    console.error(`[calls] ${provider} request failed for a configured key: ${err.message}`);
+    throw new AppError(502, `Call Intelligence AI summary failed (${provider}): ${err.message}`);
   }
 };
 

@@ -1,103 +1,37 @@
 /**
- * AI Qualification Service — Gemini powered.
+ * AI Qualification Service — multi-provider (Gemini / OpenAI / Claude).
  *
  * FILE: src/modules/leads/ai/qualification-ai.service.js
  *
  * WHAT CHANGED:
- *   - assess() is now async — calls Google Gemini API when a key is available
- *   - BUG FIX: now tries the tenant's own connected Gemini key
- *     (Integrations -> Google Gemini) first, falling back to the
- *     server-wide GEMINI_API_KEY env var -- previously this always read
- *     only the server-wide env var, unlike Call Intelligence and AI
- *     Reply Assistant, which both already resolved the tenant's own key.
- *   - Falls back to deterministic mock when no key is available at all (app never breaks)
- *   - Uses gemini-3.5-flash-lite model — fast, cheap, accurate for structured JSON
- *   - Returns same shape as before — all callers unchanged
- *
- * ENV REQUIRED (server-wide fallback only):
- *   GEMINI_API_KEY — from https://aistudio.google.com/app/apikey
+ *   - assess() now goes through the shared resolveActiveAiProvider() (see
+ *     integrations/aiProviderClient.js) instead of being hardcoded to
+ *     Gemini only. A tenant "chooses" the provider simply by connecting
+ *     it (with a real, verified key) on the Integrations page -- whoever
+ *     was most recently connected/re-verified wins if more than one is
+ *     connected. Only Gemini has a platform-wide fallback
+ *     (process.env.GEMINI_API_KEY); OpenAI/Claude are BYO-key only.
+ *   - Falls back to deterministic mock ONLY when no key is available
+ *     anywhere -- this is the original, intentional "Mock AI" demo mode,
+ *     not an error state.
+ *   - Once a key IS available but the real API call fails, this throws a
+ *     real error instead of silently degrading to a mock result -- a
+ *     configured key that stops working should never look identical to
+ *     normal mock mode.
+ *   - Returns the same shape as before — all callers unchanged.
  *
  * CALLER:
  *   qualification.service.js → runQualification() calls:
  *   const assessment = await qualificationAiService.assess(lead, answers, ctx.tenantId)
- *   NOTE: caller must now use await (was sync before); tenantId is optional
- *   (omitting it just skips straight to the server-wide key, same as before).
  */
 
 import { scoreLead, temperatureFor } from '../scoring/scoring.service.js';
 import { LEAD_TEMPERATURE } from '../lead/lead.constants.js';
-import { findByKey as findIntegrationByKey } from '../../integrations/integration.repository.js';
+import { resolveActiveAiProvider, callProviderJSON } from '../../integrations/aiProviderClient.js';
 import { AppError } from '../../../shared/helpers/lead.helpers.js';
 
-const SERVER_GEMINI_API_KEY = () => process.env.GEMINI_API_KEY;
-
-/**
- * resolveGeminiApiKey -- BUG FIX: this module previously only ever read
- * the server-wide GEMINI_API_KEY env var, silently ignoring a tenant's
- * own connected Gemini key even when one existed -- unlike Call
- * Intelligence and AI Reply Assistant, which both already resolve the
- * tenant's own key first. Same real pattern as
- * calls/call.service.js's resolveGeminiApiKey: tries the tenant's own
- * connected integration (Integrations -> Google Gemini,
- * config.api_key, only when status === 'connected') first, falls back
- * to the server-wide env var. Never throws -- a DB hiccup looking up
- * the integration falls through to the server key rather than failing
- * the whole qualification request.
- */
-const resolveGeminiApiKey = async (tenantId) => {
-  try {
-    const integration = tenantId ? await findIntegrationByKey(tenantId, 'gemini') : null;
-    const tenantKey = integration?.config?.api_key;
-    if (integration?.status === 'connected' && typeof tenantKey === 'string' && tenantKey.trim()) {
-      return tenantKey.trim();
-    }
-  } catch {
-    // DB hiccup looking up the integration -- fall through to the server key.
-  }
-  return SERVER_GEMINI_API_KEY() || null;
-};
-
-// Gemini API endpoint -- real model id, matches aiReplyAssistant.service.js's
-// GEMINI_MODEL, the currently-supported Gemini model already in real use
-// elsewhere in this codebase. gemini-1.5-flash returns 404 on the current API.
-const GEMINI_URL = (apiKey) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${apiKey}`;
-
 // =============================================================================
-// GEMINI API CALL
-// =============================================================================
-
-const callGemini = async (prompt, apiKey) => {
-  const response = await fetch(GEMINI_URL(apiKey), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{ text: prompt }],
-      }],
-      generationConfig: {
-        temperature:     0.3,   // Low temperature = consistent structured output
-        maxOutputTokens: 1024,
-      },
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Gemini API error ${response.status}: ${err}`);
-  }
-
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error('Gemini returned empty response');
-
-  // Strip markdown code fences if Gemini wraps JSON in ```json ... ```
-  const clean = text.replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
-  return JSON.parse(clean);
-};
-
-// =============================================================================
-// MOCK FALLBACK (used when no GEMINI_API_KEY)
+// MOCK FALLBACK (used when no AI provider is configured anywhere)
 // =============================================================================
 
 const mockAssess = (lead = {}, answers = {}) => {
@@ -132,6 +66,7 @@ const mockAssess = (lead = {}, answers = {}) => {
     followUpDraft: buildFollowUp(lead, temperature),
     reason: 'Score computed from lead profile and discovery answers.',
     isLive: false,
+    provider: null,
   };
 };
 
@@ -152,30 +87,23 @@ export const qualificationAiService = {
   /**
    * assess — runs AI qualification on a lead + discovery answers.
    *
-   * NOW ASYNC — callers must await this.
-   * Returns same shape as before so all downstream code is unchanged.
-   *
    * @param {Object} lead     — lead document as plain object
    * @param {Object} answers  — discovery form answers
-   * @param {string} tenantId — BUG FIX: now accepted so the tenant's own
-   *                            connected Gemini key (if any) is tried
-   *                            before falling back to the server-wide key.
-   *                            Optional so any other, older caller that
-   *                            doesn't pass it still works exactly as
-   *                            before (falls straight to the server key).
+   * @param {string} tenantId — used to resolve which AI provider (if any)
+   *                            this tenant has connected. Optional --
+   *                            omitting it just skips straight to the
+   *                            platform Gemini fallback (or mock).
    * @returns {Promise<{fitScore, temperature, quality, buyingIntent, urgency,
    *                    painPoints, recommendedOffer, nextAction, followUpDraft,
-   *                    reason, isLive}>}
+   *                    reason, isLive, provider}>}
    */
   async assess(lead = {}, answers = {}, tenantId = null) {
-    const apiKey = await resolveGeminiApiKey(tenantId);
+    const { provider, apiKey } = await resolveActiveAiProvider(tenantId);
 
-    // Use mock if no key available at all (neither tenant's own nor server-wide)
-    if (!apiKey) {
+    if (!provider || !apiKey) {
       return mockAssess(lead, answers);
     }
 
-    // Build prompt for Gemini
     const prompt = `You are an expert B2B sales qualification analyst for InnovateX Revenue OS.
 
 Analyse this lead profile and discovery answers to qualify the lead.
@@ -213,12 +141,9 @@ Scoring guide:
 - 0-4  = Cold: Poor fit, low intent, wrong authority or no budget`;
 
     try {
-      const result = await callGemini(prompt, apiKey);
+      const result = await callProviderJSON(provider, apiKey, prompt);
 
-      // Validate required fields — a malformed/unexpected shape from
-      // Gemini is treated the same as a request failure below, not a
-      // silent mock fallback.
-      if (typeof result.fitScore !== 'number') throw new Error('Gemini returned an invalid response shape (missing/non-numeric fitScore)');
+      if (typeof result.fitScore !== 'number') throw new Error(`${provider} returned an invalid response shape (missing/non-numeric fitScore)`);
 
       return {
         fitScore:         Math.max(0, Math.min(10, Math.round(result.fitScore))),
@@ -232,20 +157,11 @@ Scoring guide:
         followUpDraft:    result.followUpDraft    || '',
         reason:           result.reason           || '',
         isLive:           true,
+        provider,
       };
     } catch (err) {
-      // BUG FIX: previously swallowed every Gemini failure and silently
-      // returned a mock/deterministic result with isLive:false -- a real,
-      // configured key (tenant's own or the platform's) that started
-      // failing (revoked, quota exceeded, model error, malformed
-      // response) looked EXACTLY like a normal mock-mode result to the
-      // end user, with no indication anything was actually wrong. Mock
-      // mode is now reserved solely for "no key configured anywhere" (see
-      // the isAiLive-equivalent check above, before this try block) --
-      // once a key genuinely exists, a failure is a real, surfaced error
-      // instead of a silently-degraded response.
-      console.error(`[qualification-ai] Gemini request failed for a configured key: ${err.message}`);
-      throw new AppError(502, `AI Qualification failed: ${err.message}`);
+      console.error(`[qualification-ai] ${provider} request failed for a configured key: ${err.message}`);
+      throw new AppError(502, `AI Qualification failed (${provider}): ${err.message}`);
     }
   },
 };

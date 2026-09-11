@@ -119,6 +119,17 @@ const config = {
   // alongside this integration.
   GOOGLE_ADS_OAUTH_REDIRECT_URI:  process.env.GOOGLE_ADS_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/google-ads/oauth/callback`,
 
+  // ── Zoho CRM (real OAuth2, platform-level client app -- same "one app
+  // per company, each tenant connects their own org" model as Google Ads
+  // above). SOURCE: real Zoho API docs. Defaults to the India domain
+  // since this product's primary market is India -- override via
+  // ZOHO_ACCOUNTS_DOMAIN for a tenant base in another region. ──────────
+  ZOHO_CLIENT_ID:         process.env.ZOHO_CLIENT_ID || null,
+  ZOHO_CLIENT_SECRET:     process.env.ZOHO_CLIENT_SECRET || null,
+  ZOHO_ACCOUNTS_DOMAIN:   process.env.ZOHO_ACCOUNTS_DOMAIN || 'https://accounts.zoho.in',
+  ZOHO_OAUTH_REDIRECT_URI: process.env.ZOHO_OAUTH_REDIRECT_URI || `${process.env.API_BASE_URL || 'http://localhost:4000'}/api/integrations/zoho/oauth/callback`,
+
+
   // Real Meta Business app credentials for Marketing API (ads reporting)
   // access -- platform-level (InnovateX's own Meta app), NOT stored
   // per-tenant, same "one app per company" model as Google Ads above.
