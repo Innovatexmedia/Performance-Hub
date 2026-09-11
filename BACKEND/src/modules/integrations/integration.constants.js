@@ -96,8 +96,9 @@ export const INTEGRATION_CATALOG = Object.freeze([
   { key: 'twilio_voice', name: 'Twilio Voice', category: INTEGRATION_CATEGORY.CALLS, description: 'Voice calling and call recording API.', logo_color: '#F22F46', available: true },
   { key: 'exotel',       name: 'Exotel',       category: INTEGRATION_CATEGORY.CALLS, description: 'Cloud telephony for sales and support calls.', logo_color: '#FF6B35', available: true },
 
-  // CRM/Ads (2) - "coming soon"
+  // CRM/Ads (3) - "coming soon"
   { key: 'salesforce', name: 'Salesforce', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Sync leads and deals with Salesforce CRM.', logo_color: '#00A1E0', available: false },
+  { key: 'zoho',        name: 'Zoho CRM',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Pull leads from your Zoho CRM into InnovateX.', logo_color: '#E42527', available: true },
   { key: 'google_ads',  name: 'Google Ads', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real-time conversion tracking via GA4 Measurement Protocol.', logo_color: '#4285F4', available: true },
   { key: 'meta_ads',    name: 'Meta Ads',   category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Server-side conversion tracking via Meta Conversions API.', logo_color: '#0866FF', available: true },
   { key: 'google_ads_campaigns', name: 'Google Ads Campaigns', category: INTEGRATION_CATEGORY.CRM_ADS, description: 'Real campaign, spend, and conversion sync via the official Google Ads API.', logo_color: '#34A853', available: true },

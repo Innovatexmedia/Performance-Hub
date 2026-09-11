@@ -42,6 +42,8 @@ import { calcomSettingsService } from '../bookings/calcomSettings.service.js';
 import ShopifySettings from '../shopify/shopifySettings.model.js';
 import { shopifySettingsService } from '../shopify/shopifySettings.service.js';
 import { sendgridSettingsService } from '../email/sendgridSettings.service.js';
+import { metaAdsSettingsService } from '../attribution/metaAdsSettings.service.js';
+import { zohoSettingsService } from './zoho/zohoSettings.service.js';
 import config from '../../config/config.js';
 
 // =============================================================================
@@ -65,6 +67,10 @@ const SHOPIFY_KEY = 'shopify';
 const TWILIO_WA_KEY = 'twilio_wa';
 const INTERAKT_KEY = 'interakt';
 const GEMINI_KEY = 'gemini';
+const OPENAI_KEY = 'openai';
+const CLAUDE_KEY = 'claude';
+const ZOHO_KEY = 'zoho';
+const META_ADS_CAMPAIGNS_KEY = 'meta_ads_campaigns';
 
 // =============================================================================
 // GEMINI — real key verification
@@ -92,6 +98,53 @@ const verifyGeminiApiKey = async (apiKey) => {
     // Non-JSON error body -- keep the generic HTTP-status reason above.
   }
   throw AppError.badRequest(`Gemini rejected this API key: ${reason}`);
+};
+
+// =============================================================================
+// OPENAI — real key verification
+// =============================================================================
+// Same real-verification standard as Gemini above. Uses OpenAI's own
+// models-list endpoint (platform.openai.com/docs/api-reference/models) --
+// genuinely requires a valid key (401 on a bad one), no completion tokens spent.
+const verifyOpenAiApiKey = async (apiKey) => {
+  const response = await fetch('https://api.openai.com/v1/models', {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  if (response.ok) return;
+
+  let reason = `HTTP ${response.status}`;
+  try {
+    const body = await response.json();
+    if (body?.error?.message) reason = body.error.message;
+  } catch {
+    // Non-JSON error body -- keep the generic HTTP-status reason above.
+  }
+  throw AppError.badRequest(`OpenAI rejected this API key: ${reason}`);
+};
+
+// =============================================================================
+// CLAUDE (Anthropic) — real key verification
+// =============================================================================
+// Same real-verification standard as Gemini/OpenAI above. Uses Anthropic's
+// own real models-list endpoint (docs.anthropic.com/en/api/models-list) --
+// genuinely requires a valid key (401 on a bad one), no message tokens spent.
+const verifyClaudeApiKey = async (apiKey) => {
+  const response = await fetch('https://api.anthropic.com/v1/models', {
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+  });
+  if (response.ok) return;
+
+  let reason = `HTTP ${response.status}`;
+  try {
+    const body = await response.json();
+    if (body?.error?.message) reason = body.error.message;
+  } catch {
+    // Non-JSON error body -- keep the generic HTTP-status reason above.
+  }
+  throw AppError.badRequest(`Claude rejected this API key: ${reason}`);
 };
 
 /** Builds a ctx shape matching what whatsappSettingsService expects, from this module's (tenantId, userId) pair. */
@@ -180,7 +233,21 @@ const overlayRealPlatformStatus = (doc) => {
 };
 
 const overlayRealAdTrackingStatus = async (tenantId, userId, doc) => {
-  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== CALCOM_KEY && doc.key !== SHOPIFY_KEY && doc.key !== SENDGRID_NURTURE_KEY)) return doc;
+  if (!doc || (doc.key !== META_ADS_KEY && doc.key !== GOOGLE_ADS_KEY && doc.key !== GOOGLE_ADS_CAMPAIGNS_KEY && doc.key !== META_ADS_CAMPAIGNS_KEY && doc.key !== ZOHO_KEY && doc.key !== CALCOM_KEY && doc.key !== SHOPIFY_KEY && doc.key !== SENDGRID_NURTURE_KEY)) return doc;
+
+  if (doc.key === ZOHO_KEY) {
+    const settings = await zohoSettingsService.getSettings({ tenantId, userId });
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.lastSyncedAt || null;
+    overlaid.config = {
+      orgName: settings.orgName || '',
+      hasRefreshToken: settings.hasRefreshToken || false,
+      lastSyncLeadCount: settings.lastSyncLeadCount || 0,
+      lastSyncError: settings.lastSyncError || null,
+    };
+    return overlaid;
+  }
 
   if (doc.key === SENDGRID_NURTURE_KEY) {
     const settings = await sendgridSettingsService.getSettings(tenantId);
@@ -240,6 +307,20 @@ const overlayRealAdTrackingStatus = async (tenantId, userId, doc) => {
     return overlaid;
   }
 
+  if (doc.key === META_ADS_CAMPAIGNS_KEY) {
+    const settings = await metaAdsSettingsService.getSettings({ tenantId, userId });
+    const overlaid = doc.toObject ? doc.toObject() : { ...doc };
+    overlaid.status = settings.connected ? INTEGRATION_STATUS.CONNECTED : INTEGRATION_STATUS.DISCONNECTED;
+    overlaid.last_sync = settings.lastSyncedAt || null;
+    overlaid.config = {
+      accountName: settings.accountName || '',
+      adAccountId: settings.adAccountId || '',
+      hasAccessToken: settings.hasAccessToken || false,
+      lastSyncError: settings.lastSyncError || null,
+    };
+    return overlaid;
+  }
+
   const settings = await adTrackingSettingsService.getSettings({ tenantId, userId });
   const overlaid = doc.toObject ? doc.toObject() : { ...doc };
 
@@ -289,8 +370,8 @@ const hasRealConfig = (config) => {
  */
 const REAL_INTEGRATION_KEYS = new Set([
   META_CLOUD_KEY, DIALOG360_KEY, TWILIO_WA_KEY, INTERAKT_KEY,
-  META_ADS_KEY, GOOGLE_ADS_KEY, GOOGLE_ADS_CAMPAIGNS_KEY, CALCOM_KEY, SHOPIFY_KEY, SENDGRID_NURTURE_KEY,
-  SENDGRID_KEY,
+  META_ADS_KEY, GOOGLE_ADS_KEY, GOOGLE_ADS_CAMPAIGNS_KEY, META_ADS_CAMPAIGNS_KEY, CALCOM_KEY, SHOPIFY_KEY, SENDGRID_NURTURE_KEY,
+  SENDGRID_KEY, ZOHO_KEY,
 ]);
 
 /**
@@ -526,6 +607,30 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
+  if (existing.key === META_ADS_CAMPAIGNS_KEY) {
+    const settings = await metaAdsSettingsService.getSettings({ tenantId, userId });
+    if (settings.connected) {
+      await metaAdsSettingsService.disconnect({ tenantId, userId });
+    } else {
+      throw AppError.badRequest(
+        'Connect your real Meta Ads account first — this uses Meta\u2019s real OAuth consent flow, not a single click, since it requires you to explicitly authorize access with your own Meta Business account.',
+      );
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
+  if (existing.key === ZOHO_KEY) {
+    const settings = await zohoSettingsService.getSettings({ tenantId, userId });
+    if (settings.connected) {
+      await zohoSettingsService.disconnect({ tenantId, userId });
+    } else {
+      throw AppError.badRequest(
+        'Connect your real Zoho CRM account first — this uses Zoho\u2019s real OAuth consent flow, not a single click, since it requires you to explicitly authorize access with your own Zoho account.',
+      );
+    }
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
   if (existing.key === GEMINI_KEY) {
     // Real disconnect: genuinely clears the stored key rather than just
     // flipping a status flag, so a "disconnected" card can never still
@@ -541,6 +646,36 @@ export const toggleIntegration = async (tenantId, userId, id) => {
     }
     throw AppError.badRequest(
       'Enter your real Gemini API key in Settings first — this card cannot be connected with a single click, since it requires real verification against Google\u2019s own API.',
+    );
+  }
+
+  if (existing.key === OPENAI_KEY) {
+    // Same real-disconnect pattern as Gemini above.
+    if (existing.status === INTEGRATION_STATUS.CONNECTED) {
+      return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+        config: {},
+        status: INTEGRATION_STATUS.DISCONNECTED,
+        last_sync: new Date(),
+        updated_by: userId,
+      }));
+    }
+    throw AppError.badRequest(
+      'Enter your real OpenAI API key in Settings first — this card cannot be connected with a single click, since it requires real verification against OpenAI\u2019s own API.',
+    );
+  }
+
+  if (existing.key === CLAUDE_KEY) {
+    // Same real-disconnect pattern as Gemini above.
+    if (existing.status === INTEGRATION_STATUS.CONNECTED) {
+      return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+        config: {},
+        status: INTEGRATION_STATUS.DISCONNECTED,
+        last_sync: new Date(),
+        updated_by: userId,
+      }));
+    }
+    throw AppError.badRequest(
+      'Enter your real Anthropic Claude API key in Settings first — this card cannot be connected with a single click, since it requires real verification against Anthropic\u2019s own API.',
     );
   }
 
@@ -613,6 +748,22 @@ export const syncIntegration = async (tenantId, userId, id) => {
     return { ...overlaid, _syncResult: result };
   }
 
+  if (existing.key === META_ADS_CAMPAIGNS_KEY) {
+    // Real Marketing API Insights pull -- see metaAdsSettings.service.js's
+    // syncCampaigns for the actual API call and campaign-metric storage.
+    const result = await metaAdsSettingsService.syncCampaigns({ tenantId, userId });
+    const overlaid = await overlayRealAdTrackingStatus(tenantId, userId, existing);
+    return { ...overlaid, _syncResult: result };
+  }
+
+  if (existing.key === ZOHO_KEY) {
+    // Real, one-way Leads pull -- see zohoSettings.service.js's
+    // syncLeads for the actual API calls and Lead create/match logic.
+    const result = await zohoSettingsService.syncLeads({ tenantId, userId });
+    const overlaid = await overlayRealAdTrackingStatus(tenantId, userId, existing);
+    return { ...overlaid, _syncResult: result };
+  }
+
   if (existing.key === GEMINI_KEY) {
     if (existing.status !== INTEGRATION_STATUS.CONNECTED) {
       throw AppError.badRequest('Cannot sync a disconnected integration');
@@ -626,6 +777,34 @@ export const syncIntegration = async (tenantId, userId, id) => {
     const apiKey = stored?.config?.api_key;
     if (!apiKey) throw AppError.badRequest('No Gemini API key saved for this workspace');
     await verifyGeminiApiKey(apiKey);
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
+  }
+
+  if (existing.key === OPENAI_KEY) {
+    if (existing.status !== INTEGRATION_STATUS.CONNECTED) {
+      throw AppError.badRequest('Cannot sync a disconnected integration');
+    }
+    const stored = await integrationRepo.findByKey(tenantId, OPENAI_KEY);
+    const apiKey = stored?.config?.api_key;
+    if (!apiKey) throw AppError.badRequest('No OpenAI API key saved for this workspace');
+    await verifyOpenAiApiKey(apiKey);
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
+  }
+
+  if (existing.key === CLAUDE_KEY) {
+    if (existing.status !== INTEGRATION_STATUS.CONNECTED) {
+      throw AppError.badRequest('Cannot sync a disconnected integration');
+    }
+    const stored = await integrationRepo.findByKey(tenantId, CLAUDE_KEY);
+    const apiKey = stored?.config?.api_key;
+    if (!apiKey) throw AppError.badRequest('No Claude API key saved for this workspace');
+    await verifyClaudeApiKey(apiKey);
     return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
       last_sync: new Date(),
       updated_by: userId,
@@ -781,6 +960,15 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     return overlayRealAdTrackingStatus(tenantId, userId, existing);
   }
 
+  if (existing.key === META_ADS_CAMPAIGNS_KEY) {
+    const { adAccountId, accountName } = configPatch || {};
+    if (!adAccountId) {
+      throw AppError.badRequest('adAccountId is required — complete Meta authorization first to see your real account list.');
+    }
+    await metaAdsSettingsService.selectAccount({ tenantId, userId }, adAccountId, accountName || '');
+    return overlayRealAdTrackingStatus(tenantId, userId, existing);
+  }
+
   if (existing.key === GEMINI_KEY) {
     const { api_key } = configPatch || {};
     if (!api_key || !api_key.trim()) {
@@ -798,6 +986,34 @@ export const updateIntegrationConfig = async (tenantId, userId, id, configPatch)
     // connected in the same step, since "connected" here now actually
     // means "we just confirmed this with Google", not "a toggle button
     // was clicked afterwards".
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      config: { api_key: api_key.trim() },
+      status: INTEGRATION_STATUS.CONNECTED,
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
+  }
+
+  if (existing.key === OPENAI_KEY) {
+    const { api_key } = configPatch || {};
+    if (!api_key || !api_key.trim()) {
+      throw AppError.badRequest('Enter your real OpenAI API key first.');
+    }
+    await verifyOpenAiApiKey(api_key.trim());
+    return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
+      config: { api_key: api_key.trim() },
+      status: INTEGRATION_STATUS.CONNECTED,
+      last_sync: new Date(),
+      updated_by: userId,
+    }));
+  }
+
+  if (existing.key === CLAUDE_KEY) {
+    const { api_key } = configPatch || {};
+    if (!api_key || !api_key.trim()) {
+      throw AppError.badRequest('Enter your real Claude API key first.');
+    }
+    await verifyClaudeApiKey(api_key.trim());
     return stripUnsafeGenericConfig(await integrationRepo.update(tenantId, id, {
       config: { api_key: api_key.trim() },
       status: INTEGRATION_STATUS.CONNECTED,
