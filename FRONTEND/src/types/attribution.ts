@@ -96,6 +96,22 @@ export interface AdSpendCampaign {
   campaignName: string;
   status: string | null;
   channelType: string | null;
+  /** Always the workspace's own display currency (Settings' currency
+   * selector) -- real conversion happens server-side, this is never the
+   * ad account's own raw billing currency. */
+  currency: string;
+  /** Real, unconverted figures the ad platform actually reported, in
+   * ITS OWN billing currency -- kept for transparency/audit. */
+  spendOriginal: number;
+  currencyOriginal: string | null;
+  /** Real rate used to convert spendOriginal -> spend, or null if a
+   * conversion was needed but couldn't be resolved right now. */
+  exchangeRate: number | null;
+  /** True only when a real conversion was needed but genuinely could
+   * not be resolved right now (rate service unreachable, no cached
+   * fallback) -- `roas` is null and `spend`/`conversionsValue` reflect
+   * the UNCONVERTED original in this case. */
+  currencyMismatch: boolean;
   spend: number;
   clicks: number;
   impressions: number;
@@ -108,8 +124,18 @@ export interface AdSpendCampaign {
 
 export interface AdSpendSummary {
   connected: boolean;
+  /** Real workspace display currency every figure below is denominated
+   * in (Settings' currency selector) -- present even when connected is
+   * false is not guaranteed, only meaningful alongside real campaigns. */
+  currency?: string;
   totalSpend: number;
   totalConversions: number;
+  /** Real accounting for campaigns whose spend could NOT be safely
+   * converted (unknown ad-account currency, or exchange rate genuinely
+   * unavailable right now) -- their spend is shown on their own row but
+   * deliberately excluded from totalSpend above to avoid a meaningless
+   * mixed-currency sum. Empty/zero when every campaign converted fine. */
+  excludedFromTotal?: { count: number; campaignNames: string[] };
   lastSyncedAt: string | null;
   campaigns: AdSpendCampaign[];
 }

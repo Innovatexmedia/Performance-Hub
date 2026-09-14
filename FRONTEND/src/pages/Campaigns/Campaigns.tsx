@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { Plus, Megaphone, Copy, Link2, Download } from 'lucide-react';
 import { PageHeader, Card, CardHeader, Button, Badge, StatusBadge, Table, Th, Td, Tr, Modal, Field, Input, Select, EmptyState } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
@@ -73,6 +74,17 @@ export function Campaigns() {
           data={chartData.map((c) => ({ name: c.campaign_name.slice(0, 12), value: c.revenue }))}
         />
       </div>
+
+      {/* Moved to Integrations page (Google Ads Campaigns / Meta Ads
+          Campaigns cards) -- shown right alongside connecting the
+          account, as "Step 2 of 2", so both real steps needed for a
+          working Google/Meta setup live in ONE place instead of being
+          split across two pages. This is just a pointer for anyone who
+          lands here first. */}
+      <Card className="mb-4 flex items-center justify-between p-4">
+        <p className="text-sm text-ink-600">Setting up Google Ads or Meta Ads? Connect the account <em>and</em> the one-time tracking link together, in one place.</p>
+        <Link to="/integrations"><Button variant="secondary">Go to Integrations</Button></Link>
+      </Card>
 
       <Card>
         <CardHeader title="All Campaigns" subtitle="Click the link icon to copy a UTM tracking URL" />

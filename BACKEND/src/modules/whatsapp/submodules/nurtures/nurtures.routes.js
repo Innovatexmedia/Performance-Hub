@@ -124,4 +124,11 @@ router.post('/:id/enroll',
   validateEnroll, nurturesController.enroll,
 );
 
+// ── Enroll all currently-matching existing leads (manual re-run) ─────────────
+
+router.post('/:id/enroll-matching',
+  authenticate, requireRole(ROLE_MIN.ENROLL),
+  validateIdParam, nurturesController.enrollMatching,
+);
+
 export default router;

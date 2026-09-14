@@ -12,9 +12,30 @@ import {
   NURTURE_CHANNEL,
   NURTURE_CHANNEL_VALUES,
   NURTURE_TRIGGER_TEMPERATURE_VALUES,
+  CONDITION_OPERATOR_VALUES,
+  CONDITION_LOGIC,
+  CONDITION_LOGIC_VALUES,
 } from './nurtures.constants.js';
 
 const { Schema } = mongoose;
+
+// ── Trigger condition sub-schema ────────────────────────────────────────────────
+// Same real shape as Automation Rules' own conditionSchema (field/
+// operator/value/label) -- both are evaluated by the exact same shared
+// engine (src/shared/services/conditionEngine.js), so this is
+// deliberately not a new invented shape. Only meaningful when
+// triggerType === LEAD_CREATED right now (LEAD_QUALIFIED keeps using
+// its own existing, simpler qualificationTemperature field below --
+// that one real, narrower case doesn't need the general engine).
+const conditionSchema = new Schema(
+  {
+    field:    { type: String, required: true },   // e.g. "utm_source", "tags", "source"
+    operator: { type: String, enum: CONDITION_OPERATOR_VALUES, required: true },
+    value:    { type: Schema.Types.Mixed, default: null },
+    label:    { type: String, default: '' },
+  },
+  { _id: false },
+);
 
 // ── Step sub-schema (embedded in Sequence) ────────────────────────────────────
 // channel defaults to WHATSAPP -- every step document already in the
@@ -130,6 +151,18 @@ const nurtureSequenceSchema = new Schema(
     // AI Qualification's real scoring flow checks this field, it isn't a
     // hardcoded mapping invented here.
     qualificationTemperature: { type: String, enum: [...NURTURE_TRIGGER_TEMPERATURE_VALUES, null], default: null },
+
+    // Real, general-purpose trigger conditions -- only meaningful when
+    // triggerType === LEAD_CREATED. Empty array = "applies to every new
+    // lead", identical to this feature's original (pre-condition-builder)
+    // behavior, so an existing sequence with no conditions configured
+    // keeps working exactly as it did before this was added. See
+    // lead/lead.service.js's createLead() for where this actually gets
+    // evaluated at enrollment time, and nurtures.service.js's
+    // enrollMatchingLeads() for the "also apply to already-existing
+    // leads" bulk pass.
+    conditions:     { type: [conditionSchema], default: [] },
+    conditionLogic: { type: String, enum: CONDITION_LOGIC_VALUES, default: CONDITION_LOGIC.AND },
 
     // Real webhook trigger auth -- a long, unguessable, per-sequence
     // token. Generated on first request (not eagerly on every sequence),

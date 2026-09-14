@@ -33,6 +33,21 @@ const leadSchema = new Schema(
     utm_campaign: { type: String, trim: true },
     utm_content: { type: String, trim: true },
     utm_term: { type: String, trim: true },
+    // Real ad-group/ad-set and individual ad identifiers -- captured
+    // automatically via Google Ads ValueTrack parameters ({adgroupid},
+    // {creative}) or Meta's dynamic URL macros ({{adset.id}}, {{ad.id}}),
+    // NOT typed manually per lead. See campaign.service.js's
+    // generateGoogleAdsUrlSuffix/generateMetaAdsUrlTags for the real,
+    // one-time-per-platform tracking template a tenant pastes into
+    // their Google Ads/Meta Ads account settings, after which every
+    // real ad click automatically fills these in.
+    ad_group_id: { type: String, trim: true, default: null },
+    ad_id:       { type: String, trim: true, default: null },
+    // Real Google/Meta click identifier (gclid/fbclid) -- captured
+    // when present, not required. Useful for exact click-level
+    // reconciliation against each platform's own reporting, beyond
+    // what campaign/ad-group/ad IDs alone provide.
+    click_id:    { type: String, trim: true, default: null },
 
     // Lifecycle
     status: { type: String, enum: LEAD_STATUS_VALUES, default: LEAD_STATUS.NEW },

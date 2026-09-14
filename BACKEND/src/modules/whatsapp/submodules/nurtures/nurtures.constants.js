@@ -4,6 +4,9 @@
  * Covers both the Sequence and its Enrollments.
  */
 import { ROLES } from '../../../auth/constants/roles.js';
+import { CONDITION_OPERATOR, CONDITION_OPERATOR_VALUES, CONDITION_LOGIC, CONDITION_LOGIC_VALUES } from '../automationRules/automationRules.constants.js';
+
+export { CONDITION_OPERATOR, CONDITION_OPERATOR_VALUES, CONDITION_LOGIC, CONDITION_LOGIC_VALUES };
 
 // ── Sequence status ────────────────────────────────────────────────────────────
 export const SEQUENCE_STATUS = Object.freeze({
@@ -122,6 +125,62 @@ export const API_REQUEST_METHODS = Object.freeze(['GET', 'POST', 'PUT', 'PATCH',
 // should map to -- that mapping is a real business decision for the
 // tenant to make via the sequence builder, not something to hardcode here.
 export const NURTURE_TRIGGER_TEMPERATURE_VALUES = Object.freeze(['Cold', 'Warm']);
+
+// ── Real, curated LEAD_CREATED trigger-condition fields ─────────────────────────
+// Every field here is a REAL, already-populated Lead schema field (see
+// leads/lead/lead.model.js) -- audited directly against the schema, not
+// invented. Curated (a dropdown of known-real fields) rather than a raw
+// free-text field path like Automation Rules' condition builder uses,
+// per the explicit ask for "multiple SELECTABLE criteria". `type` tells
+// the frontend which operators/input make sense for that field (e.g. a
+// tags multi-select vs a plain text box); the backend condition engine
+// itself doesn't care and will happily evaluate any field/operator pair
+// regardless of this hint.
+//
+// NOTE ON GOOGLE ADS / META ADS: neither integration writes anything
+// onto the Lead document itself (confirmed by reading
+// googleAdsSettings/metaAdsSettings/googleAdsCampaignMetric/
+// metaAdsCampaignMetric -- they only sync spend/conversion METRICS for
+// the Attribution dashboard, they never create or touch a Lead record).
+// A lead genuinely "from Google/Meta Ads" is identified the same way
+// Attribution's own dashboard already identifies one: by its real
+// utm_source/source/medium values, captured at the real point of
+// creation (the public Capture Form endpoint, or however else a lead's
+// source got set on create) -- see CommonSourceValue below for the
+// actual values already in real use elsewhere in this codebase.
+export const NURTURE_LEAD_CONDITION_FIELDS = Object.freeze([
+  { field: 'source',               label: 'Lead Source',          type: 'text' },
+  { field: 'medium',                label: 'Medium',                type: 'text' },
+  { field: 'campaign',              label: 'Campaign',              type: 'text' },
+  { field: 'utm_source',            label: 'UTM Source',            type: 'text' },
+  { field: 'utm_medium',            label: 'UTM Medium',            type: 'text' },
+  { field: 'utm_campaign',          label: 'UTM Campaign',          type: 'text' },
+  { field: 'utm_content',           label: 'UTM Content',           type: 'text' },
+  { field: 'utm_term',              label: 'UTM Term',              type: 'text' },
+  { field: 'ad_group_id',           label: 'Ad Group / Ad Set ID',  type: 'text' },
+  { field: 'ad_id',                 label: 'Ad ID',                 type: 'text' },
+  { field: 'tags',                  label: 'Tags',                  type: 'array' },
+  { field: 'status',                label: 'Lead Status',           type: 'text' },
+  { field: 'lead_temperature',      label: 'Lead Temperature',      type: 'text' },
+  { field: 'qualification_score',   label: 'Qualification Score',   type: 'number' },
+  { field: 'company',               label: 'Company',               type: 'text' },
+  { field: 'segment',               label: 'Segment',               type: 'text' },
+]);
+
+// Real, commonly-occurring source/medium/utm_source values ALREADY
+// produced elsewhere in this codebase (Shopify: source:'Shopify' --
+// shopifySettings.service.js; Zoho: source:'Zoho CRM' --
+// zohoSettings.service.js; Cal.com booking-originated leads; the public
+// Capture Form, which stores whatever utm_source/utm_campaign the
+// visiting URL actually carried, e.g. "google"/"facebook"/"instagram"
+// per how the ad's landing-page link was tagged). This is a real,
+// non-exhaustive suggestion list for the frontend's condition-value
+// input (a datalist, not a hard enum) -- a tenant's own ad campaigns can
+// tag UTMs however they choose, so the value field always stays a real
+// free-text input, never a closed dropdown.
+export const NURTURE_COMMON_SOURCE_VALUES = Object.freeze([
+  'Meta Ads', 'Google Ads', 'Facebook', 'Instagram', 'Google', 'Website', 'WhatsApp', 'Shopify', 'Zoho CRM', 'Referral', 'Manual',
+]);
 
 // ── Sequence audit actions ─────────────────────────────────────────────────────
 export const SEQUENCE_ACTION = Object.freeze({

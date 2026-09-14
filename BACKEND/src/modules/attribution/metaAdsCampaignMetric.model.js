@@ -41,6 +41,10 @@ const metaAdsCampaignMetricSchema = new Schema(
     impressions:      { type: Number, default: 0 },
     clicks:            { type: Number, default: 0 },
     spend:             { type: Number, default: 0 },      // real currency amount, Meta returns this already in account currency (no micros conversion needed, unlike Google)
+    // Real ISO 4217 code for the Meta ad ACCOUNT this spend is billed in
+    // -- NOT assumed to match the tenant's own workspace currency
+    // (Tenant.currency). See attribution.service.js's getAdSpendSummary.
+    currency:          { type: String, default: null },
     conversions:       { type: Number, default: 0 },
     conversionsValue:  { type: Number, default: 0 },
     ctr:               { type: Number, default: 0 },

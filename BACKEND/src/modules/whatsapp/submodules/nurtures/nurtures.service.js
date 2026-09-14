@@ -6,6 +6,8 @@
  * nextExecutionAt is calculated from the step delay at enrol / resume time.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { evaluateConditions } from '../../../../shared/services/conditionEngine.js';
+import { Lead } from '../../../leads/lead/lead.model.js';
 import { activityService } from '../../../leads/activities/activity.service.js';
 import { ACTIVITY_TYPE }   from '../../../leads/activities/activity.model.js';
 import { templateApprovalService } from '../templateApproval/templateApproval.service.js';
@@ -20,6 +22,7 @@ import {
   ENROLLMENT_ALLOWED_TRANSITIONS,
   DELAY_UNIT_MS,
   NURTURE_CHANNEL,
+  TRIGGER_TYPE,
   SEARCHABLE_FIELDS,
   SORTABLE_FIELDS,
   DEFAULT_PAGE,
@@ -295,6 +298,23 @@ export const nurturesService = {
       performedBy: ctx.userId, auditEntry,
     });
     await logSeq(ctx, updated, ACTIVITY_TYPE.WHATSAPP_NURTURE_ACTIVATED, 'Nurture sequence activated');
+
+    // Real "also apply to already-existing leads" pass -- only when
+    // there's an actual, real criteria set to match against (a
+    // LEAD_CREATED sequence with conditions configured). Deliberately
+    // NOT run for a bare LEAD_CREATED sequence with zero conditions
+    // (that would mean "enroll literally every existing lead in the
+    // workspace", a surprising, unbounded action to trigger silently
+    // just from clicking Activate) and not for MANUAL/other trigger
+    // types, which have no matching concept at all. Fire-and-forget,
+    // same reasoning as lead.service.js's own LEAD_CREATED auto-enroll:
+    // a failure here must never fail activation itself.
+    if (updated.triggerType === TRIGGER_TYPE.LEAD_CREATED && Array.isArray(updated.conditions) && updated.conditions.length > 0) {
+      this.enrollMatchingLeads(ctx, id).catch((err) => {
+        console.warn(`[nurture] enrollMatchingLeads-on-activate failed for sequence ${id}: ${err.message}`);
+      });
+    }
+
     return toDTO(updated);
   },
 
@@ -385,6 +405,63 @@ export const nurturesService = {
     await logEnrl(ctx, enrollment, ACTIVITY_TYPE.WHATSAPP_NURTURE_ENROLLMENT_CREATED,
       'Lead enrolled in nurture sequence', { leadId, contactId, sequenceId });
     return toDTO(enrollment);
+  },
+
+  /**
+   * enrollMatchingLeads — the real "also apply to already-existing
+   * leads" pass. Called explicitly (a "Enroll matching leads now"
+   * action in the sequence builder) and automatically once, the moment
+   * a LEAD_CREATED sequence with real conditions configured is first
+   * activated (DRAFT -> ACTIVE) -- see activateSequence() below.
+   *
+   * Reuses enrollLead() per matched lead rather than a bulk insert, so
+   * every real safeguard that function already has (ACTIVE-sequence
+   * check, active-steps check, the DB-level partial-unique-index dedup)
+   * applies here identically -- a lead already enrolled is silently
+   * skipped (not an error for the caller), same as any other duplicate-
+   * enrollment attempt already behaves elsewhere in this file.
+   *
+   * Only ever matches leads BELONGING TO THIS TENANT and not archived --
+   * mirrors every other real lead query in this codebase.
+   */
+  async enrollMatchingLeads(ctx, sequenceId) {
+    const sequence = await nurturesRepository.findById(ctx.tenantId, sequenceId);
+    if (!sequence) throw new AppError(404, 'Nurture sequence not found');
+    if (sequence.status !== SEQUENCE_STATUS.ACTIVE) {
+      throw new AppError(409, 'Only ACTIVE sequences can enroll matching leads');
+    }
+
+    const leads = await Lead.find({ tenant_id: String(ctx.tenantId), archived: false }).lean();
+
+    let enrolled = 0;
+    let alreadyEnrolled = 0;
+    let failed = 0;
+
+    for (const lead of leads) {
+      const { passed } = evaluateConditions(sequence.conditions, sequence.conditionLogic, lead);
+      if (!passed) continue;
+
+      try {
+        await this.enrollLead(ctx, sequenceId, { leadId: String(lead._id) });
+        enrolled += 1;
+      } catch (err) {
+        if (err.statusCode === 409) {
+          // Real, expected outcome for a lead already active in this
+          // sequence -- not a failure, just nothing new to do.
+          alreadyEnrolled += 1;
+        } else {
+          failed += 1;
+          console.warn(`[nurture] enrollMatchingLeads failed for lead ${lead._id}, sequence ${sequenceId}: ${err.message}`);
+        }
+      }
+    }
+
+    return {
+      matched: enrolled + alreadyEnrolled + failed,
+      enrolled,
+      alreadyEnrolled,
+      failed,
+    };
   },
 
   async getEnrollment(ctx, id) {

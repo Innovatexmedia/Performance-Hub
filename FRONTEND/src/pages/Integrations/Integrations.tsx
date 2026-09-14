@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle } from 'lucide-react';
+import { RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle, Copy } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useIntegrations } from '@/hooks/useIntegrations';
 import { integrationsApi } from '@/lib/integrationsApi';
+import { campaignsApi } from '@/lib/campaignsApi';
+import type { AdPlatformTrackingSetup } from '@/lib/campaignsApi';
 import { integrationPermissions } from '@/lib/permissions';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -29,6 +31,11 @@ export function Integrations() {
 
   const [googleAdsAccountPicker, setGoogleAdsAccountPicker] = useState<string[] | null>(null);
   const [metaAdsAccountPicker, setMetaAdsAccountPicker] = useState<{ adAccountId: string; accountName: string }[] | null>(null);
+  const [trackingSetup, setTrackingSetup] = useState<AdPlatformTrackingSetup | null>(null);
+
+  useEffect(() => {
+    campaignsApi.getAdPlatformTrackingSetup().then(setTrackingSetup).catch(() => {});
+  }, []);
   const [selectingAccount, setSelectingAccount] = useState(false);
 
   useEffect(() => {
@@ -85,8 +92,16 @@ export function Integrations() {
     setSelectingAccount(true);
     try {
       await updateConfig(card.id, { clientCustomerId: customerId });
-      toast.success('Google Ads account connected', `Account ${customerId} is now linked. Click Sync to pull real campaign data.`);
+      toast.success('Google Ads account connected', `Account ${customerId} is now linked.`);
       setGoogleAdsAccountPicker(null);
+      // Immediately shows Step 2 (the one-time tracking setup) so the
+      // tenant never has to go hunting for it -- connecting the
+      // integration and setting up lead attribution are two genuinely
+      // separate real things (see the info panel below), and surfacing
+      // both together, right when it's most relevant, is what actually
+      // removes the "which page do I need" confusion.
+      const updated = integrations.find((i) => i.key === 'google_ads_campaigns');
+      if (updated) openConfig(updated);
     } catch (err) {
       toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
     } finally {
@@ -100,8 +115,11 @@ export function Integrations() {
     setSelectingAccount(true);
     try {
       await updateConfig(card.id, { adAccountId, accountName });
-      toast.success('Meta Ads account connected', `${accountName || adAccountId} is now linked. Click Sync to pull real campaign data.`);
+      toast.success('Meta Ads account connected', `${accountName || adAccountId} is now linked.`);
       setMetaAdsAccountPicker(null);
+      // Same reasoning as the Google Ads handler above.
+      const updated = integrations.find((i) => i.key === 'meta_ads_campaigns');
+      if (updated) openConfig(updated);
     } catch (err) {
       toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
     } finally {
@@ -188,6 +206,9 @@ export function Integrations() {
     setConfig(i);
     if (i.key === 'google_ads_campaigns') {
       return; // no form -- the JSX below shows real read-only connection info for this key
+    }
+    if (i.key === 'meta_ads_campaigns') {
+      return; // no form -- OAuth-only, the JSX below shows real read-only connection info
     }
     if (i.key === 'zoho') {
       return; // no form -- OAuth-only, the JSX below shows real read-only connection info
@@ -416,7 +437,7 @@ export function Integrations() {
       {config && (
         <Modal
           open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={(config.key === 'google_ads_campaigns' || config.key === 'zoho' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
+          footer={(config.key === 'google_ads_campaigns' || config.key === 'meta_ads_campaigns' || config.key === 'zoho' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
             ? <Button variant="secondary" onClick={() => setConfig(null)}>Close</Button>
             : <><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
         >
@@ -556,18 +577,84 @@ export function Integrations() {
               )}
             </div>
           ) : config.key === 'google_ads_campaigns' ? (
-            <div className="space-y-3 text-sm">
-              <p className="text-xs text-ink-500">Real campaign, spend, and conversion data synced via the official Google Ads API — connected through Google's own OAuth consent screen, not an API key typed here.</p>
-              {config.config.clientCustomerId ? (
-                <>
-                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Connected account</p><p className="font-medium text-ink-900">{String(config.config.clientCustomerId).replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}</p></div>
-                  {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                    <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
-                  )}
-                </>
-              ) : (
-                <p className="text-ink-400">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
-              )}
+            <div className="space-y-4 text-sm">
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 size={13} /> Step 1 of 2 — Account connected</p>
+                {config.config.clientCustomerId ? (
+                  <p className="mt-1 text-sm font-medium text-ink-900">{String(config.config.clientCustomerId).replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}</p>
+                ) : (
+                  <p className="mt-1 text-ink-500">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
+                )}
+                <p className="mt-1 text-xs text-ink-400">This connects real campaign spend/clicks/conversions to your Attribution dashboard.</p>
+                {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-800">Step 2 of 2 — One-time tracking setup (do this too)</p>
+                <p className="mt-1 text-xs text-ink-500">Step 1 alone only reports how much you spent. This step is what makes each real ad click create a correctly-tagged Lead — do it once, and every future ad automatically carries the right campaign/ad-group/ad data. Without it, leads from Google Ads won't show their real source.</p>
+                {trackingSetup ? (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <p className="text-xs text-ink-400">A. Set as your ad's (or account/campaign default) Final URL</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.google.finalUrl}</code>
+                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.google.finalUrl); toast.success('Final URL copied'); }}><Copy size={13} /></Button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-ink-400">B. Paste once under Google Ads → Settings → Account Settings → Tracking → "Final URL suffix"</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.google.finalUrlSuffix}</code>
+                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.google.finalUrlSuffix); toast.success('Final URL suffix copied'); }}><Copy size={13} /></Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-ink-400">Loading your tracking setup…</p>
+                )}
+              </div>
+            </div>
+          ) : config.key === 'meta_ads_campaigns' ? (
+            <div className="space-y-4 text-sm">
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 size={13} /> Step 1 of 2 — Account connected</p>
+                {config.config.adAccountId ? (
+                  <p className="mt-1 text-sm font-medium text-ink-900">{typeof config.config.accountName === 'string' && config.config.accountName ? config.config.accountName : config.config.adAccountId}</p>
+                ) : (
+                  <p className="mt-1 text-ink-500">Authorized with Meta, but no account has been selected yet. Close this and reconnect to choose one.</p>
+                )}
+                <p className="mt-1 text-xs text-ink-400">This connects real campaign spend/clicks/conversions to your Attribution dashboard.</p>
+                {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
+                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs font-semibold text-amber-800">Step 2 of 2 — One-time tracking setup (do this too)</p>
+                <p className="mt-1 text-xs text-ink-500">Step 1 alone only reports how much you spent. This step is what makes each real ad click create a correctly-tagged Lead. Meta sets this per ad (or per template you duplicate) — still one paste, not a hand-crafted link per ad. Without it, leads from Meta Ads won't show their real source.</p>
+                {trackingSetup ? (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <p className="text-xs text-ink-400">A. Set as your ad's Website URL</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.meta.websiteUrl}</code>
+                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.meta.websiteUrl); toast.success('Website URL copied'); }}><Copy size={13} /></Button>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs text-ink-400">B. Paste under the ad's Tracking section → "URL Parameters" (reuse when duplicating ads)</p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.meta.urlParameters}</code>
+                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.meta.urlParameters); toast.success('URL Parameters copied'); }}><Copy size={13} /></Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-xs text-ink-400">Loading your tracking setup…</p>
+                )}
+              </div>
             </div>
           ) : config.key === 'zoho' ? (
             <div className="space-y-3 text-sm">

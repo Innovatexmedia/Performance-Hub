@@ -50,6 +50,7 @@ router.use(requireModule('campaigns')); // plan-gated: 'whatsapp_only' plans don
 router.get('/kpis',   controller.getKpis);
 router.get('/chart',  controller.getChartData);
 router.get('/export', controller.exportCsv);
+router.get('/ad-platform-tracking-setup', controller.getAdPlatformTrackingSetup);
 
 // ── Collection routes
 router

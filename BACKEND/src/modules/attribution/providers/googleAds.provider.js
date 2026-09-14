@@ -115,6 +115,7 @@ export class GoogleAdsProvider {
   async getCampaignPerformance({ accessToken, dateRange = 'LAST_30_DAYS' }) {
     const query = `
       SELECT
+        customer.currency_code,
         campaign.id,
         campaign.name,
         campaign.status,
@@ -138,10 +139,66 @@ export class GoogleAdsProvider {
       campaignName: row.campaign?.name,
       status: row.campaign?.status,
       channelType: row.campaign?.advertisingChannelType,
+      // Real ISO 4217 code for the account these numbers are billed in --
+      // see googleAdsCampaignMetric.model.js's own comment on why this
+      // is captured and stored (production ROAS safety, not assumed
+      // to already match the tenant's own workspace currency).
+      currency: row.customer?.currencyCode || null,
       impressions: Number(row.metrics?.impressions || 0),
       clicks: Number(row.metrics?.clicks || 0),
       // Real Google Ads unit: cost_micros is millionths of the account's
       // currency -- converted to a normal amount here, not assumed.
+      spend: Number(row.metrics?.costMicros || 0) / MICROS_PER_UNIT,
+      conversions: Number(row.metrics?.conversions || 0),
+      conversionsValue: Number(row.metrics?.conversionsValue || 0),
+      ctr: Number(row.metrics?.ctr || 0),
+      averageCpc: Number(row.metrics?.averageCpc || 0) / MICROS_PER_UNIT,
+    }));
+  }
+
+  /**
+   * getAdGroupPerformance -- real ad-group-level GAQL query, one level
+   * of granularity below getCampaignPerformance above. Added per
+   * explicit product requirement for ad-group identifiers/metrics, not
+   * just campaign-level totals.
+   *
+   * SOURCE: real Google Ads API `ad_group` resource -- confirmed real,
+   * standard GAQL fields (ad_group.id/name/status, campaign.id/name as
+   * the real parent-resource linkage available directly from the same
+   * `FROM ad_group` query, same metrics.* fields as campaign level).
+   */
+  async getAdGroupPerformance({ accessToken, dateRange = 'LAST_30_DAYS' }) {
+    const query = `
+      SELECT
+        customer.currency_code,
+        campaign.id,
+        campaign.name,
+        ad_group.id,
+        ad_group.name,
+        ad_group.status,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.cost_micros,
+        metrics.conversions,
+        metrics.conversions_value,
+        metrics.ctr,
+        metrics.average_cpc
+      FROM ad_group
+      WHERE segments.date DURING ${dateRange}
+        AND ad_group.status != 'REMOVED'
+    `.trim();
+
+    const rows = await this._search({ accessToken, query });
+
+    return rows.map((row) => ({
+      campaignId: row.campaign?.id,
+      campaignName: row.campaign?.name,
+      adGroupId: row.adGroup?.id,
+      adGroupName: row.adGroup?.name,
+      status: row.adGroup?.status,
+      currency: row.customer?.currencyCode || null,
+      impressions: Number(row.metrics?.impressions || 0),
+      clicks: Number(row.metrics?.clicks || 0),
       spend: Number(row.metrics?.costMicros || 0) / MICROS_PER_UNIT,
       conversions: Number(row.metrics?.conversions || 0),
       conversionsValue: Number(row.metrics?.conversionsValue || 0),

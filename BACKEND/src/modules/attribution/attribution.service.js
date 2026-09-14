@@ -26,13 +26,14 @@
 
 import * as attrRepo from './attribution.repository.js';
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
-import { TRACKING_EVENT_TYPE } from './attribution.constants.js';
+import { TRACKING_EVENT_TYPE, DEFAULT_AD_SYNC_DATE_RANGE } from './attribution.constants.js';
 import AdTrackingSettings from './adTrackingSettings.model.js';
 import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
 import MetaAdsCampaignMetric from './metaAdsCampaignMetric.model.js';
 import { MetaConversionsProvider } from './providers/metaConversions.provider.js';
 import { GoogleAnalyticsProvider } from './providers/googleAnalytics.provider.js';
 import { safeDecrypt } from '../../utils/crypto.js';
+import { getExchangeRates } from '../../shared/services/exchangeRate.service.js';
 
 // ── Import Lead model to enrich events with UTM data ─────────────────────────
 import { Lead } from '../leads/lead/lead.model.js';
@@ -331,40 +332,124 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
 /**
  * getAdSpendSummary -- real Google Ads spend (from GoogleAdsCampaignMetric,
  * already-synced data, not a live call on every dashboard load) combined
- * with this app's own existing real revenue-by-source data to compute a
+ * with this app's own existing real revenue-by-CAMPAIGN data to compute a
  * genuine ROAS figure.
  *
- * Matching real ad spend to real internal revenue is inherently
- * best-effort here: it matches by campaign name string equality against
- * this app's own `source`/`campaign` lead fields, since there's no
- * shared campaign ID between Google Ads and this CRM's own lead
- * capture. Where no match is found, spend is still shown (real,
+ * REAL FIX: previously matched against getRevenueBySource's generic
+ * `source` grouping (e.g. "Google Ads", "Direct") -- see
+ * getRevenueByCampaign's own header comment in attribution.repository.js
+ * for the full reasoning on why that essentially never matched in
+ * practice. Now matches real ad-platform campaign names against real
+ * internal revenue grouped by the SAME kind of field (Lead.campaign,
+ * carried through to Payment and TrackingEvent) -- still string-equality
+ * best-effort (there is no shared ID between this CRM and either ad
+ * platform), but comparing like with like instead of a category
+ * mismatch. Where no match is found, spend is still shown (real,
  * unattributed cost), just without a matched revenue figure -- not
  * hidden or guessed.
  */
 const getAdSpendSummary = async (tenantId) => {
-  // Real merge of BOTH ad platforms -- Google Ads and Meta Ads campaigns
-  // read from their own separate, provider-specific collections
-  // (GoogleAdsCampaignMetric / MetaAdsCampaignMetric -- see each
-  // provider's own real sync path) but combined into one dashboard view
-  // here, since both were synced into the exact same document shape on
-  // purpose (see metaAdsCampaignMetric.model.js's own comment on this).
+  // REAL DEFENSIVE FIX: neither GoogleAdsCampaignMetric nor
+  // MetaAdsCampaignMetric queries here were previously filtered by
+  // dateRange at all -- fine ONLY because the one real, reachable sync
+  // path (integration.service.js's sync branches) always calls
+  // syncCampaigns() with no explicit dateRange, so every real document
+  // in production today has dateRange='LAST_30_DAYS' and this never
+  // actually manifests. But nothing enforced that: if a dateRange
+  // selector is ever added to the Sync UI later, a tenant syncing with
+  // two different ranges would leave BOTH sets of rows in these
+  // collections permanently (there's no cleanup of stale-dateRange
+  // rows), and this unfiltered query would silently sum the SAME real
+  // campaign's spend twice, once per dateRange value. Explicitly
+  // filtering to one real, canonical dateRange closes this off
+  // structurally rather than relying on "nothing calls it differently
+  // today" as the only thing preventing double-counting.
   const [googleCampaigns, metaCampaigns] = await Promise.all([
-    GoogleAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50),
-    MetaAdsCampaignMetric.find({ tenantId }).sort({ spend: -1 }).limit(50),
+    GoogleAdsCampaignMetric.find({ tenantId, dateRange: DEFAULT_AD_SYNC_DATE_RANGE }).sort({ spend: -1 }).limit(50),
+    MetaAdsCampaignMetric.find({ tenantId, dateRange: DEFAULT_AD_SYNC_DATE_RANGE }).sort({ spend: -1 }).limit(50),
   ]);
-  const campaigns = [...googleCampaigns, ...metaCampaigns].sort((a, b) => b.spend - a.spend);
+
+  // REAL de-duplication guard: if the SAME real campaign was synced more
+  // than once for the SAME dateRange (e.g. a retried sync before the
+  // unique index caught up, or a genuinely re-run sync landing here
+  // between two reads), keep only the most-recently-synced row per
+  // (platform, campaignId, dateRange) so spend/impressions/clicks are
+  // never double-counted in the totals below. The DB-level unique index
+  // on (tenantId, campaignId, dateRange) already prevents true
+  // duplicates at rest -- this is a defensive second layer for the read
+  // path itself, since `campaigns` here is a plain in-memory merge of
+  // two separate queries, not a single indexed lookup.
+  const dedupe = (docs) => {
+    const seen = new Map();
+    for (const doc of docs) {
+      const key = `${doc.campaignId}::${doc.dateRange}`;
+      const existing = seen.get(key);
+      if (!existing || doc.syncedAt > existing.syncedAt) seen.set(key, doc);
+    }
+    return [...seen.values()];
+  };
+  const campaigns = [...dedupe(googleCampaigns), ...dedupe(metaCampaigns)].sort((a, b) => b.spend - a.spend);
 
   if (campaigns.length === 0) {
     return { connected: false, totalSpend: 0, totalConversions: 0, campaigns: [] };
   }
 
-  // Real revenue-by-source data this app already computes internally.
-  const revenueBySource = await attrRepo.getRevenueBySource(tenantId, {});
-  const revenueByName = new Map(revenueBySource.map((r) => [String(r.source || '').toLowerCase(), r.revenue || 0]));
+  // Real revenue-by-CAMPAIGN data this app already computes internally
+  // (see getRevenueByCampaign's header comment for why this, not
+  // getRevenueBySource, is the reliable match key).
+  const revenueByCampaign = await attrRepo.getRevenueByCampaign(tenantId, {});
+  const revenueByName = new Map(revenueByCampaign.map((r) => [String(r.campaign || '').toLowerCase(), r.revenue || 0]));
+
+  // Real workspace currency -- this is the ONE display/reporting
+  // currency every figure below is converted INTO, matching Settings'
+  // own currency selector (Tenant.currency). See
+  // googleAdsCampaignMetric.model.js's / metaAdsCampaignMetric.model.js's
+  // own comments on why ad-account currency is never assumed to already
+  // match this.
+  const tenant = await Tenant.findById(tenantId).select('currency');
+  const workspaceCurrency = tenant?.currency || 'USD';
+
+  // REAL FIX: real conversion, not withholding. A campaign's spend is
+  // denominated in whatever currency its Google/Meta ad ACCOUNT bills
+  // in (c.currency) -- genuinely NOT guaranteed to match
+  // workspaceCurrency (the currency matchedRevenue is already correctly
+  // denominated in via Payments). Batched so N campaigns sharing the
+  // SAME ad-account currency trigger only ONE real Frankfurter lookup
+  // for that pair, not N -- see exchangeRate.service.js.
+  const distinctAdCurrencies = campaigns.map((c) => c.currency).filter(Boolean);
+  const rateByAdCurrency = await getExchangeRates(distinctAdCurrencies, workspaceCurrency);
 
   const enriched = campaigns.map((c) => {
     const matchedRevenue = revenueByName.get(String(c.campaignName).toLowerCase()) ?? null;
+
+    const currencyKnown = Boolean(c.currency);
+    const sameCurrency = currencyKnown && c.currency === workspaceCurrency;
+    const rate = currencyKnown ? (sameCurrency ? 1 : rateByAdCurrency.get(c.currency.toUpperCase())) : null;
+    // REAL BUG FIX: previously `currencyKnown && rate == null` -- when
+    // currencyKnown was FALSE (a campaign synced before currency
+    // capture was added, or a real API response that genuinely omitted
+    // it), this evaluated to `false && ...` = false, meaning
+    // conversionUnavailable was incorrectly FALSE for exactly the case
+    // where we know NOTHING about the currency -- ROAS would have been
+    // silently computed as if the unconverted spend were already in
+    // workspace currency, the exact same class of wrong-ROAS bug this
+    // whole currency system exists to prevent. Now correctly true
+    // whenever the currency is unknown at all, OR known-and-different
+    // with no resolvable rate -- the only two real "cannot safely
+    // compute ROAS" states.
+    const conversionUnavailable = !currencyKnown || (!sameCurrency && rate == null);
+
+    // Real converted figures -- spend/conversionsValue are the only
+    // money-shaped fields here (impressions/clicks/conversions are
+    // plain counts, currency-independent). Rounded to 2dp, matching
+    // every other real currency figure already displayed in this app.
+    const spend = conversionUnavailable ? c.spend : Number((c.spend * (rate ?? 1)).toFixed(2));
+    const conversionsValue = conversionUnavailable ? c.conversionsValue : Number((c.conversionsValue * (rate ?? 1)).toFixed(2));
+
+    const roas = matchedRevenue && spend > 0 && !conversionUnavailable
+      ? Number((matchedRevenue / spend).toFixed(2))
+      : null;
+
     return {
       campaignId: c.campaignId,
       campaignName: c.campaignName,
@@ -375,25 +460,62 @@ const getAdSpendSummary = async (tenantId) => {
       // apart or group by platform without a separate field.
       status: c.status,
       channelType: c.channelType,
-      spend: c.spend,
+      // Real, single display currency for every figure below --
+      // matches Settings' currency selector, NOT necessarily the ad
+      // account's own billing currency (see spendOriginal below for that).
+      currency: workspaceCurrency,
+      // Real original figures preserved for transparency/audit -- what
+      // the ad platform actually reported, before conversion, plus the
+      // real currency and rate used to convert it.
+      spendOriginal: c.spend,
+      currencyOriginal: c.currency || null,
+      exchangeRate: sameCurrency ? 1 : rate,
+      // True only when a real conversion was needed but genuinely
+      // couldn't be resolved right now (Frankfurter unreachable/no
+      // cached fallback) -- spend/roas below reflect the UNCONVERTED
+      // original in this case, and the frontend should flag it rather
+      // than presenting it as a same-currency figure.
+      currencyMismatch: conversionUnavailable,
+      spend,
       clicks: c.clicks,
       impressions: c.impressions,
       conversions: c.conversions,
-      conversionsValue: c.conversionsValue,
+      conversionsValue,
       matchedRevenue,
-      roas: matchedRevenue && c.spend > 0 ? Number((matchedRevenue / c.spend).toFixed(2)) : null,
+      roas,
       syncedAt: c.syncedAt,
     };
   });
 
-  const totalSpend = campaigns.reduce((sum, c) => sum + c.spend, 0);
-  const totalConversions = campaigns.reduce((sum, c) => sum + c.conversions, 0);
+  // REAL BUG FIX: previously summed EVERY row's `spend` regardless of
+  // `currencyMismatch` -- a row where conversion genuinely failed keeps
+  // its RAW, UNCONVERTED figure (see the map above, `spend: c.spend`
+  // in that branch) so the individual row still shows something real
+  // rather than blank. But summing that raw, wrong-currency figure
+  // together with properly-converted rows produces a meaningless
+  // mixed-currency total -- e.g. $500 (unconverted, mismatch) + ₹40,000
+  // (converted) = a number in no real currency at all. Excluded from
+  // the totals here; `excludedFromTotal` tells the frontend exactly how
+  // many rows (and how much real spend) aren't reflected in totalSpend,
+  // so the total is never silently short without explanation.
+  const convertible = enriched.filter((c) => !c.currencyMismatch);
+  const excluded = enriched.filter((c) => c.currencyMismatch);
+  const totalSpend = convertible.reduce((sum, c) => sum + c.spend, 0);
+  const totalConversions = enriched.reduce((sum, c) => sum + c.conversions, 0); // conversions is a plain count, currency-independent -- safe to sum across every row regardless of currencyMismatch
   const lastSyncedAt = campaigns.reduce((latest, c) => (!latest || (c.syncedAt && c.syncedAt > latest) ? c.syncedAt : latest), null);
 
   return {
     connected: true,
+    currency: workspaceCurrency,
     totalSpend,
     totalConversions,
+    // Real, explicit accounting for what's NOT reflected in totalSpend
+    // above (see comment) -- 0/empty when every campaign converted
+    // successfully, which is the common case.
+    excludedFromTotal: {
+      count: excluded.length,
+      campaignNames: excluded.map((c) => c.campaignName),
+    },
     lastSyncedAt,
     campaigns: enriched,
   };

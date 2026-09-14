@@ -42,6 +42,13 @@ const googleAdsCampaignMetricSchema = new Schema(
     impressions:      { type: Number, default: 0 },
     clicks:            { type: Number, default: 0 },
     spend:             { type: Number, default: 0 },      // real currency amount, already converted from micros
+    // Real ISO 4217 code for the Google Ads ACCOUNT this spend is
+    // billed in (customer.currency_code) -- NOT assumed to match the
+    // tenant's own workspace currency (Tenant.currency). See
+    // attribution.service.js's getAdSpendSummary for why ROAS is
+    // deliberately withheld rather than silently computed wrong when
+    // these two differ.
+    currency:          { type: String, default: null },
     conversions:       { type: Number, default: 0 },
     conversionsValue:  { type: Number, default: 0 },
     ctr:               { type: Number, default: 0 },

@@ -8,7 +8,8 @@ import { KpiCard } from '@/components/ui/KpiCard';
 import { InsertVariablePicker } from '@/components/nurture/InsertVariablePicker';
 import { toast } from '@/store/toastStore';
 import { ApiError, apiErrorMessage } from '@/lib/apiClient';
-import type { NurtureChannel, NurtureSequence, NurtureStep } from '@/types/nurture';
+import type { NurtureChannel, NurtureSequence, NurtureStep, NurtureCondition, NurtureConditionLogic } from '@/types/nurture';
+import { NURTURE_LEAD_CONDITION_FIELDS, NURTURE_CONDITION_OPERATOR_VALUES, NURTURE_CONDITION_OPERATOR_LABELS, NURTURE_COMMON_SOURCE_VALUES } from '@/types/nurture';
 
 const channelIcon: Record<NurtureChannel, typeof Mail> = {
   WHATSAPP: MessageCircle,
@@ -63,7 +64,7 @@ const sanitizeStepForSubmit = (step: NurtureStep): NurtureStep => {
 };
 
 export function Nurture() {
-  const { sequences, loading, error, activate, pause, archive, remove, create, enroll } = useNurtureSequences();
+  const { sequences, loading, error, activate, pause, archive, remove, create, enroll, refetch } = useNurtureSequences();
   // Real refetch, not a page reload: useNurtureEnrollments already exposes
   // this via the same reload-token pattern useNurtureSequences uses -- it
   // just wasn't being called anywhere on this page. Enrolling a lead
@@ -102,6 +103,8 @@ export function Nurture() {
     type: 'NURTURE',
     triggerType: 'MANUAL' as string,
     qualificationTemperature: '' as string,
+    conditions: [] as NurtureCondition[],
+    conditionLogic: 'AND' as NurtureConditionLogic,
     steps: [emptyStep(1)],
   });
 
@@ -120,7 +123,12 @@ export function Nurture() {
     if (historyFor) refetchEnrollments();
   }, [historyFor, refetchEnrollments]);
 
-  const resetForm = () => setForm({ name: '', description: '', type: 'NURTURE', triggerType: 'MANUAL', qualificationTemperature: '', steps: [emptyStep(1)] });
+  const resetForm = () => setForm({ name: '', description: '', type: 'NURTURE', triggerType: 'MANUAL', qualificationTemperature: '', conditions: [], conditionLogic: 'AND', steps: [emptyStep(1)] });
+
+  const addCondition = () => setForm((f) => ({ ...f, conditions: [...f.conditions, { field: NURTURE_LEAD_CONDITION_FIELDS[0].field, operator: 'EQUALS', value: '' }] }));
+  const removeCondition = (index: number) => setForm((f) => ({ ...f, conditions: f.conditions.filter((_, i) => i !== index) }));
+  const updateCondition = (index: number, patch: Partial<NurtureCondition>) =>
+    setForm((f) => ({ ...f, conditions: f.conditions.map((c, i) => (i === index ? { ...c, ...patch } : c)) }));
 
   const addStep = () => setForm((f) => ({ ...f, steps: [...f.steps, emptyStep(f.steps.length + 1)] }));
   const removeStep = (stepNumber: number) =>
@@ -141,6 +149,10 @@ export function Nurture() {
         type: form.type as NurtureSequence['type'],
         triggerType: form.triggerType as NurtureSequence['triggerType'],
         qualificationTemperature: (form.qualificationTemperature || null) as NurtureSequence['qualificationTemperature'],
+        // Only sent when meaningful (LEAD_CREATED) -- an empty array means
+        // "applies to every new lead", the real default behavior.
+        conditions: form.triggerType === 'LEAD_CREATED' ? form.conditions : [],
+        conditionLogic: form.conditionLogic,
         steps: form.steps.map(sanitizeStepForSubmit),
       });
       toast.success('Sequence created');
@@ -199,6 +211,31 @@ export function Nurture() {
       toast.success('Sequence deleted');
     } catch (err) {
       toast.error('Could not delete sequence', err instanceof ApiError ? err.message : 'Please try again.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Real, on-demand re-run of the same matching this sequence's
+  // conditions already apply automatically to brand-new leads -- lets a
+  // tenant sweep in leads that already existed before the sequence (or
+  // its conditions) were set up, without needing to wait for a new lead
+  // to trigger it. Reports real counts back (not just a generic "done").
+  const handleEnrollMatching = async (seq: NurtureSequence) => {
+    setBusyId(seq.id);
+    try {
+      const result = await nurtureApi.enrollMatching(seq.id);
+      if (result.enrolled === 0 && result.alreadyEnrolled === 0) {
+        toast.success('No matching leads found', 'No existing leads match this sequence\u2019s conditions.');
+      } else {
+        toast.success(
+          `${result.enrolled} lead(s) enrolled`,
+          result.alreadyEnrolled > 0 ? `${result.alreadyEnrolled} matching lead(s) were already enrolled.` : undefined,
+        );
+      }
+      refetch();
+    } catch (err) {
+      toast.error('Could not enroll matching leads', err instanceof ApiError ? err.message : 'Please try again.');
     } finally {
       setBusyId(null);
     }
@@ -289,6 +326,9 @@ export function Nurture() {
                     {seq.triggerType === 'LEAD_QUALIFIED' && seq.qualificationTemperature && (
                       <Badge tone="blue">Auto-enrolls {seq.qualificationTemperature} leads</Badge>
                     )}
+                    {seq.triggerType === 'LEAD_CREATED' && seq.conditions && seq.conditions.length > 0 && (
+                      <Badge tone="blue">{seq.conditions.length} condition{seq.conditions.length === 1 ? '' : 's'} ({seq.conditionLogic || 'AND'})</Badge>
+                    )}
                   </div>
                   <p className="mt-0.5 text-xs text-ink-500">{seq.description || 'No description'}</p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
@@ -304,6 +344,9 @@ export function Nurture() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setHistoryFor(seq)}><History size={13} /> History</Button>
+                  {seq.status === 'ACTIVE' && seq.triggerType === 'LEAD_CREATED' && seq.conditions && seq.conditions.length > 0 && (
+                    <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs" onClick={() => void handleEnrollMatching(seq)}><RefreshCw size={13} /> Enroll matching now</Button>
+                  )}
                   {seq.status !== 'ARCHIVED' && seq.status !== 'COMPLETED' && (
                     <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setAssignTo(seq)}><UserPlus size={13} /> Enroll lead</Button>
                   )}
@@ -353,6 +396,65 @@ export function Nurture() {
                   <option value="Warm">Warm</option>
                 </Select>
               </Field>
+            )}
+
+            {form.triggerType === 'LEAD_CREATED' && (
+              <div className="space-y-3 rounded-lg border border-ink-100 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-ink-600">
+                    Only auto-enroll leads matching…
+                  </p>
+                  {form.conditions.length > 1 && (
+                    <div className="flex items-center gap-1 text-xs">
+                      <button type="button" onClick={() => setForm({ ...form, conditionLogic: 'AND' })} className={`rounded-full px-2 py-0.5 ${form.conditionLogic === 'AND' ? 'bg-brand-600 text-white' : 'bg-ink-100 text-ink-500'}`}>Match ALL (AND)</button>
+                      <button type="button" onClick={() => setForm({ ...form, conditionLogic: 'OR' })} className={`rounded-full px-2 py-0.5 ${form.conditionLogic === 'OR' ? 'bg-brand-600 text-white' : 'bg-ink-100 text-ink-500'}`}>Match ANY (OR)</button>
+                    </div>
+                  )}
+                </div>
+
+                {form.conditions.length === 0 && (
+                  <p className="text-xs text-ink-400">No conditions set — every new lead will auto-enroll into this sequence.</p>
+                )}
+
+                {form.conditions.map((cond, idx) => {
+                  const fieldMeta = NURTURE_LEAD_CONDITION_FIELDS.find((f) => f.field === cond.field);
+                  return (
+                    <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2">
+                      <Field label={idx === 0 ? 'Field' : undefined}>
+                        <Select value={cond.field} onChange={(e) => updateCondition(idx, { field: e.target.value })}>
+                          {NURTURE_LEAD_CONDITION_FIELDS.map((f) => <option key={f.field} value={f.field}>{f.label}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label={idx === 0 ? 'Condition' : undefined}>
+                        <Select value={cond.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value as NurtureCondition['operator'] })}>
+                          {NURTURE_CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{NURTURE_CONDITION_OPERATOR_LABELS[op]}</option>)}
+                        </Select>
+                      </Field>
+                      <Field label={idx === 0 ? 'Value' : undefined}>
+                        {cond.operator === 'EXISTS' || cond.operator === 'NOT_EXISTS' ? (
+                          <Input value="" disabled placeholder="(no value needed)" />
+                        ) : (
+                          <>
+                            <Input
+                              list={fieldMeta?.field === 'source' || fieldMeta?.field === 'utm_source' ? 'nurture-source-suggestions' : undefined}
+                              type={fieldMeta?.type === 'number' ? 'number' : 'text'}
+                              value={cond.value ?? ''}
+                              onChange={(e) => updateCondition(idx, { value: e.target.value })}
+                              placeholder="e.g. Google Ads"
+                            />
+                            <datalist id="nurture-source-suggestions">
+                              {NURTURE_COMMON_SOURCE_VALUES.map((v) => <option key={v} value={v} />)}
+                            </datalist>
+                          </>
+                        )}
+                      </Field>
+                      <Button variant="ghost" className="mb-0.5 px-2 py-2 text-red-600" onClick={() => removeCondition(idx)}><Trash2 size={14} /></Button>
+                    </div>
+                  );
+                })}
+
+                <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={addCondition}><Plus size={13} /> Add condition</Button>
+              </div>
             )}
 
             <div className="space-y-0 rounded-lg border border-ink-100 p-3">

@@ -1,6 +1,12 @@
 import { apiClient } from '@/lib/apiClient';
 import type { Campaign, CampaignInput, CampaignListQuery, CampaignKpis, CampaignChartRow } from '@/types/campaign';
 
+/** SOURCE: campaign.service.js's getAdPlatformTrackingSetup. */
+export interface AdPlatformTrackingSetup {
+  google: { finalUrl: string; finalUrlSuffix: string };
+  meta: { websiteUrl: string; urlParameters: string };
+}
+
 /**
  * SOURCE: src/modules/campaigns/campaign.controller.js
  *
@@ -26,4 +32,13 @@ export const campaignsApi = {
 
   create: (input: CampaignInput) =>
     apiClient.post<{ campaign: Campaign }>('/campaigns', input).then((r) => r.campaign),
+
+  /**
+   * getAdPlatformTrackingSetup -- real, tenant-scoped, one-time-per-platform
+   * tracking values (Google Ads Final URL + Final URL Suffix, Meta Ads
+   * Website URL + URL Parameters). See campaign.service.js's
+   * getAdPlatformTrackingSetup for the full real platform mechanics.
+   */
+  getAdPlatformTrackingSetup: () =>
+    apiClient.get<AdPlatformTrackingSetup>('/campaigns/ad-platform-tracking-setup'),
 };

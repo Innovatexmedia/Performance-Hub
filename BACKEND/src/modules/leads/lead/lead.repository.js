@@ -9,6 +9,38 @@ export const leadRepository = {
     return Lead.create(data);
   },
 
+  /**
+   * findOneAndUpsert -- real atomic "insert only if this filter doesn't
+   * already match anything" (see lead.service.js's createLead() for the
+   * full race-condition reasoning this exists to close). Uses
+   * `$setOnInsert` so a losing/concurrent call that finds an
+   * already-just-inserted document does NOT overwrite any of its real
+   * fields -- it just reads back exactly what the winning call wrote.
+   *
+   * `rawResult: true` is used ONLY to reliably read
+   * `lastErrorObject.upserted` (the one genuinely trustworthy signal
+   * for "did THIS call insert it, or did it already exist") -- but that
+   * mode returns a plain driver object, not a real Mongoose document,
+   * which would silently break any caller expecting the same shape
+   * leadRepository.create() normally returns (virtuals, instance
+   * methods, toObject()/toJSON() with schema transforms). Lead.hydrate()
+   * wraps that plain object into a genuine Mongoose document WITHOUT
+   * re-querying or marking it as a new/unsaved document (which
+   * `new Lead(result.value)` would incorrectly do, risking a second
+   * insert on any later .save() call).
+   */
+  async findOneAndUpsert(filter, data) {
+    const result = await Lead.findOneAndUpdate(
+      filter,
+      { $setOnInsert: data },
+      { upsert: true, new: true, rawResult: true, setDefaultsOnInsert: true },
+    );
+    return {
+      lead: result.value ? Lead.hydrate(result.value) : null,
+      isNew: Boolean(result.lastErrorObject?.upserted),
+    };
+  },
+
   insertMany(docs) {
     return Lead.insertMany(docs);
   },

@@ -16,6 +16,8 @@
 
 import MetaAdsSettings from './metaAdsSettings.model.js';
 import MetaAdsCampaignMetric from './metaAdsCampaignMetric.model.js';
+import { DEFAULT_AD_SYNC_DATE_RANGE } from './attribution.constants.js';
+import MetaAdsAdSetMetric from './metaAdsAdSetMetric.model.js';
 import { MetaAdsProvider } from './providers/metaAds.provider.js';
 import { encrypt, safeDecrypt, signState } from '../../utils/crypto.js';
 import config from '../../config/config.js';
@@ -171,7 +173,7 @@ export const metaAdsSettingsService = {
    * dashboard's real Meta ad-spend numbers -- same exact shape and role
    * as googleAdsSettings.service.js's syncCampaigns.
    */
-  async syncCampaigns(ctx, { dateRange = 'LAST_30_DAYS' } = {}) {
+  async syncCampaigns(ctx, { dateRange = DEFAULT_AD_SYNC_DATE_RANGE } = {}) {
     const doc = await getOrCreate(ctx.tenantId);
     if (!doc.connected || !doc.adAccountId) {
       throw AppError.badRequest('Connect a Meta Ads account before syncing.');
@@ -190,6 +192,7 @@ export const metaAdsSettingsService = {
               campaignName: c.campaignName,
               status: c.status,
               channelType: c.channelType,
+              currency: c.currency,
               impressions: c.impressions,
               clicks: c.clicks,
               spend: c.spend,
@@ -204,11 +207,45 @@ export const metaAdsSettingsService = {
         )
       ));
 
+      // Real ad-set-level sync -- one level of granularity below
+      // campaign, added per explicit product requirement. Best-effort:
+      // a failure here doesn't fail the campaign-level sync above.
+      let adSetCount = 0;
+      try {
+        const adSets = await provider.getAdSetPerformance({ accessToken, dateRange });
+        await Promise.all(adSets.map((a) =>
+          MetaAdsAdSetMetric.findOneAndUpdate(
+            { tenantId: ctx.tenantId, adSetId: a.adSetId, dateRange },
+            {
+              $set: {
+                campaignId: a.campaignId,
+                campaignName: a.campaignName,
+                adSetName: a.adSetName,
+                status: a.status,
+                currency: a.currency,
+                impressions: a.impressions,
+                clicks: a.clicks,
+                spend: a.spend,
+                conversions: a.conversions,
+                conversionsValue: a.conversionsValue,
+                ctr: a.ctr,
+                averageCpc: a.averageCpc,
+                syncedAt: new Date(),
+              },
+            },
+            { upsert: true }
+          )
+        ));
+        adSetCount = adSets.length;
+      } catch (adSetErr) {
+        console.warn(`[meta-ads] Ad-set sync failed for tenant ${ctx.tenantId} (campaign sync still succeeded): ${adSetErr.message}`);
+      }
+
       doc.lastSyncedAt = new Date();
       doc.lastSyncError = null;
       await doc.save();
 
-      return { synced: true, campaignCount: campaigns.length };
+      return { synced: true, campaignCount: campaigns.length, adSetCount };
     } catch (err) {
       doc.lastSyncError = err.message;
       await doc.save().catch(() => {});

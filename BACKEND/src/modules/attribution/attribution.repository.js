@@ -109,6 +109,53 @@ export const getRevenueBySource = (tenantId, filter = {}) => {
   ]);
 };
 
+/**
+ * getRevenueByCampaign — total attributed revenue grouped by real
+ * campaign name, for matching against real ad-platform spend data
+ * (see attribution.service.js's getAdSpendSummary).
+ *
+ * REAL FIX: getAdSpendSummary previously matched a real Google/Meta
+ * Ads campaign name against getRevenueBySource's generic `source`
+ * grouping (e.g. "Google Ads", "Direct") -- a real ad campaign is
+ * essentially never literally NAMED "Google Ads" in Ads Manager (that
+ * would defeat the point of having descriptive campaign names to
+ * manage multiple campaigns), so that match would almost never
+ * actually fire in production despite being syntactically correct
+ * code. `campaign` is the field genuinely meant to hold a specific
+ * campaign identifier -- confirmed by tracing the real, already-wired
+ * chain: Lead.campaign -> Payment.campaign (copied verbatim at payment
+ * creation, see payment.service.js) -> TrackingEvent.campaign (on
+ * PAYMENT_COMPLETED). Grouping by THIS field, not `source`, is what
+ * actually gives campaign-name matching a real chance of succeeding --
+ * still string-equality (there is no shared ID between this CRM and
+ * either ad platform), but now comparing like with like: a real
+ * campaign name against a real campaign name, not a real campaign name
+ * against a generic platform label.
+ *
+ * Rows with no real campaign attribution ($ifNull default) are
+ * deliberately excluded (not defaulted to a placeholder) -- there is
+ * nothing meaningful to match an empty campaign against.
+ */
+export const getRevenueByCampaign = (tenantId, filter = {}) => {
+  const query = buildQuery(tenantId, filter);
+  query.event_type = TRACKING_EVENT_TYPE.PAYMENT_COMPLETED;
+  query.revenue    = { $gt: 0 };
+  query.campaign   = { $nin: [null, ''] };
+
+  return TrackingEvent.aggregate([
+    { $match: query },
+    {
+      $group: {
+        _id:     '$campaign',
+        revenue: { $sum: '$revenue' },
+        count:   { $sum: 1 },
+      },
+    },
+    { $sort: { revenue: -1 } },
+    { $project: { _id: 0, campaign: '$_id', revenue: 1, count: 1 } },
+  ]);
+};
+
 // =============================================================================
 // BOOKINGS BY SOURCE — bar chart
 // =============================================================================

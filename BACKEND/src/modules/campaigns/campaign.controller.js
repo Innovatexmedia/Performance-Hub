@@ -31,6 +31,18 @@ export const getKpis = asyncHandler(async (req, res) => {
 });
 
 /**
+ * getAdPlatformTrackingSetup — GET /api/campaigns/ad-platform-tracking-setup
+ * Real, tenant-scoped, one-time-per-platform tracking values (Google
+ * Ads Final URL + Final URL Suffix, Meta Ads Website URL + URL
+ * Parameters) -- see campaign.service.js's own header comment for the
+ * full real mechanics of each.
+ */
+export const getAdPlatformTrackingSetup = asyncHandler(async (req, res) => {
+  const setup = campaignService.getAdPlatformTrackingSetup(req.user.tenantId);
+  return sendSuccess(res, setup, 'Ad platform tracking setup');
+});
+
+/**
  * getChartData — GET /api/campaigns/chart
  * SOURCE: FRONTEND_SPEC §12 "Revenue by Campaign" bar chart
  * Returns: [{ campaign_name, revenue, spend, leads_generated, bookings, status }]

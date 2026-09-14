@@ -19,6 +19,7 @@ import { createTrackingEvent }         from '../../attribution/attribution.servi
 import { nurturesService } from '../../whatsapp/submodules/nurtures/nurtures.service.js';
 import { NurtureSequence } from '../../whatsapp/submodules/nurtures/nurtures.model.js';
 import { TRIGGER_TYPE, SEQUENCE_STATUS } from '../../whatsapp/submodules/nurtures/nurtures.constants.js';
+import { evaluateConditions } from '../../../shared/services/conditionEngine.js';
 import { TRACKING_EVENT_TYPE }          from '../../attribution/attribution.constants.js';
 import { countBookingsByLead }        from '../../bookings/booking.service.js';
 import { countQualificationsByLead } from '../../qualification/qualification.service.js';
@@ -50,7 +51,7 @@ export const leadService = {
 
   // ─── CREATE ────────────────────────────────────────────────────────────────
 
-  async createLead(ctx, data, { skipDuplicateCheck = false } = {}) {
+  async createLead(ctx, data, { skipDuplicateCheck = false, atomicClaimFilter = null } = {}) {
     if (!skipDuplicateCheck) {
       await duplicateService.assertNoDuplicate(ctx.tenantId, {
         email: data.email,
@@ -75,7 +76,52 @@ export const leadService = {
       payload.assigned_user_id = ctx.userId;
     }
 
-    const lead = await leadRepository.create(payload);
+    let lead;
+    if (atomicClaimFilter) {
+      // REAL RACE-CONDITION FIX for callers that already did their own
+      // "does this lead exist" check outside a DB transaction (e.g.
+      // publicCapture.service.js's find-then-create against an
+      // unauthenticated, potentially double-submitted form) -- a plain
+      // findOne-then-create has a genuine gap between the check and the
+      // write: two near-simultaneous requests (a double-clicked submit
+      // button, or a client-side retry after a slow response) can both
+      // pass the "not found" check and both proceed to create,
+      // producing two duplicate Lead documents for the same person.
+      // Lead has no unique index on (tenant_id, email/phone) to catch
+      // this at the DB layer (deliberately not added blind in this
+      // pass -- doing so against an already-populated production
+      // collection risks the index creation itself failing if any
+      // pre-existing duplicates already exist, which would need a real
+      // data-cleanup migration first, not a silent schema change).
+      // findOneAndUpdate + upsert is atomic at the MongoDB level: only
+      // ONE of two truly-simultaneous calls with the same filter can
+      // ever be the one that inserts -- the other sees the just-inserted
+      // document instead and is correctly treated as "already exists".
+      const result = await leadRepository.findOneAndUpsert(atomicClaimFilter, payload);
+      lead = result.lead;
+      // $locals is Mongoose's own built-in, transient, non-persisted
+      // per-document scratch space -- exactly the right place for "was
+      // this instance the one that actually just got inserted", since
+      // it's real request-scoped signal, not a schema field that would
+      // need saving/could leak into toObject()/toJSON() output.
+      lead.$locals.isNewlyCreated = result.isNew;
+      if (!result.isNew) {
+        // Race lost -- another concurrent request already created this
+        // real lead moments earlier. Logged as a real, generic
+        // duplicate-submission activity (not the capture-specific
+        // "returning visitor" wording -- this atomic path is reusable
+        // by any future caller, not just the public capture form) --
+        // none of the below side effects (consent/tracking/nurture/
+        // automation/deal-creation) are re-run, since they already ran
+        // once for the winning request.
+        await activityService.log(ctx, lead._id, ACTIVITY_TYPE.LEAD_CREATED, {
+          message: 'Duplicate submission for an existing lead was safely ignored (no new lead created).',
+        }).catch(() => {});
+        return lead;
+      }
+    } else {
+      lead = await leadRepository.create(payload);
+    }
 
     // Every new lead is immediately sendable, same as AiSensy/WATI-style
     // platforms -- see ensureConsentForLead's own comment for why this
@@ -105,6 +151,22 @@ export const leadService = {
     // and storable in the sequence builder, but nothing anywhere ever
     // acted on it. Best-effort: a failure here must never fail lead
     // creation itself.
+    //
+    // REAL FIX: previously enrolled into EVERY active LEAD_CREATED
+    // sequence for the tenant unconditionally -- a sequence had a
+    // trigger TYPE but no way to say WHICH leads it should apply to, so
+    // e.g. a "Google Ads Follow-up" sequence would enroll a lead that
+    // came from a completely unrelated source just as readily as one
+    // that actually came from Google Ads. Each matching sequence's own
+    // real `conditions`/`conditionLogic` (see nurtures.model.js) are now
+    // evaluated against this real, just-created lead via the same
+    // shared engine Automation Rules' IF-conditions already use --
+    // matches every one of the fields the lead actually has (source,
+    // utm_source/medium/campaign/content/term, tags, status,
+    // lead_temperature, etc). An empty conditions array still means
+    // "applies to every new lead", identical to this feature's original
+    // behavior, so any sequence created before this change keeps working
+    // exactly as it did.
     (async () => {
       try {
         const matchingSequences = await NurtureSequence.find({
@@ -113,6 +175,9 @@ export const leadService = {
           triggerType: TRIGGER_TYPE.LEAD_CREATED,
         });
         for (const seq of matchingSequences) {
+          const { passed } = evaluateConditions(seq.conditions, seq.conditionLogic, lead);
+          if (!passed) continue;
+
           await nurturesService.enrollLead(ctx, String(seq._id), { leadId: String(lead._id) }).catch((err) => {
             // Real, non-fatal -- e.g. already enrolled (real
             // duplicate-prevention inside enrollLead correctly rejects that).

@@ -92,7 +92,7 @@ export default function App() {
         <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/accept-invitation" element={<AcceptInvitation />} />
-        <Route path="/capture" element={<CaptureForm />} />
+        <Route path="/capture/:tenantId" element={<CaptureForm />} />
         <Route path="/book/:tenantId" element={<PublicBooking />} />
         {/* Public policy pages -- intentionally outside AppLayout / any auth
             gate, since payment-gateway whitelisting reviews and general

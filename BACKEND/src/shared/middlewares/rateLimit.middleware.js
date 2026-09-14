@@ -17,11 +17,21 @@
  */
 
 let rateLimit;
+let ipKeyGenerator;
 try {
-  rateLimit = (await import('express-rate-limit')).default;
+  const mod = await import('express-rate-limit');
+  rateLimit = mod.default;
+  // Real, required helper for any custom keyGenerator that touches
+  // req.ip on express-rate-limit v8+ -- see publicCaptureRateLimit's
+  // own comment for why. Falls back to an identity function if this
+  // specific export isn't available (an older express-rate-limit
+  // version), same defensive spirit as the try/catch around the whole
+  // import below.
+  ipKeyGenerator = mod.ipKeyGenerator || ((ip) => ip);
 } catch {
   // Fallback: pass-through if express-rate-limit not installed
   rateLimit = () => (req, res, next) => next();
+  ipKeyGenerator = (ip) => ip;
   console.warn('⚠️  express-rate-limit not installed. Rate limiting is DISABLED. Run: npm install express-rate-limit');
 }
 
@@ -124,6 +134,45 @@ export const publicBookingRateLimit = rateLimit({
   max:             10,
   standardHeaders: true,
   legacyHeaders:   false,
+  handler:         rateLimitHandler,
+});
+
+/**
+ * publicCaptureRateLimit — 20 form submissions per 10 minutes per
+ * (IP + tenant) pair, NOT per IP alone.
+ *
+ * REAL FIX: keying by IP alone (the default for every other limiter in
+ * this file) means two DIFFERENT tenants' campaigns, both driving
+ * traffic from visitors on the same shared IP (an office network, a
+ * café, a mobile carrier's NAT gateway) within the same 10-minute
+ * window, would count against the SAME shared limit -- a real
+ * cross-tenant interference risk a booking-style limiter never has to
+ * worry about (bookings are already behind an authenticated tenant
+ * context by the time any write happens; this endpoint is reached
+ * directly from a public ad-campaign landing page, where "which tenant"
+ * is part of the URL itself, not implied by a session). Keying by
+ * `${ip}:${tenantId}` scopes the limit to "this visitor hitting THIS
+ * tenant's form", so one tenant's traffic spike can never eat into a
+ * different tenant's real allowance.
+ *
+ * Same "fully unauthenticated, real downstream write" reasoning as
+ * publicBookingRateLimit above otherwise; tuned looser for this
+ * endpoint's real traffic shape (ad-driven landing-page submissions can
+ * legitimately spike burstier than calendar bookings) while still
+ * stopping a scripted flood of fake leads well before it pollutes a
+ * tenant's real Lead data or triggers a flood of Nurture
+ * auto-enrollments.
+ */
+export const publicCaptureRateLimit = rateLimit({
+  windowMs:        10 * 60 * 1000,
+  max:             20,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  // Must wrap req.ip in the real ipKeyGenerator() helper -- express-rate-limit
+  // v8+ throws ERR_ERL_KEY_GEN_IPV6 at startup for any custom keyGenerator
+  // that touches req.ip without it (a real, enforced safeguard against an
+  // IPv6-subnet rate-limit-bypass vulnerability, not optional boilerplate).
+  keyGenerator:    (req) => `${ipKeyGenerator(req.ip)}:${req.params?.tenantId || 'unknown'}`,
   handler:         rateLimitHandler,
 });
 

@@ -17,6 +17,7 @@
  * the corresponding handler — no changes needed in engine, routes, or controller.
  */
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
+import { evaluateConditions } from '../../../../shared/services/conditionEngine.js';
 import { automationRulesRepository } from './automationRules.repository.js';
 import { leadRepository } from '../../../leads/lead/lead.repository.js';
 import { templatesRepository } from '../templates/templates.repository.js';
@@ -97,58 +98,10 @@ function paging(query = {}) {
 
 // ── Condition evaluator ────────────────────────────────────────────────────────
 
-/**
- * Safely read a nested path like "lead.score" from a context object.
- */
-function getFieldValue(context = {}, fieldPath = '') {
-  return fieldPath.split('.').reduce((obj, key) => (obj != null ? obj[key] : undefined), context);
-}
-
-/**
- * Evaluate a single condition against the execution context.
- * Returns true if the condition is satisfied.
- */
-function evaluateCondition(condition, context) {
-  const actual   = getFieldValue(context, condition.field);
-  const expected = condition.value;
-
-  switch (condition.operator) {
-    case 'EQUALS':       return actual == expected;
-    case 'NOT_EQUALS':   return actual != expected;
-    case 'GREATER_THAN': return Number(actual) > Number(expected);
-    case 'LESS_THAN':    return Number(actual) < Number(expected);
-    case 'CONTAINS':     return String(actual ?? '').toLowerCase().includes(String(expected ?? '').toLowerCase());
-    case 'NOT_CONTAINS': return !String(actual ?? '').toLowerCase().includes(String(expected ?? '').toLowerCase());
-    case 'EXISTS':       return actual !== undefined && actual !== null;
-    case 'NOT_EXISTS':   return actual === undefined || actual === null;
-    case 'IN':           return Array.isArray(expected) && expected.includes(actual);
-    case 'NOT_IN':       return !Array.isArray(expected) || !expected.includes(actual);
-    case 'STARTS_WITH':  return String(actual ?? '').startsWith(String(expected ?? ''));
-    case 'ENDS_WITH':    return String(actual ?? '').endsWith(String(expected ?? ''));
-    default:             return false;
-  }
-}
-
-/**
- * Evaluate all conditions using AND or OR logic.
- * Empty conditions array → always passes.
- */
-function evaluateConditions(conditions = [], logic = CONDITION_LOGIC.AND, context = {}) {
-  if (!conditions.length) return { passed: true, reason: 'no conditions — always passes' };
-
-  const results = conditions.map((c) => ({
-    field:    c.field,
-    operator: c.operator,
-    value:    c.value,
-    passed:   evaluateCondition(c, context),
-  }));
-
-  const passed = logic === CONDITION_LOGIC.OR
-    ? results.some((r) => r.passed)
-    : results.every((r) => r.passed);
-
-  return { passed, results };
-}
+// getFieldValue / evaluateCondition / evaluateConditions now live in the
+// shared condition engine (src/shared/services/conditionEngine.js), so
+// Nurture's trigger-condition builder uses the exact same real logic
+// instead of a second, independently-drifting copy. Imported above.
 
 // ── Action handlers (pluggable) ────────────────────────────────────────────────
 //

@@ -40,14 +40,27 @@ const buildCtx = (reqUser) => ({
 });
 
 /**
- * generateUtmLink — builds the UTM tracking capture URL.
+ * generateUtmLink — builds the real, tenant-scoped UTM tracking capture URL.
  * SOURCE: MASTER_SPEC §B11 "UTM tracking-link generator (/capture?...)"
  * SOURCE: FRONTEND_SPEC §12 "tracking-link generator (/capture?source=&utm_source=&utm_medium=&utm_campaign=)"
  *
+ * REAL FIX: previously had NO tenant identifier anywhere in the
+ * generated URL -- confirmed by direct audit that the public capture
+ * page this links to is a real, multi-tenant page (any tenant's ad can
+ * point here), so without a tenantId in the URL there was no way for
+ * that page (or the backend behind it) to know WHICH tenant's Lead to
+ * create. Now embeds the real tenantId as a path segment, mirroring the
+ * exact same already-established pattern this codebase uses for its
+ * other real public, tenant-scoped page (/book/:tenantId).
+ *
+ * Also now generates real utm_content/utm_term params when provided --
+ * previously silently dropped even if the caller had them, since this
+ * function's own signature never accepted them.
+ *
  * FORMAT:
- *   <CLIENT_URL>/capture?source=<source>&utm_source=<source>&utm_medium=<medium>&utm_campaign=<name>
+ *   <CLIENT_URL>/capture/<tenantId>?source=<source>&utm_source=<source>&utm_medium=<medium>&utm_campaign=<name>[&utm_content=...&utm_term=...]
  */
-const generateUtmLink = (campaignName, source, medium) => {
+const generateUtmLink = (tenantId, campaignName, source, medium, { utmContent, utmTerm } = {}) => {
   const base = process.env.CLIENT_URL || 'http://localhost:3000';
   const params = new URLSearchParams({
     source:       source || '',
@@ -55,7 +68,75 @@ const generateUtmLink = (campaignName, source, medium) => {
     utm_medium:   medium || 'paid',
     utm_campaign: campaignName || '',
   });
-  return `${base}${UTM_CAPTURE_PATH}?${params.toString()}`;
+  if (utmContent) params.set('utm_content', utmContent);
+  if (utmTerm) params.set('utm_term', utmTerm);
+  return `${base}${UTM_CAPTURE_PATH}/${tenantId}?${params.toString()}`;
+};
+
+// =============================================================================
+// AUTOMATIC AD-PLATFORM TRACKING SETUP — set once per platform, applies
+// to every real ad/campaign going forward automatically. NOT the
+// per-campaign generateUtmLink above, which a tenant would otherwise
+// have to regenerate and re-paste for every single ad -- exactly what
+// this exists to eliminate.
+//
+// REAL PLATFORM MECHANICS (confirmed via each platform's own live
+// documentation before writing this, not assumed):
+//
+// GOOGLE ADS: a "Final URL Suffix", set ONCE at the account level
+// (Google Ads UI: Settings > Account Settings > Tracking), is appended
+// as query params to whatever a given ad's real Final URL already is --
+// it does not change the destination. So this ALSO requires the
+// tenant's ad(s) to have their real Final URL set to our capture link
+// itself (this app's Capture Form IS the intended landing page, per
+// this product's own design -- see campaigns/campaign.constants.js's
+// own UTM_CAPTURE_PATH comment). Google's ValueTrack parameters
+// ({campaignid}, {adgroupid}, {creative}, {gclid}) only ever substitute
+// numeric IDs, never a human-readable campaign name -- resolved to the
+// REAL campaign name automatically at lead-capture time instead (see
+// publicCapture.service.js's resolveRealCampaignName), using this app's
+// own already-synced GoogleAdsCampaignMetric data.
+//
+// META ADS: no true account-wide equivalent to Google's Final URL
+// Suffix exists -- Meta's "URL Parameters" field is set per ad (or
+// inherited when an ad is duplicated from a template within Ads
+// Manager), confirmed via Meta's own developer docs. Still a single
+// one-time paste per ad template rather than hand-crafting a unique
+// link with a typed-out campaign name for every ad. Meta's own dynamic
+// macros ({{campaign.name}}, {{adset.name}}, {{ad.name}}) uniquely give
+// REAL, human-readable names directly -- no ID resolution needed on our
+// side for Meta, unlike Google.
+// =============================================================================
+
+/**
+ * getAdPlatformTrackingSetup -- returns the real, tenant-scoped values
+ * for both platforms' one-time tracking setup.
+ */
+export const getAdPlatformTrackingSetup = (tenantId) => {
+  const base = process.env.CLIENT_URL || 'http://localhost:3000';
+  const captureUrl = `${base}${UTM_CAPTURE_PATH}/${tenantId}`;
+
+  return {
+    google: {
+      // Set as this ad's (or the account/campaign-level default) real
+      // Final URL in Google Ads -- static, no dynamic parameters here.
+      finalUrl: captureUrl,
+      // Set ONCE under Google Ads > Settings > Account Settings >
+      // Tracking > "Final URL suffix" -- applies automatically to every
+      // real campaign/ad in the account from then on. No leading `?`.
+      finalUrlSuffix: 'utm_source=Google+Ads&utm_medium=cpc&utm_campaign={campaignid}&ad_group_id={adgroupid}&ad_id={creative}&click_id={gclid}',
+    },
+    meta: {
+      // Set as this ad's real Website URL in Meta Ads Manager --
+      // static, no dynamic parameters here.
+      websiteUrl: captureUrl,
+      // Set under the ad's "Tracking" section > "URL Parameters" (or on
+      // an ad template you duplicate for future ads) -- Meta fills
+      // these in automatically at click time using its own real
+      // dynamic macros.
+      urlParameters: 'utm_source=Meta+Ads&utm_medium=paid_social&utm_campaign={{campaign.name}}&ad_group_id={{adset.id}}&ad_id={{ad.id}}',
+    },
+  };
 };
 
 // =============================================================================
@@ -131,8 +212,11 @@ export const getRevenueByCampaign = (tenantId) =>
 export const createCampaign = async (data, reqUser) => {
   const ctx = buildCtx(reqUser);
 
-  // Generate UTM tracking link automatically on creation
+  // Generate UTM tracking link automatically on creation -- real,
+  // tenant-scoped so the public capture page (and the backend behind
+  // it) know whose lead a submission belongs to.
   const utm_tracking_link = generateUtmLink(
+    ctx.tenantId,
     data.campaign_name,
     data.source,
     data.medium

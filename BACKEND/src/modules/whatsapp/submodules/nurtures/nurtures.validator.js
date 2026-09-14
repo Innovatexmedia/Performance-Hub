@@ -9,6 +9,8 @@ import {
   TRIGGER_TYPE_VALUES,
   DELAY_UNIT_VALUES,
   MAX_LIMIT,
+  CONDITION_OPERATOR_VALUES,
+  CONDITION_LOGIC_VALUES,
 } from './nurtures.constants.js';
 
 export const handleValidation = (req, _res, next) => {
@@ -41,6 +43,16 @@ const stepRules = [
   body('steps.*.templateId').optional({ values: 'falsy' }).isMongoId().withMessage('templateId must be a valid id'),
 ];
 
+// Real trigger-condition validation -- same real shape/rules as
+// Automation Rules' own condition array, since both are evaluated by
+// the same shared engine (src/shared/services/conditionEngine.js).
+const conditionRules = [
+  body('conditions').optional().isArray().withMessage('conditions must be an array'),
+  body('conditions.*.field').optional().trim().notEmpty().withMessage('condition field is required'),
+  body('conditions.*.operator').optional().isIn(CONDITION_OPERATOR_VALUES).withMessage('Invalid condition operator'),
+  body('conditionLogic').optional().isIn(CONDITION_LOGIC_VALUES).withMessage('Invalid conditionLogic'),
+];
+
 // ── Sequence ───────────────────────────────────────────────────────────────────
 
 export const validateCreateSequence = [
@@ -51,6 +63,7 @@ export const validateCreateSequence = [
   body('steps').notEmpty().withMessage('steps array is required')
     .bail().isArray({ min: 1 }).withMessage('At least one step is required'),
   ...stepRules,
+  ...conditionRules,
   handleValidation,
 ];
 
@@ -60,6 +73,7 @@ export const validateUpdateSequence = [
   body('type').optional().isIn(SEQUENCE_TYPE_VALUES).withMessage('Invalid sequence type'),
   body('triggerType').optional().isIn(TRIGGER_TYPE_VALUES).withMessage('Invalid triggerType'),
   ...stepRules,
+  ...conditionRules,
   handleValidation,
 ];
 

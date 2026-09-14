@@ -185,6 +185,25 @@ export class MetaAdsProvider {
       'ctr', 'cpc', 'actions', 'action_values',
     ].join(',');
 
+    // Real ISO 4217 code for the ad ACCOUNT these numbers are billed in
+    // -- a real, standard field on Meta's own act_{id} object (same
+    // object already used for the account_id/name/account_status
+    // discovery call above). One extra lightweight call per sync, not
+    // assumed to already match the tenant's own workspace currency --
+    // see metaAdsCampaignMetric.model.js's own comment on why this
+    // matters for production ROAS safety.
+    let currency = null;
+    try {
+      const currResponse = await fetch(`${GRAPH_BASE}/act_${this.adAccountId}?fields=currency&access_token=${accessToken}`);
+      const currJson = await currResponse.json().catch(() => ({}));
+      if (currResponse.ok) currency = currJson.currency || null;
+    } catch {
+      // Non-fatal -- spend/clicks/impressions are still real and useful
+      // without a currency code; getAdSpendSummary treats a null
+      // currency as "cannot verify, withhold ROAS" (same safe treatment
+      // as an actual mismatch), never as "assume it matches".
+    }
+
     const rows = await this._getInsightsPaginated({ accessToken, datePreset, fields });
 
     return rows.map((row) => ({
@@ -198,6 +217,7 @@ export class MetaAdsProvider {
       // ENABLED/PAUSED/REMOVED values get when absent).
       status:       null,
       channelType:  'META',
+      currency,
       // Real Meta convention: every numeric field in an Insights row is
       // returned as a STRING (confirmed in Meta's own documented
       // example response) -- Number() here, not assumed as already numeric.
@@ -224,6 +244,55 @@ export class MetaAdsProvider {
     }));
   }
 
+  /**
+   * getAdSetPerformance -- real ad-set-level Insights pull, one level of
+   * granularity below getCampaignPerformance above. Added per explicit
+   * product requirement for ad-set identifiers/metrics, not just
+   * campaign-level totals.
+   *
+   * SOURCE: real Meta Marketing API -- confirmed real, standard Insights
+   * fields (adset_id, adset_name) at level=adset, alongside the same
+   * campaign_id/campaign_name (Meta includes the real parent campaign
+   * identifiers on every adset-level row) and the same actions/
+   * action_values conversion shape as campaign level.
+   */
+  async getAdSetPerformance({ accessToken, dateRange = 'LAST_30_DAYS' }) {
+    if (!this.adAccountId) throw new Error('MetaAdsProvider requires an ad account to be selected before syncing.');
+
+    const datePreset = DATE_RANGE_MAP[dateRange] || 'last_30d';
+    const fields = [
+      'campaign_id', 'campaign_name', 'adset_id', 'adset_name',
+      'impressions', 'clicks', 'spend', 'ctr', 'cpc', 'actions', 'action_values',
+    ].join(',');
+
+    let currency = null;
+    try {
+      const currResponse = await fetch(`${GRAPH_BASE}/act_${this.adAccountId}?fields=currency&access_token=${accessToken}`);
+      const currJson = await currResponse.json().catch(() => ({}));
+      if (currResponse.ok) currency = currJson.currency || null;
+    } catch {
+      // Non-fatal -- see getCampaignPerformance's identical comment above.
+    }
+
+    const rows = await this._getInsightsPaginated({ accessToken, datePreset, fields, level: 'adset' });
+
+    return rows.map((row) => ({
+      campaignId:   row.campaign_id,
+      campaignName: row.campaign_name,
+      adSetId:      row.adset_id,
+      adSetName:    row.adset_name,
+      status:       null, // same real Insights-API limitation as campaign level -- see getCampaignPerformance's comment
+      currency,
+      impressions:  Number(row.impressions || 0),
+      clicks:       Number(row.clicks || 0),
+      spend:        Number(row.spend || 0),
+      conversions:      this._sumActions(row.actions),
+      conversionsValue: this._sumActions(row.action_values),
+      ctr:          Number(row.ctr || 0),
+      averageCpc:   Number(row.cpc || 0),
+    }));
+  }
+
   /** _sumActions -- real helper for Meta's actions/action_values array shape. */
   _sumActions(actions) {
     if (!Array.isArray(actions)) return 0;
@@ -231,9 +300,9 @@ export class MetaAdsProvider {
   }
 
   /** _getInsightsPaginated -- shared real Insights call, paginated via Meta's real cursor-based paging. */
-  async _getInsightsPaginated({ accessToken, datePreset, fields }) {
+  async _getInsightsPaginated({ accessToken, datePreset, fields, level = 'campaign' }) {
     const allRows = [];
-    let url = `${GRAPH_BASE}/act_${this.adAccountId}/insights?level=campaign&date_preset=${datePreset}&fields=${fields}&access_token=${accessToken}&limit=200`;
+    let url = `${GRAPH_BASE}/act_${this.adAccountId}/insights?level=${level}&date_preset=${datePreset}&fields=${fields}&access_token=${accessToken}&limit=200`;
 
     while (url) {
       let response;

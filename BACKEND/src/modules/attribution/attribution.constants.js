@@ -50,3 +50,17 @@ export const LIFECYCLE_STAGE = Object.freeze({
 export const LIFECYCLE_STAGE_VALUES = Object.freeze(
   Object.values(LIFECYCLE_STAGE)
 );
+
+/**
+ * DEFAULT_AD_SYNC_DATE_RANGE -- the single, real dateRange value every
+ * Google Ads / Meta Ads campaign sync actually uses today (the real,
+ * only-ever-called sync entry points in integration.service.js never
+ * pass an explicit dateRange). Shared here so googleAdsSettings.service.js,
+ * metaAdsSettings.service.js, and attribution.service.js's
+ * getAdSpendSummary all agree on ONE canonical value, instead of each
+ * hardcoding their own copy of the string 'LAST_30_DAYS' -- see
+ * getAdSpendSummary's own comment for why this matters for real
+ * duplicate/double-counting prevention if a dateRange selector is ever
+ * exposed in the UI later.
+ */
+export const DEFAULT_AD_SYNC_DATE_RANGE = 'LAST_30_DAYS';

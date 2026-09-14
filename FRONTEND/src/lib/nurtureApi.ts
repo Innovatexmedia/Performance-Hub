@@ -31,6 +31,12 @@ export const nurtureApi = {
   enroll: (id: string, leadId: string) =>
     apiClient.post<NurtureEnrollment>(`/whatsapp/nurtures/${id}/enroll`, { leadId }),
 
+  /** Real "also apply to already-existing leads" manual re-run -- see
+   * nurtures.service.js's enrollMatchingLeads(). Returns real counts
+   * (matched/enrolled/alreadyEnrolled/failed), not a fire-and-forget ack. */
+  enrollMatching: (id: string) =>
+    apiClient.post<{ matched: number; enrolled: number; alreadyEnrolled: number; failed: number }>(`/whatsapp/nurtures/${id}/enroll-matching`, {}),
+
   listEnrollments: (query?: Record<string, string>) =>
     apiClientRaw.get<Paginated<NurtureEnrollment[]>>('/whatsapp/nurtures/enrollments', query),
 

@@ -1,4 +1,4 @@
-import { Network, Download, GitBranch } from 'lucide-react';
+import { Network, Download, GitBranch, AlertTriangle } from 'lucide-react';
 import { PageHeader, Card, CardHeader, Button, Table, Th, Td, Tr, Badge, StatusBadge, EmptyState } from '@/components/ui';
 import { KpiCard } from '@/components/ui/KpiCard';
 import { BarChartCard, DonutChartCard } from '@/components/charts';
@@ -115,6 +115,14 @@ export function Attribution() {
                   <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Conversions</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.totalConversions}</p></div>
                   <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Campaigns</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.campaigns.length}</p></div>
                 </div>
+                {dashboard.adSpend.excludedFromTotal && dashboard.adSpend.excludedFromTotal.count > 0 && (
+                  <div className="mx-4 mb-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-xs text-amber-700">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                    <span>
+                      Total spend excludes {dashboard.adSpend.excludedFromTotal.count} campaign{dashboard.adSpend.excludedFromTotal.count === 1 ? '' : 's'} whose exchange rate couldn't be verified right now ({dashboard.adSpend.excludedFromTotal.campaignNames.join(', ')}) -- their real spend still shows on their own row below.
+                    </span>
+                  </div>
+                )}
                 <Table>
                   <thead>
                     <tr><Th>Platform</Th><Th>Campaign</Th><Th>Status</Th><Th>Spend</Th><Th>Clicks</Th><Th>Impressions</Th><Th>Conversions</Th><Th>Matched Revenue</Th><Th>ROAS</Th></tr>
@@ -126,12 +134,26 @@ export function Attribution() {
                         <Td><Badge tone={c.channelType === 'META' ? 'blue' : 'gray'}>{c.channelType === 'META' ? 'Meta' : 'Google'}</Badge></Td>
                         <Td className="font-medium">{c.campaignName}</Td>
                         <Td><Badge tone={c.status === 'ENABLED' ? 'green' : 'gray'}>{c.status ?? '—'}</Badge></Td>
-                        <Td>{formatCurrency(c.spend)}</Td>
+                        <Td>
+                          {/* Always shown in the workspace's own currency -- real conversion happens
+                              server-side (see attribution.service.js's getAdSpendSummary), not a
+                              display-only relabeling. Hovering shows the real original figure the ad
+                              platform actually reported, before conversion, for transparency/audit. */}
+                          <span title={c.currencyOriginal && c.currencyOriginal !== c.currency ? `Originally ${formatCurrency(c.spendOriginal, c.currencyOriginal)} -- converted at rate ${c.exchangeRate}` : undefined}>
+                            {formatCurrency(c.spend, c.currency ?? undefined)}
+                          </span>
+                        </Td>
                         <Td>{c.clicks}</Td>
                         <Td>{formatCompact(c.impressions)}</Td>
                         <Td>{c.conversions}</Td>
                         <Td>{c.matchedRevenue !== null ? formatCurrency(c.matchedRevenue) : <span className="text-ink-400">Unmatched</span>}</Td>
-                        <Td className={c.roas !== null && c.roas >= 1 ? 'font-semibold text-emerald-700' : ''}>{c.roas !== null ? `${c.roas}x` : '—'}</Td>
+                        <Td className={c.roas !== null && c.roas >= 1 ? 'font-semibold text-emerald-700' : ''}>
+                          {c.currencyMismatch ? (
+                            <span className="inline-flex items-center gap-1 text-xs text-amber-600" title={`Could not fetch a live exchange rate for ${c.currencyOriginal} -> ${c.currency} just now -- ROAS is temporarily withheld rather than shown with a guessed rate. Try refreshing shortly.`}>
+                              <AlertTriangle size={12} /> Rate unavailable
+                            </span>
+                          ) : c.roas !== null ? `${c.roas}x` : '—'}
+                        </Td>
                       </Tr>
                     ))}
                   </tbody>

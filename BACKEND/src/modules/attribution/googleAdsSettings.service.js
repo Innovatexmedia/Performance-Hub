@@ -13,7 +13,9 @@
 
 import GoogleAdsSettings from './googleAdsSettings.model.js';
 import GoogleAdsCampaignMetric from './googleAdsCampaignMetric.model.js';
+import GoogleAdsAdGroupMetric from './googleAdsAdGroupMetric.model.js';
 import { GoogleAdsProvider } from './providers/googleAds.provider.js';
+import { DEFAULT_AD_SYNC_DATE_RANGE } from './attribution.constants.js';
 import { encrypt, safeDecrypt } from '../../utils/crypto.js';
 import { signState } from '../../utils/crypto.js';
 import config from '../../config/config.js';
@@ -195,7 +197,7 @@ export const googleAdsSettingsService = {
    * This is what "Sync" on the Integrations card actually triggers, and
    * what feeds the Attribution dashboard's real ad-spend numbers.
    */
-  async syncCampaigns(ctx, { dateRange = 'LAST_30_DAYS' } = {}) {
+  async syncCampaigns(ctx, { dateRange = DEFAULT_AD_SYNC_DATE_RANGE } = {}) {
     const doc = await getOrCreate(ctx.tenantId);
     if (!doc.connected || !doc.clientCustomerId) {
       throw AppError.badRequest('Connect a Google Ads account before syncing.');
@@ -214,6 +216,7 @@ export const googleAdsSettingsService = {
               campaignName: c.campaignName,
               status: c.status,
               channelType: c.channelType,
+              currency: c.currency,
               impressions: c.impressions,
               clicks: c.clicks,
               spend: c.spend,
@@ -228,11 +231,47 @@ export const googleAdsSettingsService = {
         )
       ));
 
+      // Real ad-group-level sync -- one level of granularity below
+      // campaign, added per explicit product requirement. Best-effort:
+      // a failure here is logged onto this same sync's error field but
+      // does NOT roll back or fail the campaign-level sync above, since
+      // campaign-level data is still real and useful on its own.
+      let adGroupCount = 0;
+      try {
+        const adGroups = await provider.getAdGroupPerformance({ accessToken, dateRange });
+        await Promise.all(adGroups.map((g) =>
+          GoogleAdsAdGroupMetric.findOneAndUpdate(
+            { tenantId: ctx.tenantId, adGroupId: g.adGroupId, dateRange },
+            {
+              $set: {
+                campaignId: g.campaignId,
+                campaignName: g.campaignName,
+                adGroupName: g.adGroupName,
+                status: g.status,
+                currency: g.currency,
+                impressions: g.impressions,
+                clicks: g.clicks,
+                spend: g.spend,
+                conversions: g.conversions,
+                conversionsValue: g.conversionsValue,
+                ctr: g.ctr,
+                averageCpc: g.averageCpc,
+                syncedAt: new Date(),
+              },
+            },
+            { upsert: true }
+          )
+        ));
+        adGroupCount = adGroups.length;
+      } catch (adGroupErr) {
+        console.warn(`[google-ads] Ad-group sync failed for tenant ${ctx.tenantId} (campaign sync still succeeded): ${adGroupErr.message}`);
+      }
+
       doc.lastSyncedAt = new Date();
       doc.lastSyncError = null;
       await doc.save();
 
-      return { synced: true, campaignCount: campaigns.length };
+      return { synced: true, campaignCount: campaigns.length, adGroupCount };
     } catch (err) {
       doc.lastSyncError = err.message;
       await doc.save().catch(() => {});
@@ -241,7 +280,7 @@ export const googleAdsSettingsService = {
   },
 
   /** getCampaignMetrics -- real, already-synced data for the Attribution dashboard. */
-  async getCampaignMetrics(tenantId, { dateRange = 'LAST_30_DAYS' } = {}) {
+  async getCampaignMetrics(tenantId, { dateRange = DEFAULT_AD_SYNC_DATE_RANGE } = {}) {
     return GoogleAdsCampaignMetric.find({ tenantId, dateRange }).sort({ spend: -1 });
   },
 };

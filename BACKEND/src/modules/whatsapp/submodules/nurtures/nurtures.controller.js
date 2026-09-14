@@ -120,6 +120,17 @@ export const nurturesController = {
     return sendCreated(res, enrollment, 'Lead enrolled in nurture sequence');
   }),
 
+  // POST /api/whatsapp/nurtures/:id/enroll-matching
+  // Manual trigger for "also apply to already-existing leads" -- runs
+  // the sequence's real conditions against every current lead in the
+  // workspace right now, on demand (in addition to the automatic pass
+  // that already runs once when a LEAD_CREATED sequence with conditions
+  // is first activated -- see nurtures.service.js's activateSequence()).
+  enrollMatching: asyncHandler(async (req, res) => {
+    const result = await nurturesService.enrollMatchingLeads(buildCtx(req), req.params.id);
+    return sendSuccess(res, result, `${result.enrolled} lead(s) newly enrolled`);
+  }),
+
   // GET /api/whatsapp/nurtures/enrollments
   listEnrollments: asyncHandler(async (req, res) => {
     const { data, pagination } = await nurturesService.listEnrollments(buildCtx(req), req.query);
