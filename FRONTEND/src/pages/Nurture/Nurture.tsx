@@ -318,9 +318,9 @@ export function Nurture() {
         ) : (
           <div className="divide-y divide-ink-100">
             {sequences.map((seq) => (
-              <div key={seq.id} className="flex items-center justify-between gap-3 p-4">
+              <div key={seq.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <p className="font-medium text-ink-900">{seq.name}</p>
                     <Badge tone={seq.status === 'ACTIVE' ? 'green' : seq.status === 'DRAFT' ? 'gray' : seq.status === 'ARCHIVED' ? 'gray' : 'amber'}>{seq.status}</Badge>
                     {seq.triggerType === 'LEAD_QUALIFIED' && seq.qualificationTemperature && (
@@ -335,14 +335,14 @@ export function Nurture() {
                     {seq.steps.map((step) => {
                       const Icon = channelIcon[step.channel] || MessageCircle;
                       return (
-                        <span key={step.stepNumber} className="flex items-center gap-1 rounded-md border border-ink-100 px-2 py-1 text-xs text-ink-600">
+                        <span key={step.stepNumber} className="flex items-center gap-1 whitespace-nowrap rounded-md border border-ink-100 px-2 py-1 text-xs text-ink-600">
                           <Icon size={12} /> Step {step.stepNumber} · {channelLabel[step.channel]} · +{step.delayValue}{step.delayUnit.toLowerCase().slice(0, 1)}
                         </span>
                       );
                     })}
                   </div>
                 </div>
-                <div className="flex shrink-0 items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:justify-end">
                   <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setHistoryFor(seq)}><History size={13} /> History</Button>
                   {seq.status === 'ACTIVE' && seq.triggerType === 'LEAD_CREATED' && seq.conditions && seq.conditions.length > 0 && (
                     <Button variant="ghost" disabled={busyId === seq.id} className="px-2.5 py-1.5 text-xs" onClick={() => void handleEnrollMatching(seq)}><RefreshCw size={13} /> Enroll matching now</Button>
@@ -419,36 +419,42 @@ export function Nurture() {
                 {form.conditions.map((cond, idx) => {
                   const fieldMeta = NURTURE_LEAD_CONDITION_FIELDS.find((f) => f.field === cond.field);
                   return (
-                    <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2">
-                      <Field label={idx === 0 ? 'Field' : ''}>
-                        <Select value={cond.field} onChange={(e) => updateCondition(idx, { field: e.target.value })}>
-                          {NURTURE_LEAD_CONDITION_FIELDS.map((f) => <option key={f.field} value={f.field}>{f.label}</option>)}
-                        </Select>
-                      </Field>
-                      <Field label={idx === 0 ? 'Condition' : ''}>
-                        <Select value={cond.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value as NurtureCondition['operator'] })}>
-                          {NURTURE_CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{NURTURE_CONDITION_OPERATOR_LABELS[op]}</option>)}
-                        </Select>
-                      </Field>
-                        <Field label={idx === 0 ? 'Value' : ''}>
-                        {cond.operator === 'EXISTS' || cond.operator === 'NOT_EXISTS' ? (
-                          <Input value="" disabled placeholder="(no value needed)" />
-                        ) : (
-                          <>
-                            <Input
-                              list={fieldMeta?.field === 'source' || fieldMeta?.field === 'utm_source' ? 'nurture-source-suggestions' : undefined}
-                              type={fieldMeta?.type === 'number' ? 'number' : 'text'}
-                              value={cond.value ?? ''}
-                              onChange={(e) => updateCondition(idx, { value: e.target.value })}
-                              placeholder="e.g. Google Ads"
-                            />
-                            <datalist id="nurture-source-suggestions">
-                              {NURTURE_COMMON_SOURCE_VALUES.map((v) => <option key={v} value={v} />)}
-                            </datalist>
-                          </>
-                        )}
-                      </Field>
-                      <Button variant="ghost" className="mb-0.5 px-2 py-2 text-red-600" onClick={() => removeCondition(idx)}><Trash2 size={14} /></Button>
+                    <div key={idx} className="rounded-lg bg-ink-50/60 p-2.5 sm:bg-transparent sm:p-0">
+                      <div className="flex items-center justify-between sm:hidden">
+                        <p className="text-xs font-medium text-ink-500">Condition {idx + 1}</p>
+                        <Button variant="ghost" className="px-2 py-1 text-red-600" onClick={() => removeCondition(idx)}><Trash2 size={14} /></Button>
+                      </div>
+                      <div className="mt-2 grid grid-cols-1 items-end gap-2 sm:mt-0 sm:grid-cols-[1fr_1fr_1fr_auto]">
+                        <Field label="Field">
+                          <Select value={cond.field} onChange={(e) => updateCondition(idx, { field: e.target.value })}>
+                            {NURTURE_LEAD_CONDITION_FIELDS.map((f) => <option key={f.field} value={f.field}>{f.label}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Condition">
+                          <Select value={cond.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value as NurtureCondition['operator'] })}>
+                            {NURTURE_CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{NURTURE_CONDITION_OPERATOR_LABELS[op]}</option>)}
+                          </Select>
+                        </Field>
+                        <Field label="Value">
+                          {cond.operator === 'EXISTS' || cond.operator === 'NOT_EXISTS' ? (
+                            <Input value="" disabled placeholder="(no value needed)" />
+                          ) : (
+                            <>
+                              <Input
+                                list={fieldMeta?.field === 'source' || fieldMeta?.field === 'utm_source' ? 'nurture-source-suggestions' : undefined}
+                                type={fieldMeta?.type === 'number' ? 'number' : 'text'}
+                                value={cond.value ?? ''}
+                                onChange={(e) => updateCondition(idx, { value: e.target.value })}
+                                placeholder="e.g. Google Ads"
+                              />
+                              <datalist id="nurture-source-suggestions">
+                                {NURTURE_COMMON_SOURCE_VALUES.map((v) => <option key={v} value={v} />)}
+                              </datalist>
+                            </>
+                          )}
+                        </Field>
+                        <Button variant="ghost" className="hidden px-2 py-2 text-red-600 sm:mb-0.5 sm:flex" onClick={() => removeCondition(idx)}><Trash2 size={14} /></Button>
+                      </div>
                     </div>
                   );
                 })}
@@ -486,7 +492,7 @@ export function Nurture() {
                         <button className="text-xs text-red-600" onClick={() => removeStep(step.stepNumber)}>Remove</button>
                       )}
                     </div>
-                  <div className="grid grid-cols-3 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     <Select value={step.channel} onChange={(e) => updateStep(step.stepNumber, { channel: e.target.value as NurtureChannel })}>
                       <option value="WHATSAPP">WhatsApp</option>
                       <option value="EMAIL">Email</option>
@@ -498,13 +504,15 @@ export function Nurture() {
                       <option value="MANUAL_TASK">Manual task</option>
                       <option value="SMS">SMS (not yet sendable)</option>
                     </Select>
-                    <Input type="number" min={0} value={step.delayValue} onChange={(e) => updateStep(step.stepNumber, { delayValue: Number(e.target.value) })} placeholder="Delay" />
-                    <Select value={step.delayUnit} onChange={(e) => updateStep(step.stepNumber, { delayUnit: e.target.value as NurtureStep['delayUnit'] })}>
-                      <option value="MINUTES">Minutes</option>
-                      <option value="HOURS">Hours</option>
-                      <option value="DAYS">Days</option>
-                      <option value="WEEKS">Weeks</option>
-                    </Select>
+                    <div className="grid grid-cols-2 gap-2 sm:col-span-2">
+                      <Input type="number" min={0} value={step.delayValue} onChange={(e) => updateStep(step.stepNumber, { delayValue: Number(e.target.value) })} placeholder="Delay" />
+                      <Select value={step.delayUnit} onChange={(e) => updateStep(step.stepNumber, { delayUnit: e.target.value as NurtureStep['delayUnit'] })}>
+                        <option value="MINUTES">Minutes</option>
+                        <option value="HOURS">Hours</option>
+                        <option value="DAYS">Days</option>
+                        <option value="WEEKS">Weeks</option>
+                      </Select>
+                    </div>
                   </div>
 
                   {step.channel === 'WHATSAPP' && (
@@ -592,7 +600,7 @@ export function Nurture() {
 
                   {step.channel === 'API_REQUEST' && (
                     <>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                         <Select value={step.apiMethod || 'POST'} onChange={(e) => updateStep(step.stepNumber, { apiMethod: e.target.value as NurtureStep['apiMethod'] })}>
                           <option value="GET">GET</option>
                           <option value="POST">POST</option>
@@ -600,7 +608,7 @@ export function Nurture() {
                           <option value="PATCH">PATCH</option>
                           <option value="DELETE">DELETE</option>
                         </Select>
-                        <div className="col-span-2 flex items-center gap-2">
+                        <div className="flex items-center gap-2 sm:col-span-2">
                           <Input ref={fieldRef(step.stepNumber, 'apiUrl')} value={step.apiUrl || ''} onChange={(e) => updateStep(step.stepNumber, { apiUrl: e.target.value })} placeholder="https://..." />
                           <InsertVariablePicker targetRef={fieldRef(step.stepNumber, 'apiUrl')} onInsert={(v) => updateStep(step.stepNumber, { apiUrl: v })} />
                         </div>
