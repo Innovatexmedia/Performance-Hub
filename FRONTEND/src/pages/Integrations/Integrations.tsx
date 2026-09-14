@@ -1,17 +1,32 @@
-import { useState, useEffect } from 'react';
-import { RefreshCw, Settings as SettingsIcon, CheckCircle2, AlertCircle, Copy } from 'lucide-react';
-import { useAuthStore } from '@/store/authStore';
-import { useIntegrations } from '@/hooks/useIntegrations';
-import { integrationsApi } from '@/lib/integrationsApi';
-import { campaignsApi } from '@/lib/campaignsApi';
-import type { AdPlatformTrackingSetup } from '@/lib/campaignsApi';
-import { integrationPermissions } from '@/lib/permissions';
-import { toast } from '@/store/toastStore';
-import { ApiError } from '@/lib/apiClient';
-import { PageHeader, Card, Button, Badge, Tabs, Modal, Field, Input } from '@/components/ui';
-import { timeAgo } from '@/utils/formatters';
-import { INTEGRATION_CATEGORY_VALUES } from '@/types/integration';
-import type { Integration } from '@/types/integration';
+import { useState, useEffect } from "react";
+import {
+  RefreshCw,
+  Settings as SettingsIcon,
+  CheckCircle2,
+  AlertCircle,
+  Copy,
+} from "lucide-react";
+import { useAuthStore } from "@/store/authStore";
+import { useIntegrations } from "@/hooks/useIntegrations";
+import { integrationsApi } from "@/lib/integrationsApi";
+import { campaignsApi } from "@/lib/campaignsApi";
+import type { AdPlatformTrackingSetup } from "@/lib/campaignsApi";
+import { integrationPermissions } from "@/lib/permissions";
+import { toast } from "@/store/toastStore";
+import { ApiError } from "@/lib/apiClient";
+import {
+  PageHeader,
+  Card,
+  Button,
+  Badge,
+  Tabs,
+  Modal,
+  Field,
+  Input,
+} from "@/components/ui";
+import { timeAgo } from "@/utils/formatters";
+import { INTEGRATION_CATEGORY_VALUES } from "@/types/integration";
+import type { Integration } from "@/types/integration";
 
 /**
  * Integrations -- confirmed spec-aligned (MASTER_SPEC B17, DEVELOPER_HANDOFF
@@ -25,74 +40,116 @@ import type { Integration } from '@/types/integration';
 export function Integrations() {
   const role = useAuthStore((s) => s.user?.role);
   const canManage = integrationPermissions.canManage(role);
-  const [category, setCategory] = useState('all');
+  const [category, setCategory] = useState("all");
   const { integrations, counts, loading, error, toggle, sync, updateConfig } =
-    useIntegrations(category === 'all' ? {} : { category: category as never });
+    useIntegrations(category === "all" ? {} : { category: category as never });
 
-  const [googleAdsAccountPicker, setGoogleAdsAccountPicker] = useState<string[] | null>(null);
-  const [metaAdsAccountPicker, setMetaAdsAccountPicker] = useState<{ adAccountId: string; accountName: string }[] | null>(null);
-  const [trackingSetup, setTrackingSetup] = useState<AdPlatformTrackingSetup | null>(null);
+  const [googleAdsAccountPicker, setGoogleAdsAccountPicker] = useState<
+    string[] | null
+  >(null);
+  const [metaAdsAccountPicker, setMetaAdsAccountPicker] = useState<
+    { adAccountId: string; accountName: string }[] | null
+  >(null);
+  const [trackingSetup, setTrackingSetup] =
+    useState<AdPlatformTrackingSetup | null>(null);
 
   useEffect(() => {
-    campaignsApi.getAdPlatformTrackingSetup().then(setTrackingSetup).catch(() => {});
+    campaignsApi
+      .getAdPlatformTrackingSetup()
+      .then(setTrackingSetup)
+      .catch(() => {});
   }, []);
   const [selectingAccount, setSelectingAccount] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const connected = params.get('google_ads_connected');
-    const customerIds = params.get('customer_ids');
-    const oauthError = params.get('google_ads_error');
-    const metaAdsConnected = params.get('meta_ads_connected');
-    const metaAdsAccounts = params.get('accounts');
-    const metaAdsOauthError = params.get('meta_ads_error');
-    const shopifyConnected = params.get('shopify_connected');
-    const shopName = params.get('shop_name');
-    const shopifyError = params.get('shopify_error');
-    const zohoConnected = params.get('zoho_connected');
-    const zohoError = params.get('zoho_error');
+    const connected = params.get("google_ads_connected");
+    const customerIds = params.get("customer_ids");
+    const oauthError = params.get("google_ads_error");
+    const metaAdsConnected = params.get("meta_ads_connected");
+    const metaAdsAccounts = params.get("accounts");
+    const metaAdsOauthError = params.get("meta_ads_error");
+    const shopifyConnected = params.get("shopify_connected");
+    const shopName = params.get("shop_name");
+    const shopifyError = params.get("shopify_error");
+    const zohoConnected = params.get("zoho_connected");
+    const zohoError = params.get("zoho_error");
 
     if (connected && customerIds) {
-      setGoogleAdsAccountPicker(customerIds.split(',').filter(Boolean));
+      setGoogleAdsAccountPicker(customerIds.split(",").filter(Boolean));
     } else if (oauthError) {
-      toast.error('Google authorization failed', decodeURIComponent(oauthError));
+      toast.error(
+        "Google authorization failed",
+        decodeURIComponent(oauthError),
+      );
     }
 
     if (metaAdsConnected && metaAdsAccounts) {
       try {
-        setMetaAdsAccountPicker(JSON.parse(decodeURIComponent(metaAdsAccounts)));
+        setMetaAdsAccountPicker(
+          JSON.parse(decodeURIComponent(metaAdsAccounts)),
+        );
       } catch {
-        toast.error('Meta authorization failed', 'Could not read the returned account list. Please try connecting again.');
+        toast.error(
+          "Meta authorization failed",
+          "Could not read the returned account list. Please try connecting again.",
+        );
       }
     } else if (metaAdsOauthError) {
-      toast.error('Meta authorization failed', decodeURIComponent(metaAdsOauthError));
+      toast.error(
+        "Meta authorization failed",
+        decodeURIComponent(metaAdsOauthError),
+      );
     }
 
     if (shopifyConnected) {
-      toast.success('Shopify connected', shopName ? `Connected to ${decodeURIComponent(shopName)}. Click Sync to pull real data.` : 'Real store connected.');
+      toast.success(
+        "Shopify connected",
+        shopName
+          ? `Connected to ${decodeURIComponent(shopName)}. Click Sync to pull real data.`
+          : "Real store connected.",
+      );
     } else if (shopifyError) {
-      toast.error('Shopify authorization failed', decodeURIComponent(shopifyError));
+      toast.error(
+        "Shopify authorization failed",
+        decodeURIComponent(shopifyError),
+      );
     }
 
     if (zohoConnected) {
-      toast.success('Zoho CRM connected', 'Click Sync to pull your real leads into InnovateX.');
+      toast.success(
+        "Zoho CRM connected",
+        "Click Sync to pull your real leads into InnovateX.",
+      );
     } else if (zohoError) {
-      toast.error('Zoho authorization failed', decodeURIComponent(zohoError));
+      toast.error("Zoho authorization failed", decodeURIComponent(zohoError));
     }
 
-    if (connected || oauthError || metaAdsConnected || metaAdsOauthError || shopifyConnected || shopifyError || zohoConnected || zohoError) {
+    if (
+      connected ||
+      oauthError ||
+      metaAdsConnected ||
+      metaAdsOauthError ||
+      shopifyConnected ||
+      shopifyError ||
+      zohoConnected ||
+      zohoError
+    ) {
       // Clean the URL so a refresh doesn't re-trigger this.
-      window.history.replaceState({}, '', window.location.pathname);
+      window.history.replaceState({}, "", window.location.pathname);
     }
   }, []);
 
   const handleSelectGoogleAdsAccount = async (customerId: string) => {
-    const card = integrations.find((i) => i.key === 'google_ads_campaigns');
+    const card = integrations.find((i) => i.key === "google_ads_campaigns");
     if (!card) return;
     setSelectingAccount(true);
     try {
       await updateConfig(card.id, { clientCustomerId: customerId });
-      toast.success('Google Ads account connected', `Account ${customerId} is now linked.`);
+      toast.success(
+        "Google Ads account connected",
+        `Account ${customerId} is now linked.`,
+      );
       setGoogleAdsAccountPicker(null);
       // Immediately shows Step 2 (the one-time tracking setup) so the
       // tenant never has to go hunting for it -- connecting the
@@ -100,91 +157,163 @@ export function Integrations() {
       // separate real things (see the info panel below), and surfacing
       // both together, right when it's most relevant, is what actually
       // removes the "which page do I need" confusion.
-      const updated = integrations.find((i) => i.key === 'google_ads_campaigns');
+      const updated = integrations.find(
+        (i) => i.key === "google_ads_campaigns",
+      );
       if (updated) openConfig(updated);
     } catch (err) {
-      toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(
+        "Could not connect this account",
+        err instanceof ApiError ? err.message : "Please try again.",
+      );
     } finally {
       setSelectingAccount(false);
     }
   };
 
-  const handleSelectMetaAdsAccount = async (adAccountId: string, accountName: string) => {
-    const card = integrations.find((i) => i.key === 'meta_ads_campaigns');
+  const handleSelectMetaAdsAccount = async (
+    adAccountId: string,
+    accountName: string,
+  ) => {
+    const card = integrations.find((i) => i.key === "meta_ads_campaigns");
     if (!card) return;
     setSelectingAccount(true);
     try {
       await updateConfig(card.id, { adAccountId, accountName });
-      toast.success('Meta Ads account connected', `${accountName || adAccountId} is now linked.`);
+      toast.success(
+        "Meta Ads account connected",
+        `${accountName || adAccountId} is now linked.`,
+      );
       setMetaAdsAccountPicker(null);
       // Same reasoning as the Google Ads handler above.
-      const updated = integrations.find((i) => i.key === 'meta_ads_campaigns');
+      const updated = integrations.find((i) => i.key === "meta_ads_campaigns");
       if (updated) openConfig(updated);
     } catch (err) {
-      toast.error('Could not connect this account', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(
+        "Could not connect this account",
+        err instanceof ApiError ? err.message : "Please try again.",
+      );
     } finally {
       setSelectingAccount(false);
     }
   };
 
   const [config, setConfig] = useState<Integration | null>(null);
-  const [configForm, setConfigForm] = useState({ api_key: '', webhook_url: '' });
-  const [waForm, setWaForm] = useState({ phoneNumberId: '', businessAccountId: '', accessToken: '', appSecret: '' });
-  const [dialog360Form, setDialog360Form] = useState({ apiKey: '' });
-  const [twilioForm, setTwilioForm] = useState({ accountSid: '', authToken: '', whatsappNumber: '' });
-  const [interaktForm, setInteraktForm] = useState({ apiKey: '' });
-  const [metaAdsForm, setMetaAdsForm] = useState({ pixelId: '', accessToken: '', testEventCode: '' });
-  const [googleAdsForm, setGoogleAdsForm] = useState({ measurementId: '', apiSecret: '' });
-  const [calcomForm, setCalcomForm] = useState({ apiKey: '' });
-  const [sendgridNurtureForm, setSendgridNurtureForm] = useState({ apiKey: '', verifiedSenderEmail: '', fromName: '', replyTo: '' });
-  const [shopifyForm, setShopifyForm] = useState({ shopDomain: '' });
+  const [configForm, setConfigForm] = useState({
+    api_key: "",
+    webhook_url: "",
+  });
+  const [waForm, setWaForm] = useState({
+    phoneNumberId: "",
+    businessAccountId: "",
+    accessToken: "",
+    appSecret: "",
+  });
+  const [dialog360Form, setDialog360Form] = useState({ apiKey: "" });
+  const [twilioForm, setTwilioForm] = useState({
+    accountSid: "",
+    authToken: "",
+    whatsappNumber: "",
+  });
+  const [interaktForm, setInteraktForm] = useState({ apiKey: "" });
+  const [metaAdsForm, setMetaAdsForm] = useState({
+    pixelId: "",
+    accessToken: "",
+    testEventCode: "",
+  });
+  const [googleAdsForm, setGoogleAdsForm] = useState({
+    measurementId: "",
+    apiSecret: "",
+  });
+  const [calcomForm, setCalcomForm] = useState({ apiKey: "" });
+  const [sendgridNurtureForm, setSendgridNurtureForm] = useState({
+    apiKey: "",
+    verifiedSenderEmail: "",
+    fromName: "",
+    replyTo: "",
+  });
+  const [shopifyForm, setShopifyForm] = useState({ shopDomain: "" });
   const [logsFor, setLogsFor] = useState<Integration | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   const tabs = [
-    { id: 'all', label: `All (${counts?.total ?? 0})` },
-    ...INTEGRATION_CATEGORY_VALUES.map((c) => ({ id: c, label: `${c} (${counts?.byCategory[c]?.count ?? 0})` })),
+    { id: "all", label: `All (${counts?.total ?? 0})` },
+    ...INTEGRATION_CATEGORY_VALUES.map((c) => ({
+      id: c,
+      label: `${c} (${counts?.byCategory[c]?.count ?? 0})`,
+    })),
   ];
 
   const handleToggle = async (i: Integration) => {
-    if (i.key === 'google_ads_campaigns' && i.status === 'disconnected') {
+    if (i.key === "google_ads_campaigns" && i.status === "disconnected") {
       try {
         const authUrl = await integrationsApi.startGoogleAdsCampaignsAuth();
         window.location.href = authUrl; // real Google consent screen -- full navigation, not a fetch
       } catch (err) {
-        toast.error('Could not start Google authorization', err instanceof ApiError ? err.message : 'Please try again.');
+        toast.error(
+          "Could not start Google authorization",
+          err instanceof ApiError ? err.message : "Please try again.",
+        );
       }
       return;
     }
-    if (i.key === 'meta_ads_campaigns' && i.status === 'disconnected') {
+    if (i.key === "meta_ads_campaigns" && i.status === "disconnected") {
       try {
         const authUrl = await integrationsApi.startMetaAdsCampaignsAuth();
         window.location.href = authUrl; // real Meta consent screen -- full navigation, not a fetch
       } catch (err) {
-        toast.error('Could not start Meta authorization', err instanceof ApiError ? err.message : 'Please try again.');
+        toast.error(
+          "Could not start Meta authorization",
+          err instanceof ApiError ? err.message : "Please try again.",
+        );
       }
       return;
     }
-    if (i.key === 'zoho' && i.status === 'disconnected') {
+    if (i.key === "zoho" && i.status === "disconnected") {
       try {
         const authUrl = await integrationsApi.startZohoAuth();
         window.location.href = authUrl; // real Zoho consent screen -- full navigation, not a fetch
       } catch (err) {
-        toast.error('Could not start Zoho authorization', err instanceof ApiError ? err.message : 'Please try again.');
+        toast.error(
+          "Could not start Zoho authorization",
+          err instanceof ApiError ? err.message : "Please try again.",
+        );
       }
       return;
     }
-    if ((i.key === 'meta_cloud' || i.key === '360dialog' || i.key === 'twilio_wa' || i.key === 'interakt' || i.key === 'meta_ads' || i.key === 'google_ads' || i.key === 'calcom' || i.key === 'sendgrid' || i.key === 'sendgrid_nurture' || i.key === 'shopify' || i.key === 'gemini' || i.key === 'openai' || i.key === 'claude') && i.status === 'disconnected') {
+    if (
+      (i.key === "meta_cloud" ||
+        i.key === "360dialog" ||
+        i.key === "twilio_wa" ||
+        i.key === "interakt" ||
+        i.key === "meta_ads" ||
+        i.key === "google_ads" ||
+        i.key === "calcom" ||
+        i.key === "sendgrid" ||
+        i.key === "sendgrid_nurture" ||
+        i.key === "shopify" ||
+        i.key === "gemini" ||
+        i.key === "openai" ||
+        i.key === "claude") &&
+      i.status === "disconnected"
+    ) {
       openConfig(i);
       return;
     }
     setBusyId(i.id);
     try {
       await toggle(i.id);
-      toast.success(i.status === 'disconnected' ? 'Integration connected' : 'Integration disconnected');
+      toast.success(
+        i.status === "disconnected"
+          ? "Integration connected"
+          : "Integration disconnected",
+      );
     } catch (err) {
-      toast.error('Could not update integration', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(
+        "Could not update integration",
+        err instanceof ApiError ? err.message : "Please try again.",
+      );
     } finally {
       setBusyId(null);
     }
@@ -194,9 +323,12 @@ export function Integrations() {
     setBusyId(i.id);
     try {
       await sync(i.id);
-      toast.success('Synced', 'Last sync time updated');
+      toast.success("Synced", "Last sync time updated");
     } catch (err) {
-      toast.error('Could not sync', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(
+        "Could not sync",
+        err instanceof ApiError ? err.message : "Please try again.",
+      );
     } finally {
       setBusyId(null);
     }
@@ -204,78 +336,101 @@ export function Integrations() {
 
   const openConfig = (i: Integration) => {
     setConfig(i);
-    if (i.key === 'google_ads_campaigns') {
+    if (i.key === "google_ads_campaigns") {
       return; // no form -- the JSX below shows real read-only connection info for this key
     }
-    if (i.key === 'meta_ads_campaigns') {
+    if (i.key === "meta_ads_campaigns") {
       return; // no form -- OAuth-only, the JSX below shows real read-only connection info
     }
-    if (i.key === 'zoho') {
+    if (i.key === "zoho") {
       return; // no form -- OAuth-only, the JSX below shows real read-only connection info
     }
-    if (i.key === 'calcom') {
-      setCalcomForm({ apiKey: '' });
+    if (i.key === "calcom") {
+      setCalcomForm({ apiKey: "" });
       return;
     }
-    if (i.key === 'shopify') {
-      setShopifyForm({ shopDomain: typeof i.config.shopDomain === 'string' ? i.config.shopDomain : '' });
+    if (i.key === "shopify") {
+      setShopifyForm({
+        shopDomain:
+          typeof i.config.shopDomain === "string" ? i.config.shopDomain : "",
+      });
       return;
     }
-    if (i.key === 'sendgrid') {
+    if (i.key === "sendgrid") {
       return; // no form -- purely read-only real platform status, see JSX below
     }
-    if (i.key === 'sendgrid_nurture') {
+    if (i.key === "sendgrid_nurture") {
       setSendgridNurtureForm({
-        apiKey: '',
-        verifiedSenderEmail: typeof i.config.verifiedSenderEmail === 'string' ? i.config.verifiedSenderEmail : '',
-        fromName: typeof i.config.fromName === 'string' ? i.config.fromName : '',
-        replyTo: typeof i.config.replyTo === 'string' ? i.config.replyTo : '',
+        apiKey: "",
+        verifiedSenderEmail:
+          typeof i.config.verifiedSenderEmail === "string"
+            ? i.config.verifiedSenderEmail
+            : "",
+        fromName:
+          typeof i.config.fromName === "string" ? i.config.fromName : "",
+        replyTo: typeof i.config.replyTo === "string" ? i.config.replyTo : "",
       });
       return;
     }
-    if (i.key === 'meta_cloud') {
+    if (i.key === "meta_cloud") {
       setWaForm({
-        phoneNumberId: typeof i.config.phoneNumberId === 'string' ? i.config.phoneNumberId : '',
-        businessAccountId: typeof i.config.businessAccountId === 'string' ? i.config.businessAccountId : '',
-        accessToken: '',
-        appSecret: '',
+        phoneNumberId:
+          typeof i.config.phoneNumberId === "string"
+            ? i.config.phoneNumberId
+            : "",
+        businessAccountId:
+          typeof i.config.businessAccountId === "string"
+            ? i.config.businessAccountId
+            : "",
+        accessToken: "",
+        appSecret: "",
       });
       return;
     }
-    if (i.key === '360dialog') {
-      setDialog360Form({ apiKey: '' });
+    if (i.key === "360dialog") {
+      setDialog360Form({ apiKey: "" });
       return;
     }
-    if (i.key === 'twilio_wa') {
+    if (i.key === "twilio_wa") {
       setTwilioForm({
-        accountSid: '',
-        authToken: '',
-        whatsappNumber: typeof i.config.whatsappNumber === 'string' ? i.config.whatsappNumber : '',
+        accountSid: "",
+        authToken: "",
+        whatsappNumber:
+          typeof i.config.whatsappNumber === "string"
+            ? i.config.whatsappNumber
+            : "",
       });
       return;
     }
-    if (i.key === 'interakt') {
-      setInteraktForm({ apiKey: '' });
+    if (i.key === "interakt") {
+      setInteraktForm({ apiKey: "" });
       return;
     }
-    if (i.key === 'meta_ads') {
+    if (i.key === "meta_ads") {
       setMetaAdsForm({
-        pixelId: typeof i.config.pixelId === 'string' ? i.config.pixelId : '',
-        accessToken: '',
-        testEventCode: typeof i.config.testEventCode === 'string' ? i.config.testEventCode : '',
+        pixelId: typeof i.config.pixelId === "string" ? i.config.pixelId : "",
+        accessToken: "",
+        testEventCode:
+          typeof i.config.testEventCode === "string"
+            ? i.config.testEventCode
+            : "",
       });
       return;
     }
-    if (i.key === 'google_ads') {
+    if (i.key === "google_ads") {
       setGoogleAdsForm({
-        measurementId: typeof i.config.measurementId === 'string' ? i.config.measurementId : '',
-        apiSecret: '',
+        measurementId:
+          typeof i.config.measurementId === "string"
+            ? i.config.measurementId
+            : "",
+        apiSecret: "",
       });
       return;
     }
     setConfigForm({
-      api_key: typeof i.config.api_key === 'string' ? i.config.api_key : '',
-      webhook_url: typeof i.config.webhook_url === 'string' ? i.config.webhook_url : '',
+      api_key: typeof i.config.api_key === "string" ? i.config.api_key : "",
+      webhook_url:
+        typeof i.config.webhook_url === "string" ? i.config.webhook_url : "",
     });
   };
 
@@ -283,101 +438,145 @@ export function Integrations() {
     if (!config) return;
     setSaving(true);
     try {
-      if (config.key === 'shopify') {
+      if (config.key === "shopify") {
         if (!shopifyForm.shopDomain.trim()) {
-          toast.error('Enter your Shopify store domain first');
+          toast.error("Enter your Shopify store domain first");
           setSaving(false);
           return;
         }
-        const authUrl = await integrationsApi.startShopifyAuth(shopifyForm.shopDomain.trim());
+        const authUrl = await integrationsApi.startShopifyAuth(
+          shopifyForm.shopDomain.trim(),
+        );
         window.location.href = authUrl; // real Shopify consent screen -- full navigation
         return;
       }
-      if (config.key === 'meta_cloud') {
+      if (config.key === "meta_cloud") {
         await updateConfig(config.id, {
           phoneNumberId: waForm.phoneNumberId,
           businessAccountId: waForm.businessAccountId,
           ...(waForm.accessToken ? { accessToken: waForm.accessToken } : {}),
           ...(waForm.appSecret ? { appSecret: waForm.appSecret } : {}),
         });
-        toast.success('Connected', 'Credentials verified against Meta\u2019s real Graph API.');
-      } else if (config.key === '360dialog') {
+        toast.success(
+          "Connected",
+          "Credentials verified against Meta\u2019s real Graph API.",
+        );
+      } else if (config.key === "360dialog") {
         await updateConfig(config.id, {
           ...(dialog360Form.apiKey ? { apiKey: dialog360Form.apiKey } : {}),
         });
-        toast.success('Connected', 'API key verified against 360Dialog\u2019s real Messaging API.');
-      } else if (config.key === 'twilio_wa') {
+        toast.success(
+          "Connected",
+          "API key verified against 360Dialog\u2019s real Messaging API.",
+        );
+      } else if (config.key === "twilio_wa") {
         await updateConfig(config.id, {
           accountSid: twilioForm.accountSid,
           whatsappNumber: twilioForm.whatsappNumber,
           ...(twilioForm.authToken ? { authToken: twilioForm.authToken } : {}),
         });
-        toast.success('Connected', 'Credentials verified against Twilio\u2019s real Account API.');
-      } else if (config.key === 'interakt') {
+        toast.success(
+          "Connected",
+          "Credentials verified against Twilio\u2019s real Account API.",
+        );
+      } else if (config.key === "interakt") {
         await updateConfig(config.id, {
           ...(interaktForm.apiKey ? { apiKey: interaktForm.apiKey } : {}),
         });
-        toast.success('Connected', 'API key verified. Note: Interakt only supports pre-approved templates, not free text.');
-      } else if (config.key === 'meta_ads') {
+        toast.success(
+          "Connected",
+          "API key verified. Note: Interakt only supports pre-approved templates, not free text.",
+        );
+      } else if (config.key === "meta_ads") {
         await updateConfig(config.id, {
           pixelId: metaAdsForm.pixelId,
           testEventCode: metaAdsForm.testEventCode,
-          ...(metaAdsForm.accessToken ? { accessToken: metaAdsForm.accessToken } : {}),
+          ...(metaAdsForm.accessToken
+            ? { accessToken: metaAdsForm.accessToken }
+            : {}),
         });
-        toast.success('Connected', 'Credentials verified against Meta\u2019s real Graph API.');
-      } else if (config.key === 'google_ads') {
+        toast.success(
+          "Connected",
+          "Credentials verified against Meta\u2019s real Graph API.",
+        );
+      } else if (config.key === "google_ads") {
         await updateConfig(config.id, {
           measurementId: googleAdsForm.measurementId,
-          ...(googleAdsForm.apiSecret ? { apiSecret: googleAdsForm.apiSecret } : {}),
+          ...(googleAdsForm.apiSecret
+            ? { apiSecret: googleAdsForm.apiSecret }
+            : {}),
         });
-        toast.success('Connected', 'Credentials verified against Google\u2019s real Measurement Protocol API.');
-      } else if (config.key === 'calcom') {
+        toast.success(
+          "Connected",
+          "Credentials verified against Google\u2019s real Measurement Protocol API.",
+        );
+      } else if (config.key === "calcom") {
         await updateConfig(config.id, { apiKey: calcomForm.apiKey });
-        toast.success('Connected', 'API key verified against Cal.com\u2019s real API, and a real webhook was set up for automatic sync.');
-      } else if (config.key === 'sendgrid_nurture') {
+        toast.success(
+          "Connected",
+          "API key verified against Cal.com\u2019s real API, and a real webhook was set up for automatic sync.",
+        );
+      } else if (config.key === "sendgrid_nurture") {
         if (!sendgridNurtureForm.verifiedSenderEmail.trim()) {
-          toast.error('A verified sender email is required');
+          toast.error("A verified sender email is required");
           setSaving(false);
           return;
         }
         await updateConfig(config.id, {
-          ...(sendgridNurtureForm.apiKey ? { apiKey: sendgridNurtureForm.apiKey } : {}),
+          ...(sendgridNurtureForm.apiKey
+            ? { apiKey: sendgridNurtureForm.apiKey }
+            : {}),
           verifiedSenderEmail: sendgridNurtureForm.verifiedSenderEmail.trim(),
           fromName: sendgridNurtureForm.fromName,
           replyTo: sendgridNurtureForm.replyTo,
         });
-        toast.success('Connected', 'API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.');
-      } else if (config.key === 'gemini') {
+        toast.success(
+          "Connected",
+          "API key verified against SendGrid\u2019s real Account API. Nurture emails will now send from your own account.",
+        );
+      } else if (config.key === "gemini") {
         // Real verification happens server-side before this is ever
         // marked "connected" -- see backend's verifyGeminiApiKey.
         if (!configForm.api_key.trim()) {
-          toast.error('Enter your Gemini API key first');
+          toast.error("Enter your Gemini API key first");
           setSaving(false);
           return;
         }
         await updateConfig(config.id, { api_key: configForm.api_key.trim() });
-        toast.success('Gemini key verified & connected', 'This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.');
-      } else if (config.key === 'openai' || config.key === 'claude') {
+        toast.success(
+          "Gemini key verified & connected",
+          "This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.",
+        );
+      } else if (config.key === "openai" || config.key === "claude") {
         // Same real-verification pattern as Gemini above. Whichever of
         // Gemini/OpenAI/Claude was most recently connected/re-verified
         // becomes the active provider for all three AI features.
-        const label = config.key === 'openai' ? 'OpenAI' : 'Claude';
+        const label = config.key === "openai" ? "OpenAI" : "Claude";
         if (!configForm.api_key.trim()) {
           toast.error(`Enter your ${label} API key first`);
           setSaving(false);
           return;
         }
         await updateConfig(config.id, { api_key: configForm.api_key.trim() });
-        toast.success(`${label} key verified & connected`, `This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.`);
+        toast.success(
+          `${label} key verified & connected`,
+          `This key will now be used for Call Intelligence, AI Reply Assistant, and AI Qualification instead of the platform default.`,
+        );
       } else {
-        await updateConfig(config.id, { api_key: configForm.api_key, webhook_url: configForm.webhook_url });
-        toast.success('Settings saved');
+        await updateConfig(config.id, {
+          api_key: configForm.api_key,
+          webhook_url: configForm.webhook_url,
+        });
+        toast.success("Settings saved");
       }
       setConfig(null);
     } catch (err) {
       // For meta_cloud, this is a REAL rejection from Meta's API (invalid
       // token, wrong phone number ID, etc.) -- not a generic failure.
-      toast.error('Could not verify connection', err instanceof ApiError ? err.message : 'Please try again.');
+      toast.error(
+        "Could not verify connection",
+        err instanceof ApiError ? err.message : "Please try again.",
+      );
     } finally {
       setSaving(false);
     }
@@ -386,48 +585,105 @@ export function Integrations() {
   return (
     <div>
       <PageHeader
-        title="Integrations" description="Connect WhatsApp providers, payments, AI, calendars & more to power every part of your workspace."
-        breadcrumb={['Admin', 'Integrations']}
-        actions={<Badge tone="violet">{counts?.totalConnected ?? 0} connected</Badge>}
+        title="Integrations"
+        description="Connect WhatsApp providers, payments, AI, calendars & more to power every part of your workspace."
+        breadcrumb={["Admin", "Integrations"]}
+        actions={
+          <Badge tone="violet">{counts?.totalConnected ?? 0} connected</Badge>
+        }
       />
 
-      <div className="mb-4"><Tabs tabs={tabs} active={category} onChange={setCategory} /></div>
+      <div className="mb-4">
+        <Tabs tabs={tabs} active={category} onChange={setCategory} />
+      </div>
 
       {error && <Card className="mb-4 p-4 text-sm text-red-600">{error}</Card>}
-      {loading && integrations.length === 0 && <p className="p-8 text-center text-sm text-ink-400">Loading integrations…</p>}
+      {loading && integrations.length === 0 && (
+        <p className="p-8 text-center text-sm text-ink-400">
+          Loading integrations…
+        </p>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {integrations.map((i) => (
           <Card key={i.id} className="flex flex-col p-4">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-xl font-bold text-white" style={{ background: i.logo_color }}>{i.name[0]}</span>
-                <div><p className="font-semibold text-ink-900">{i.name}</p><p className="text-xs text-ink-500">{i.category}</p></div>
+                <span
+                  className="flex h-10 w-10 items-center justify-center rounded-xl font-bold text-white"
+                  style={{ background: i.logo_color }}
+                >
+                  {i.name[0]}
+                </span>
+                <div>
+                  <p className="font-semibold text-ink-900">{i.name}</p>
+                  <p className="text-xs text-ink-500">{i.category}</p>
+                </div>
               </div>
               {!i.available ? (
                 <Badge tone="gray">Coming soon</Badge>
               ) : (
-                <Badge tone={i.status === 'connected' ? 'green' : i.status === 'simulation' ? 'amber' : 'gray'}>
-                  {i.status === 'connected' && <CheckCircle2 size={11} />} {i.status}
+                <Badge
+                  tone={
+                    i.status === "connected"
+                      ? "green"
+                      : i.status === "simulation"
+                        ? "amber"
+                        : "gray"
+                  }
+                >
+                  {i.status === "connected" && <CheckCircle2 size={11} />}{" "}
+                  {i.status}
                 </Badge>
               )}
             </div>
             <p className="mt-3 flex-1 text-sm text-ink-500">{i.description}</p>
-            {i.last_sync && <p className="mt-2 text-xs text-ink-400">Last sync: {timeAgo(i.last_sync)}</p>}
+            {i.last_sync && (
+              <p className="mt-2 text-xs text-ink-400">
+                Last sync: {timeAgo(i.last_sync)}
+              </p>
+            )}
             {canManage && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 <Button
-                  variant={i.status === 'disconnected' ? 'primary' : 'secondary'} className="px-3 py-1.5 text-xs"
-                  disabled={busyId === i.id || (!i.available && i.status === 'disconnected')}
+                  variant={
+                    i.status === "disconnected" ? "primary" : "secondary"
+                  }
+                  className="px-3 py-1.5 text-xs"
+                  disabled={
+                    busyId === i.id ||
+                    (!i.available && i.status === "disconnected")
+                  }
                   onClick={() => void handleToggle(i)}
                 >
-                  {i.status === 'disconnected' ? 'Connect' : 'Disconnect'}
+                  {i.status === "disconnected" ? "Connect" : "Disconnect"}
                 </Button>
-                {i.status !== 'disconnected' && (
-                  <Button variant="ghost" className="px-2.5 py-1.5 text-xs" disabled={busyId === i.id} onClick={() => void handleSync(i)}><RefreshCw size={13} /> Sync</Button>
+                {i.status !== "disconnected" && (
+                  <Button
+                    variant="ghost"
+                    className="px-2.5 py-1.5 text-xs"
+                    disabled={busyId === i.id}
+                    onClick={() => void handleSync(i)}
+                  >
+                    <RefreshCw size={13} /> Sync
+                  </Button>
                 )}
-                <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => openConfig(i)}><SettingsIcon size={13} /></Button>
-                {i.error_logs.length > 0 && <Button variant="ghost" className="px-2.5 py-1.5 text-xs text-amber-600" onClick={() => setLogsFor(i)}><AlertCircle size={13} /></Button>}
+                <Button
+                  variant="ghost"
+                  className="px-2.5 py-1.5 text-xs"
+                  onClick={() => openConfig(i)}
+                >
+                  <SettingsIcon size={13} />
+                </Button>
+                {i.error_logs.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    className="px-2.5 py-1.5 text-xs text-amber-600"
+                    onClick={() => setLogsFor(i)}
+                  >
+                    <AlertCircle size={13} />
+                  </Button>
+                )}
               </div>
             )}
           </Card>
@@ -436,293 +692,891 @@ export function Integrations() {
 
       {config && (
         <Modal
-          open onClose={() => setConfig(null)} title={`${config.name} Settings`}
-          footer={(config.key === 'google_ads_campaigns' || config.key === 'meta_ads_campaigns' || config.key === 'zoho' || config.key === 'sendgrid' || (config.key === 'shopify' && config.status === 'connected'))
-            ? <Button variant="secondary" onClick={() => setConfig(null)}>Close</Button>
-            : <><Button variant="secondary" onClick={() => setConfig(null)} disabled={saving}>Cancel</Button><Button onClick={() => void handleSaveConfig()} disabled={saving}>{saving ? 'Verifying…' : 'Save & Connect'}</Button></>}
+          open
+          onClose={() => setConfig(null)}
+          title={`${config.name} Settings`}
+          footer={
+            config.key === "google_ads_campaigns" ||
+            config.key === "meta_ads_campaigns" ||
+            config.key === "zoho" ||
+            config.key === "sendgrid" ||
+            (config.key === "shopify" && config.status === "connected") ? (
+              <Button variant="secondary" onClick={() => setConfig(null)}>
+                Close
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfig(null)}
+                  disabled={saving}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => void handleSaveConfig()}
+                  disabled={saving}
+                >
+                  {saving ? "Verifying…" : "Save & Connect"}
+                </Button>
+              </>
+            )
+          }
         >
-          {config.key === 'meta_cloud' ? (
+          {config.key === "meta_cloud" ? (
             <div className="space-y-4">
-              <p className="text-xs text-ink-500">This is your real Meta WhatsApp Cloud API connection — the same one used by the WhatsApp Panel. Saving here will make a real, live call to Meta's Graph API to verify these credentials.</p>
-              <Field label="Phone Number ID"><Input value={waForm.phoneNumberId} onChange={(e) => setWaForm({ ...waForm, phoneNumberId: e.target.value })} placeholder="e.g. 1191287804063107" /></Field>
-              <Field label="Business Account ID"><Input value={waForm.businessAccountId} onChange={(e) => setWaForm({ ...waForm, businessAccountId: e.target.value })} /></Field>
-              <Field label="Access Token"><Input type="password" value={waForm.accessToken} onChange={(e) => setWaForm({ ...waForm, accessToken: e.target.value })} placeholder={config.config.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Meta access token'} /></Field>
-              <Field label="App Secret"><Input type="password" value={waForm.appSecret} onChange={(e) => setWaForm({ ...waForm, appSecret: e.target.value })} placeholder={config.config.hasAppSecret ? 'Already set — leave blank to keep' : 'Required for webhook verification'} /></Field>
-            </div>
-          ) : config.key === '360dialog' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This makes a real, live call to 360Dialog's Messaging API to verify your key. 360Dialog only needs one credential — the key is already scoped to your specific WhatsApp number on their side.</p>
-              <Field label="D360 API Key"><Input type="password" value={dialog360Form.apiKey} onChange={(e) => setDialog360Form({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'Paste your 360Dialog API key'} /></Field>
-            </div>
-          ) : config.key === 'twilio_wa' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This makes a real, live call to Twilio's Account API to verify these credentials. Twilio uses Basic Auth (Account SID + Auth Token), unlike Meta or 360Dialog.</p>
-              <Field label="Account SID"><Input value={twilioForm.accountSid} onChange={(e) => setTwilioForm({ ...twilioForm, accountSid: e.target.value })} placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" /></Field>
-              <Field label="Auth Token"><Input type="password" value={twilioForm.authToken} onChange={(e) => setTwilioForm({ ...twilioForm, authToken: e.target.value })} placeholder={config.config.hasAuthToken ? 'Already set — leave blank to keep' : 'Paste your Twilio Auth Token'} /></Field>
-              <Field label="WhatsApp-enabled number" hint="Your Twilio number with WhatsApp enabled, e.g. +14155238886"><Input value={twilioForm.whatsappNumber} onChange={(e) => setTwilioForm({ ...twilioForm, whatsappNumber: e.target.value })} placeholder="+14155238886" /></Field>
-            </div>
-          ) : config.key === 'interakt' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This makes a real, live call to Interakt's API to verify your key.</p>
-              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                <strong>Real limitation, not a bug:</strong> Interakt's public API only supports pre-approved WhatsApp templates — it does not support plain free-text messages. Connecting here verifies your credentials for real, but sending through the normal Inbox composer will fail until template sending is added.
-              </div>
-              <Field label="API Key"><Input type="password" value={interaktForm.apiKey} onChange={(e) => setInteraktForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'Paste your Interakt API key'} /></Field>
-            </div>
-          ) : config.key === 'meta_ads' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This makes a real, live call to Meta's Graph API to verify these credentials, then sends real server-side conversion events (Lead, Qualified, Booking, Purchase) whenever they happen in your workspace.</p>
-              <Field label="Pixel / Dataset ID" hint="Meta Events Manager → your Pixel or Conversions API dataset"><Input value={metaAdsForm.pixelId} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, pixelId: e.target.value })} placeholder="e.g. 1234567890123456" /></Field>
-              <Field label="Access Token"><Input type="password" value={metaAdsForm.accessToken} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, accessToken: e.target.value })} placeholder={config.config.hasAccessToken ? 'Already set — leave blank to keep' : 'Paste your Conversions API access token'} /></Field>
-              <Field label="Test Event Code (optional)" hint="Shows events in Meta's Test Events tool without affecting real ad optimization"><Input value={metaAdsForm.testEventCode} onChange={(e) => setMetaAdsForm({ ...metaAdsForm, testEventCode: e.target.value })} placeholder="e.g. TEST12345" /></Field>
-            </div>
-          ) : config.key === 'google_ads' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This verifies your credentials against Google's real validation endpoint, then sends real server-side events (generate_lead, sign_up, schedule, purchase) via GA4's Measurement Protocol whenever they happen in your workspace.</p>
-              <Field label="Measurement ID" hint="GA4 Admin → Data Streams → your stream"><Input value={googleAdsForm.measurementId} onChange={(e) => setGoogleAdsForm({ ...googleAdsForm, measurementId: e.target.value })} placeholder="G-XXXXXXXXXX" /></Field>
-              <Field label="API Secret" hint="GA4 Admin → Data Streams → your stream → Measurement Protocol API secrets"><Input type="password" value={googleAdsForm.apiSecret} onChange={(e) => setGoogleAdsForm({ ...googleAdsForm, apiSecret: e.target.value })} placeholder={config.config.hasApiSecret ? 'Already set — leave blank to keep' : 'Paste your Measurement Protocol API secret'} /></Field>
-            </div>
-          ) : config.key === 'calcom' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">This verifies your credentials against Cal.com's real API, then sets up a real webhook so new bookings, reschedules, and cancellations sync automatically.</p>
-              <Field label="API Key" hint="Cal.com → Settings → Developer → API Keys"><Input type="password" value={calcomForm.apiKey} onChange={(e) => setCalcomForm({ apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'cal_live_...'} /></Field>
-              {typeof config.config.accountEmail === 'string' && config.config.accountEmail && (
-                <div className="rounded-lg border border-ink-100 p-3 text-xs"><p className="text-ink-400">Connected account</p><p className="font-medium text-ink-900">{config.config.accountEmail}</p></div>
-              )}
-              {config.config.hasWebhook === false && !!config.config.hasApiKey && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  Connected, but the real webhook setup failed — new bookings won't sync automatically yet. Click Sync manually, or check that your server's API_BASE_URL is publicly reachable and reconnect.
-                </div>
-              )}
-              {config.status === 'connected' && (() => {
-                const bookingLink = `${window.location.origin}/book/${useAuthStore.getState().user?.tenantId ?? ''}`;
-                return (
-                  <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
-                    <p className="text-sm font-semibold text-ink-900">Public Booking Page</p>
-                    <p className="mt-1 text-xs text-ink-600">
-                      This is the page to share with customers. It shows your real, live availability and lets them
-                      book a meeting themselves — no login, no technical setup visible, just your branding and open times.
-                    </p>
-                    <div className="mt-3 flex gap-2">
-                      <Input readOnly value={bookingLink} className="bg-white text-xs" />
-                      <Button
-                        variant="secondary"
-                        onClick={() => window.open(bookingLink, '_blank', 'noopener,noreferrer')}
-                      >
-                        Open / Preview
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          void navigator.clipboard.writeText(bookingLink);
-                          toast.success('Link copied', 'Share it in emails, your website, or social bios.');
-                        }}
-                      >
-                        Copy Link
-                      </Button>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          ) : config.key === 'sendgrid_nurture' ? (
-            <div className="space-y-4">
-              <p className="text-xs text-ink-500">Your own SendGrid account, used only for Nurture sequence emails — separate from InnovateX's platform account above, which handles password resets and invites. This makes a real, live call to SendGrid's Account API to verify your key before connecting.</p>
-              <Field label="API Key" hint="SendGrid → Settings → API Keys">
-                <Input type="password" value={sendgridNurtureForm.apiKey} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, apiKey: e.target.value })} placeholder={config.config.hasApiKey ? 'Already set — leave blank to keep' : 'SG.xxxxxxxx...'} />
+              <p className="text-xs text-ink-500">
+                This is your real Meta WhatsApp Cloud API connection — the same
+                one used by the WhatsApp Panel. Saving here will make a real,
+                live call to Meta's Graph API to verify these credentials.
+              </p>
+              <Field label="Phone Number ID">
+                <Input
+                  value={waForm.phoneNumberId}
+                  onChange={(e) =>
+                    setWaForm({ ...waForm, phoneNumberId: e.target.value })
+                  }
+                  placeholder="e.g. 1191287804063107"
+                />
               </Field>
-              <Field label="Verified sender email" hint="Must already be a verified single sender or domain in your SendGrid account">
-                <Input value={sendgridNurtureForm.verifiedSenderEmail} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, verifiedSenderEmail: e.target.value })} placeholder="nurture@yourcompany.com" />
+              <Field label="Business Account ID">
+                <Input
+                  value={waForm.businessAccountId}
+                  onChange={(e) =>
+                    setWaForm({ ...waForm, businessAccountId: e.target.value })
+                  }
+                />
+              </Field>
+              <Field label="Access Token">
+                <Input
+                  type="password"
+                  value={waForm.accessToken}
+                  onChange={(e) =>
+                    setWaForm({ ...waForm, accessToken: e.target.value })
+                  }
+                  placeholder={
+                    config.config.hasAccessToken
+                      ? "Already set — leave blank to keep"
+                      : "Paste your Meta access token"
+                  }
+                />
+              </Field>
+              <Field label="App Secret">
+                <Input
+                  type="password"
+                  value={waForm.appSecret}
+                  onChange={(e) =>
+                    setWaForm({ ...waForm, appSecret: e.target.value })
+                  }
+                  placeholder={
+                    config.config.hasAppSecret
+                      ? "Already set — leave blank to keep"
+                      : "Required for webhook verification"
+                  }
+                />
+              </Field>
+            </div>
+          ) : config.key === "360dialog" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This makes a real, live call to 360Dialog's Messaging API to
+                verify your key. 360Dialog only needs one credential — the key
+                is already scoped to your specific WhatsApp number on their
+                side.
+              </p>
+              <Field label="D360 API Key">
+                <Input
+                  type="password"
+                  value={dialog360Form.apiKey}
+                  onChange={(e) => setDialog360Form({ apiKey: e.target.value })}
+                  placeholder={
+                    config.config.hasApiKey
+                      ? "Already set — leave blank to keep"
+                      : "Paste your 360Dialog API key"
+                  }
+                />
+              </Field>
+            </div>
+          ) : config.key === "twilio_wa" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This makes a real, live call to Twilio's Account API to verify
+                these credentials. Twilio uses Basic Auth (Account SID + Auth
+                Token), unlike Meta or 360Dialog.
+              </p>
+              <Field label="Account SID">
+                <Input
+                  value={twilioForm.accountSid}
+                  onChange={(e) =>
+                    setTwilioForm({ ...twilioForm, accountSid: e.target.value })
+                  }
+                  placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                />
+              </Field>
+              <Field label="Auth Token">
+                <Input
+                  type="password"
+                  value={twilioForm.authToken}
+                  onChange={(e) =>
+                    setTwilioForm({ ...twilioForm, authToken: e.target.value })
+                  }
+                  placeholder={
+                    config.config.hasAuthToken
+                      ? "Already set — leave blank to keep"
+                      : "Paste your Twilio Auth Token"
+                  }
+                />
+              </Field>
+              <Field
+                label="WhatsApp-enabled number"
+                hint="Your Twilio number with WhatsApp enabled, e.g. +14155238886"
+              >
+                <Input
+                  value={twilioForm.whatsappNumber}
+                  onChange={(e) =>
+                    setTwilioForm({
+                      ...twilioForm,
+                      whatsappNumber: e.target.value,
+                    })
+                  }
+                  placeholder="+14155238886"
+                />
+              </Field>
+            </div>
+          ) : config.key === "interakt" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This makes a real, live call to Interakt's API to verify your
+                key.
+              </p>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                <strong>Real limitation, not a bug:</strong> Interakt's public
+                API only supports pre-approved WhatsApp templates — it does not
+                support plain free-text messages. Connecting here verifies your
+                credentials for real, but sending through the normal Inbox
+                composer will fail until template sending is added.
+              </div>
+              <Field label="API Key">
+                <Input
+                  type="password"
+                  value={interaktForm.apiKey}
+                  onChange={(e) => setInteraktForm({ apiKey: e.target.value })}
+                  placeholder={
+                    config.config.hasApiKey
+                      ? "Already set — leave blank to keep"
+                      : "Paste your Interakt API key"
+                  }
+                />
+              </Field>
+            </div>
+          ) : config.key === "meta_ads" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This makes a real, live call to Meta's Graph API to verify these
+                credentials, then sends real server-side conversion events
+                (Lead, Qualified, Booking, Purchase) whenever they happen in
+                your workspace.
+              </p>
+              <Field
+                label="Pixel / Dataset ID"
+                hint="Meta Events Manager → your Pixel or Conversions API dataset"
+              >
+                <Input
+                  value={metaAdsForm.pixelId}
+                  onChange={(e) =>
+                    setMetaAdsForm({ ...metaAdsForm, pixelId: e.target.value })
+                  }
+                  placeholder="e.g. 1234567890123456"
+                />
+              </Field>
+              <Field label="Access Token">
+                <Input
+                  type="password"
+                  value={metaAdsForm.accessToken}
+                  onChange={(e) =>
+                    setMetaAdsForm({
+                      ...metaAdsForm,
+                      accessToken: e.target.value,
+                    })
+                  }
+                  placeholder={
+                    config.config.hasAccessToken
+                      ? "Already set — leave blank to keep"
+                      : "Paste your Conversions API access token"
+                  }
+                />
+              </Field>
+              <Field
+                label="Test Event Code (optional)"
+                hint="Shows events in Meta's Test Events tool without affecting real ad optimization"
+              >
+                <Input
+                  value={metaAdsForm.testEventCode}
+                  onChange={(e) =>
+                    setMetaAdsForm({
+                      ...metaAdsForm,
+                      testEventCode: e.target.value,
+                    })
+                  }
+                  placeholder="e.g. TEST12345"
+                />
+              </Field>
+            </div>
+          ) : config.key === "google_ads" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This verifies your credentials against Google's real validation
+                endpoint, then sends real server-side events (generate_lead,
+                sign_up, schedule, purchase) via GA4's Measurement Protocol
+                whenever they happen in your workspace.
+              </p>
+              <Field
+                label="Measurement ID"
+                hint="GA4 Admin → Data Streams → your stream"
+              >
+                <Input
+                  value={googleAdsForm.measurementId}
+                  onChange={(e) =>
+                    setGoogleAdsForm({
+                      ...googleAdsForm,
+                      measurementId: e.target.value,
+                    })
+                  }
+                  placeholder="G-XXXXXXXXXX"
+                />
+              </Field>
+              <Field
+                label="API Secret"
+                hint="GA4 Admin → Data Streams → your stream → Measurement Protocol API secrets"
+              >
+                <Input
+                  type="password"
+                  value={googleAdsForm.apiSecret}
+                  onChange={(e) =>
+                    setGoogleAdsForm({
+                      ...googleAdsForm,
+                      apiSecret: e.target.value,
+                    })
+                  }
+                  placeholder={
+                    config.config.hasApiSecret
+                      ? "Already set — leave blank to keep"
+                      : "Paste your Measurement Protocol API secret"
+                  }
+                />
+              </Field>
+            </div>
+          ) : config.key === "calcom" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                This verifies your credentials against Cal.com's real API, then
+                sets up a real webhook so new bookings, reschedules, and
+                cancellations sync automatically.
+              </p>
+              <Field
+                label="API Key"
+                hint="Cal.com → Settings → Developer → API Keys"
+              >
+                <Input
+                  type="password"
+                  value={calcomForm.apiKey}
+                  onChange={(e) => setCalcomForm({ apiKey: e.target.value })}
+                  placeholder={
+                    config.config.hasApiKey
+                      ? "Already set — leave blank to keep"
+                      : "cal_live_..."
+                  }
+                />
+              </Field>
+              {typeof config.config.accountEmail === "string" &&
+                config.config.accountEmail && (
+                  <div className="rounded-lg border border-ink-100 p-3 text-xs">
+                    <p className="text-ink-400">Connected account</p>
+                    <p className="font-medium text-ink-900">
+                      {config.config.accountEmail}
+                    </p>
+                  </div>
+                )}
+              {config.config.hasWebhook === false &&
+                !!config.config.hasApiKey && (
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                    Connected, but the real webhook setup failed — new bookings
+                    won't sync automatically yet. Click Sync manually, or check
+                    that your server's API_BASE_URL is publicly reachable and
+                    reconnect.
+                  </div>
+                )}
+              {config.status === "connected" &&
+                (() => {
+                  const bookingLink = `${window.location.origin}/book/${useAuthStore.getState().user?.tenantId ?? ""}`;
+                  return (
+                    <div className="rounded-xl border border-brand-200 bg-brand-50 p-4">
+                      <p className="text-sm font-semibold text-ink-900">
+                        Public Booking Page
+                      </p>
+                      <p className="mt-1 text-xs text-ink-600">
+                        This is the page to share with customers. It shows your
+                        real, live availability and lets them book a meeting
+                        themselves — no login, no technical setup visible, just
+                        your branding and open times.
+                      </p>
+                      <div className="mt-3 flex gap-2">
+                        <Input
+                          readOnly
+                          value={bookingLink}
+                          className="bg-white text-xs"
+                        />
+                        <Button
+                          variant="secondary"
+                          onClick={() =>
+                            window.open(
+                              bookingLink,
+                              "_blank",
+                              "noopener,noreferrer",
+                            )
+                          }
+                        >
+                          Open / Preview
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            void navigator.clipboard.writeText(bookingLink);
+                            toast.success(
+                              "Link copied",
+                              "Share it in emails, your website, or social bios.",
+                            );
+                          }}
+                        >
+                          Copy Link
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })()}
+            </div>
+          ) : config.key === "sendgrid_nurture" ? (
+            <div className="space-y-4">
+              <p className="text-xs text-ink-500">
+                Your own SendGrid account, used only for Nurture sequence emails
+                — separate from InnovateX's platform account above, which
+                handles password resets and invites. This makes a real, live
+                call to SendGrid's Account API to verify your key before
+                connecting.
+              </p>
+              <Field label="API Key" hint="SendGrid → Settings → API Keys">
+                <Input
+                  type="password"
+                  value={sendgridNurtureForm.apiKey}
+                  onChange={(e) =>
+                    setSendgridNurtureForm({
+                      ...sendgridNurtureForm,
+                      apiKey: e.target.value,
+                    })
+                  }
+                  placeholder={
+                    config.config.hasApiKey
+                      ? "Already set — leave blank to keep"
+                      : "SG.xxxxxxxx..."
+                  }
+                />
+              </Field>
+              <Field
+                label="Verified sender email"
+                hint="Must already be a verified single sender or domain in your SendGrid account"
+              >
+                <Input
+                  value={sendgridNurtureForm.verifiedSenderEmail}
+                  onChange={(e) =>
+                    setSendgridNurtureForm({
+                      ...sendgridNurtureForm,
+                      verifiedSenderEmail: e.target.value,
+                    })
+                  }
+                  placeholder="nurture@yourcompany.com"
+                />
               </Field>
               <Field label="From name (optional)">
-                <Input value={sendgridNurtureForm.fromName} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, fromName: e.target.value })} placeholder="Your Company" />
+                <Input
+                  value={sendgridNurtureForm.fromName}
+                  onChange={(e) =>
+                    setSendgridNurtureForm({
+                      ...sendgridNurtureForm,
+                      fromName: e.target.value,
+                    })
+                  }
+                  placeholder="Your Company"
+                />
               </Field>
-              <Field label="Reply-To (optional)" hint="Replies to nurture emails go here instead of the verified sender address">
-                <Input value={sendgridNurtureForm.replyTo} onChange={(e) => setSendgridNurtureForm({ ...sendgridNurtureForm, replyTo: e.target.value })} placeholder="support@yourcompany.com" />
+              <Field
+                label="Reply-To (optional)"
+                hint="Replies to nurture emails go here instead of the verified sender address"
+              >
+                <Input
+                  value={sendgridNurtureForm.replyTo}
+                  onChange={(e) =>
+                    setSendgridNurtureForm({
+                      ...sendgridNurtureForm,
+                      replyTo: e.target.value,
+                    })
+                  }
+                  placeholder="support@yourcompany.com"
+                />
               </Field>
-              {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Verification failed:</strong> {config.config.lastSyncError}</div>
-              )}
+              {typeof config.config.lastSyncError === "string" &&
+                config.config.lastSyncError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                    <strong>Verification failed:</strong>{" "}
+                    {config.config.lastSyncError}
+                  </div>
+                )}
             </div>
-          ) : config.key === 'shopify' ? (
+          ) : config.key === "shopify" ? (
             <div className="space-y-4">
-              <p className="text-xs text-ink-500">You'll be redirected to your real Shopify store to approve access. New customers, checkouts, and orders will then sync automatically, with automatic WhatsApp cart-recovery and order-confirmation messages.</p>
-              {config.status === 'connected' ? (
+              <p className="text-xs text-ink-500">
+                You'll be redirected to your real Shopify store to approve
+                access. New customers, checkouts, and orders will then sync
+                automatically, with automatic WhatsApp cart-recovery and
+                order-confirmation messages.
+              </p>
+              {config.status === "connected" ? (
                 <>
-                  <div className="rounded-lg border border-ink-100 p-3 text-xs"><p className="text-ink-400">Connected store</p><p className="font-medium text-ink-900">{String(config.config.shopName || config.config.shopDomain || '')}</p></div>
-                  {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"><strong>Real webhook issue:</strong> {config.config.lastSyncError}</div>
-                  )}
+                  <div className="rounded-lg border border-ink-100 p-3 text-xs">
+                    <p className="text-ink-400">Connected store</p>
+                    <p className="font-medium text-ink-900">
+                      {String(
+                        config.config.shopName ||
+                          config.config.shopDomain ||
+                          "",
+                      )}
+                    </p>
+                  </div>
+                  {typeof config.config.lastSyncError === "string" &&
+                    config.config.lastSyncError && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                        <strong>Real webhook issue:</strong>{" "}
+                        {config.config.lastSyncError}
+                      </div>
+                    )}
                 </>
               ) : (
                 <Field label="Shop domain" hint="e.g. your-store.myshopify.com">
-                  <Input value={shopifyForm.shopDomain} onChange={(e) => setShopifyForm({ shopDomain: e.target.value })} placeholder="your-store.myshopify.com" />
+                  <Input
+                    value={shopifyForm.shopDomain}
+                    onChange={(e) =>
+                      setShopifyForm({ shopDomain: e.target.value })
+                    }
+                    placeholder="your-store.myshopify.com"
+                  />
                 </Field>
               )}
             </div>
-          ) : config.key === 'sendgrid' ? (
+          ) : config.key === "sendgrid" ? (
             <div className="space-y-3 text-sm">
-              <p className="text-xs text-ink-500">SendGrid is platform-level — configured once by whoever runs this server, shared across every workspace for password resets, team invites, and email verification. There's nothing to enter here.</p>
-              {config.status === 'connected' ? (
+              <p className="text-xs text-ink-500">
+                SendGrid is platform-level — configured once by whoever runs
+                this server, shared across every workspace for password resets,
+                team invites, and email verification. There's nothing to enter
+                here.
+              </p>
+              {config.status === "connected" ? (
                 <>
                   <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                    <p className="text-xs text-emerald-700">Real email delivery is active</p>
+                    <p className="text-xs text-emerald-700">
+                      Real email delivery is active
+                    </p>
                   </div>
-                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Sending as</p><p className="font-medium text-ink-900">{String(config.config.fromName || '')} &lt;{String(config.config.fromAddress || '')}&gt;</p></div>
+                  <div className="rounded-lg border border-ink-100 p-3">
+                    <p className="text-xs text-ink-400">Sending as</p>
+                    <p className="font-medium text-ink-900">
+                      {String(config.config.fromName || "")} &lt;
+                      {String(config.config.fromAddress || "")}&gt;
+                    </p>
+                  </div>
                 </>
               ) : (
                 <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
-                  Not configured yet — emails are currently only logged to the server console, not actually sent. An administrator needs to set <code>SENDGRID_API_KEY</code> on the server.
+                  Not configured yet — emails are currently only logged to the
+                  server console, not actually sent. An administrator needs to
+                  set <code>SENDGRID_API_KEY</code> on the server.
                 </div>
               )}
             </div>
-          ) : config.key === 'google_ads_campaigns' ? (
+          ) : config.key === "google_ads_campaigns" ? (
             <div className="space-y-4 text-sm">
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 size={13} /> Step 1 of 2 — Account connected</p>
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                  <CheckCircle2 size={13} /> Step 1 of 2 — Account connected
+                </p>
                 {config.config.clientCustomerId ? (
-                  <p className="mt-1 text-sm font-medium text-ink-900">{String(config.config.clientCustomerId).replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}</p>
+                  <p className="mt-1 text-sm font-medium text-ink-900">
+                    {String(config.config.clientCustomerId).replace(
+                      /(\d{3})(\d{3})(\d{4})/,
+                      "$1-$2-$3",
+                    )}
+                  </p>
                 ) : (
-                  <p className="mt-1 text-ink-500">Authorized with Google, but no account has been selected yet. Close this and reconnect to choose one.</p>
+                  <p className="mt-1 text-ink-500">
+                    Authorized with Google, but no account has been selected
+                    yet. Close this and reconnect to choose one.
+                  </p>
                 )}
-                <p className="mt-1 text-xs text-ink-400">This connects real campaign spend/clicks/conversions to your Attribution dashboard.</p>
-                {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
-                )}
+                <p className="mt-1 text-xs text-ink-400">
+                  This connects real campaign spend/clicks/conversions to your
+                  Attribution dashboard.
+                </p>
+                {typeof config.config.lastSyncError === "string" &&
+                  config.config.lastSyncError && (
+                    <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                      <strong>Last sync failed:</strong>{" "}
+                      {config.config.lastSyncError}
+                    </div>
+                  )}
               </div>
 
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-800">Step 2 of 2 — One-time tracking setup (do this too)</p>
-                <p className="mt-1 text-xs text-ink-500">Step 1 alone only reports how much you spent. This step is what makes each real ad click create a correctly-tagged Lead — do it once, and every future ad automatically carries the right campaign/ad-group/ad data. Without it, leads from Google Ads won't show their real source.</p>
+                <p className="text-xs font-semibold text-amber-800">
+                  Step 2 of 2 — One-time tracking setup (do this too)
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  Step 1 alone only reports how much you spent. This step is
+                  what makes each real ad click create a correctly-tagged Lead —
+                  do it once, and every future ad automatically carries the
+                  right campaign/ad-group/ad data. Without it, leads from Google
+                  Ads won't show their real source.
+                </p>
                 {trackingSetup ? (
                   <div className="mt-2 space-y-2">
                     <div>
-                      <p className="text-xs text-ink-400">A. Set as your ad's (or account/campaign default) Final URL</p>
+                      <p className="text-xs text-ink-400">
+                        A. Set as your ad's (or account/campaign default) Final
+                        URL
+                      </p>
                       <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.google.finalUrl}</code>
-                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.google.finalUrl); toast.success('Final URL copied'); }}><Copy size={13} /></Button>
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">
+                          {trackingSetup.google.finalUrl}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(
+                              trackingSetup.google.finalUrl,
+                            );
+                            toast.success("Final URL copied");
+                          }}
+                        >
+                          <Copy size={13} />
+                        </Button>
                       </div>
                     </div>
                     <div>
-                      <p className="text-xs text-ink-400">B. Paste once under Google Ads → Settings → Account Settings → Tracking → "Final URL suffix"</p>
+                      <p className="text-xs text-ink-400">
+                        B. Paste once under Google Ads → Settings → Account
+                        Settings → Tracking → "Final URL suffix"
+                      </p>
                       <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.google.finalUrlSuffix}</code>
-                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.google.finalUrlSuffix); toast.success('Final URL suffix copied'); }}><Copy size={13} /></Button>
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">
+                          {trackingSetup.google.finalUrlSuffix}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(
+                              trackingSetup.google.finalUrlSuffix,
+                            );
+                            toast.success("Final URL suffix copied");
+                          }}
+                        >
+                          <Copy size={13} />
+                        </Button>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-2 text-xs text-ink-400">Loading your tracking setup…</p>
+                  <p className="mt-2 text-xs text-ink-400">
+                    Loading your tracking setup…
+                  </p>
                 )}
               </div>
             </div>
-          ) : config.key === 'meta_ads_campaigns' ? (
+          ) : config.key === "meta_ads_campaigns" ? (
             <div className="space-y-4 text-sm">
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 size={13} /> Step 1 of 2 — Account connected</p>
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
+                  <CheckCircle2 size={13} /> Step 1 of 2 — Account connected
+                </p>
                 {config.config.adAccountId ? (
-                  <p className="mt-1 text-sm font-medium text-ink-900">{typeof config.config.accountName === 'string' && config.config.accountName ? config.config.accountName : config.config.adAccountId}</p>
+                  <p className="mt-1 text-sm font-medium text-ink-900">
+                    {typeof config.config.accountName === "string" &&
+                    config.config.accountName
+                      ? config.config.accountName
+                      : typeof config.config.adAccountId === "string"
+                        ? config.config.adAccountId
+                        : ""}
+                  </p>
                 ) : (
-                  <p className="mt-1 text-ink-500">Authorized with Meta, but no account has been selected yet. Close this and reconnect to choose one.</p>
+                  <p className="mt-1 text-ink-500">
+                    Authorized with Meta, but no account has been selected yet.
+                    Close this and reconnect to choose one.
+                  </p>
                 )}
-                <p className="mt-1 text-xs text-ink-400">This connects real campaign spend/clicks/conversions to your Attribution dashboard.</p>
-                {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                  <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
-                )}
+                <p className="mt-1 text-xs text-ink-400">
+                  This connects real campaign spend/clicks/conversions to your
+                  Attribution dashboard.
+                </p>
+                {typeof config.config.lastSyncError === "string" &&
+                  config.config.lastSyncError && (
+                    <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                      <strong>Last sync failed:</strong>{" "}
+                      {config.config.lastSyncError}
+                    </div>
+                  )}
               </div>
 
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-xs font-semibold text-amber-800">Step 2 of 2 — One-time tracking setup (do this too)</p>
-                <p className="mt-1 text-xs text-ink-500">Step 1 alone only reports how much you spent. This step is what makes each real ad click create a correctly-tagged Lead. Meta sets this per ad (or per template you duplicate) — still one paste, not a hand-crafted link per ad. Without it, leads from Meta Ads won't show their real source.</p>
+                <p className="text-xs font-semibold text-amber-800">
+                  Step 2 of 2 — One-time tracking setup (do this too)
+                </p>
+                <p className="mt-1 text-xs text-ink-500">
+                  Step 1 alone only reports how much you spent. This step is
+                  what makes each real ad click create a correctly-tagged Lead.
+                  Meta sets this per ad (or per template you duplicate) — still
+                  one paste, not a hand-crafted link per ad. Without it, leads
+                  from Meta Ads won't show their real source.
+                </p>
                 {trackingSetup ? (
                   <div className="mt-2 space-y-2">
                     <div>
-                      <p className="text-xs text-ink-400">A. Set as your ad's Website URL</p>
+                      <p className="text-xs text-ink-400">
+                        A. Set as your ad's Website URL
+                      </p>
                       <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.meta.websiteUrl}</code>
-                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.meta.websiteUrl); toast.success('Website URL copied'); }}><Copy size={13} /></Button>
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">
+                          {trackingSetup.meta.websiteUrl}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(
+                              trackingSetup.meta.websiteUrl,
+                            );
+                            toast.success("Website URL copied");
+                          }}
+                        >
+                          <Copy size={13} />
+                        </Button>
                       </div>
                     </div>
                     <div>
-                      <p className="text-xs text-ink-400">B. Paste under the ad's Tracking section → "URL Parameters" (reuse when duplicating ads)</p>
+                      <p className="text-xs text-ink-400">
+                        B. Paste under the ad's Tracking section → "URL
+                        Parameters" (reuse when duplicating ads)
+                      </p>
                       <div className="mt-1 flex items-center gap-2">
-                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">{trackingSetup.meta.urlParameters}</code>
-                        <Button variant="ghost" className="px-2 py-1" onClick={() => { navigator.clipboard?.writeText(trackingSetup.meta.urlParameters); toast.success('URL Parameters copied'); }}><Copy size={13} /></Button>
+                        <code className="flex-1 truncate rounded bg-white px-2 py-1 text-xs">
+                          {trackingSetup.meta.urlParameters}
+                        </code>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-1"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(
+                              trackingSetup.meta.urlParameters,
+                            );
+                            toast.success("URL Parameters copied");
+                          }}
+                        >
+                          <Copy size={13} />
+                        </Button>
                       </div>
                     </div>
                   </div>
                 ) : (
-                  <p className="mt-2 text-xs text-ink-400">Loading your tracking setup…</p>
+                  <p className="mt-2 text-xs text-ink-400">
+                    Loading your tracking setup…
+                  </p>
                 )}
               </div>
             </div>
-          ) : config.key === 'zoho' ? (
+          ) : config.key === "zoho" ? (
             <div className="space-y-3 text-sm">
-              <p className="text-xs text-ink-500">Real, one-way lead pull from your Zoho CRM's Leads module — connected through Zoho's own OAuth consent screen, not an API key typed here. Leads only flow into InnovateX; nothing is written back to Zoho.</p>
-              <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Connected org</p><p className="font-medium text-ink-900">{typeof config.config.orgName === 'string' && config.config.orgName ? config.config.orgName : 'Zoho CRM'}</p></div>
-              {typeof config.config.lastSyncLeadCount === 'number' && (
-                <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Last sync</p><p className="font-medium text-ink-900">{config.config.lastSyncLeadCount} new lead{config.config.lastSyncLeadCount === 1 ? '' : 's'} imported</p></div>
+              <p className="text-xs text-ink-500">
+                Real, one-way lead pull from your Zoho CRM's Leads module —
+                connected through Zoho's own OAuth consent screen, not an API
+                key typed here. Leads only flow into InnovateX; nothing is
+                written back to Zoho.
+              </p>
+              <div className="rounded-lg border border-ink-100 p-3">
+                <p className="text-xs text-ink-400">Connected org</p>
+                <p className="font-medium text-ink-900">
+                  {typeof config.config.orgName === "string" &&
+                  config.config.orgName
+                    ? config.config.orgName
+                    : "Zoho CRM"}
+                </p>
+              </div>
+              {typeof config.config.lastSyncLeadCount === "number" && (
+                <div className="rounded-lg border border-ink-100 p-3">
+                  <p className="text-xs text-ink-400">Last sync</p>
+                  <p className="font-medium text-ink-900">
+                    {config.config.lastSyncLeadCount} new lead
+                    {config.config.lastSyncLeadCount === 1 ? "" : "s"} imported
+                  </p>
+                </div>
               )}
-              {typeof config.config.lastSyncError === 'string' && config.config.lastSyncError && (
-                <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700"><strong>Last sync failed:</strong> {config.config.lastSyncError}</div>
-              )}
+              {typeof config.config.lastSyncError === "string" &&
+                config.config.lastSyncError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                    <strong>Last sync failed:</strong>{" "}
+                    {config.config.lastSyncError}
+                  </div>
+                )}
             </div>
-          ) : config.key === 'gemini' ? (
+          ) : config.key === "gemini" ? (
             <div className="space-y-4">
-              <Field label="Gemini API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Gemini API key…" /></Field>
+              <Field label="Gemini API Key">
+                <Input
+                  type="password"
+                  value={configForm.api_key}
+                  onChange={(e) =>
+                    setConfigForm({ ...configForm, api_key: e.target.value })
+                  }
+                  placeholder="Enter your Gemini API key…"
+                />
+              </Field>
               <p className="text-xs text-ink-400">
-                Saving genuinely verifies this key against Google's own API before it's accepted — an invalid or
-                revoked key will show an error here instead of connecting. Once verified, Call Intelligence, AI Reply
-                Assistant, and AI Qualification will all use your own key instead of the platform default, so usage
-                and cost are billed to your own Google account. Get a key from{' '}
-                <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                Saving genuinely verifies this key against Google's own API
+                before it's accepted — an invalid or revoked key will show an
+                error here instead of connecting. Once verified, Call
+                Intelligence, AI Reply Assistant, and AI Qualification will all
+                use your own key instead of the platform default, so usage and
+                cost are billed to your own Google account. Get a key from{" "}
+                <a
+                  href="https://aistudio.google.com/app/apikey"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand-600 hover:underline"
+                >
                   aistudio.google.com
-                </a>.
+                </a>
+                .
               </p>
             </div>
-          ) : config.key === 'openai' ? (
+          ) : config.key === "openai" ? (
             <div className="space-y-4">
-              <Field label="OpenAI API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your OpenAI API key…" /></Field>
+              <Field label="OpenAI API Key">
+                <Input
+                  type="password"
+                  value={configForm.api_key}
+                  onChange={(e) =>
+                    setConfigForm({ ...configForm, api_key: e.target.value })
+                  }
+                  placeholder="Enter your OpenAI API key…"
+                />
+              </Field>
               <p className="text-xs text-ink-400">
-                Saving genuinely verifies this key against OpenAI's own API before it's accepted — an invalid or
-                revoked key will show an error here instead of connecting. If this becomes your most-recently-connected
-                AI provider, Call Intelligence, AI Reply Assistant, and AI Qualification will all switch to using it.
-                Get a key from{' '}
-                <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                Saving genuinely verifies this key against OpenAI's own API
+                before it's accepted — an invalid or revoked key will show an
+                error here instead of connecting. If this becomes your
+                most-recently-connected AI provider, Call Intelligence, AI Reply
+                Assistant, and AI Qualification will all switch to using it. Get
+                a key from{" "}
+                <a
+                  href="https://platform.openai.com/api-keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand-600 hover:underline"
+                >
                   platform.openai.com
-                </a>.
+                </a>
+                .
               </p>
             </div>
-          ) : config.key === 'claude' ? (
+          ) : config.key === "claude" ? (
             <div className="space-y-4">
-              <Field label="Claude API Key"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter your Anthropic API key…" /></Field>
+              <Field label="Claude API Key">
+                <Input
+                  type="password"
+                  value={configForm.api_key}
+                  onChange={(e) =>
+                    setConfigForm({ ...configForm, api_key: e.target.value })
+                  }
+                  placeholder="Enter your Anthropic API key…"
+                />
+              </Field>
               <p className="text-xs text-ink-400">
-                Saving genuinely verifies this key against Anthropic's own API before it's accepted — an invalid or
-                revoked key will show an error here instead of connecting. If this becomes your most-recently-connected
-                AI provider, Call Intelligence, AI Reply Assistant, and AI Qualification will all switch to using it.
-                Get a key from{' '}
-                <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-brand-600 hover:underline">
+                Saving genuinely verifies this key against Anthropic's own API
+                before it's accepted — an invalid or revoked key will show an
+                error here instead of connecting. If this becomes your
+                most-recently-connected AI provider, Call Intelligence, AI Reply
+                Assistant, and AI Qualification will all switch to using it. Get
+                a key from{" "}
+                <a
+                  href="https://console.anthropic.com/settings/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-brand-600 hover:underline"
+                >
                   console.anthropic.com
-                </a>.
+                </a>
+                .
               </p>
             </div>
           ) : (
             <div className="space-y-4">
-              <Field label="API Key / Token"><Input type="password" value={configForm.api_key} onChange={(e) => setConfigForm({ ...configForm, api_key: e.target.value })} placeholder="Enter API key…" /></Field>
-              <Field label="Webhook URL"><Input value={configForm.webhook_url} onChange={(e) => setConfigForm({ ...configForm, webhook_url: e.target.value })} placeholder="https://…" /></Field>
-              <p className="text-xs text-ink-400">This runs in simulation mode — credentials are saved but no live connection is made to {config.name}.</p>
+              <Field label="API Key / Token">
+                <Input
+                  type="password"
+                  value={configForm.api_key}
+                  onChange={(e) =>
+                    setConfigForm({ ...configForm, api_key: e.target.value })
+                  }
+                  placeholder="Enter API key…"
+                />
+              </Field>
+              <Field label="Webhook URL">
+                <Input
+                  value={configForm.webhook_url}
+                  onChange={(e) =>
+                    setConfigForm({
+                      ...configForm,
+                      webhook_url: e.target.value,
+                    })
+                  }
+                  placeholder="https://…"
+                />
+              </Field>
+              <p className="text-xs text-ink-400">
+                This runs in simulation mode — credentials are saved but no live
+                connection is made to {config.name}.
+              </p>
             </div>
           )}
         </Modal>
       )}
 
       {logsFor && (
-        <Modal open onClose={() => setLogsFor(null)} title={`${logsFor.name} — Error Logs`}>
+        <Modal
+          open
+          onClose={() => setLogsFor(null)}
+          title={`${logsFor.name} — Error Logs`}
+        >
           <div className="space-y-2">
             {logsFor.error_logs.map((l, i) => (
-              <div key={i} className={`flex items-start gap-2 rounded-lg p-3 text-sm ${l.severity === 'error' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}`}>
+              <div
+                key={i}
+                className={`flex items-start gap-2 rounded-lg p-3 text-sm ${l.severity === "error" ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"}`}
+              >
                 <AlertCircle size={15} className="mt-0.5 shrink-0" />
-                <div className="flex-1"><p>{l.message}</p><p className="mt-0.5 text-xs opacity-70">{timeAgo(l.occurred_at)}</p></div>
+                <div className="flex-1">
+                  <p>{l.message}</p>
+                  <p className="mt-0.5 text-xs opacity-70">
+                    {timeAgo(l.occurred_at)}
+                  </p>
+                </div>
               </div>
             ))}
           </div>
@@ -730,10 +1584,19 @@ export function Integrations() {
       )}
 
       {googleAdsAccountPicker && (
-        <Modal open onClose={() => setGoogleAdsAccountPicker(null)} title="Choose a Google Ads account">
-          <p className="mb-4 text-sm text-ink-500">Google authorized successfully. Choose which real Google Ads account this workspace should sync data from.</p>
+        <Modal
+          open
+          onClose={() => setGoogleAdsAccountPicker(null)}
+          title="Choose a Google Ads account"
+        >
+          <p className="mb-4 text-sm text-ink-500">
+            Google authorized successfully. Choose which real Google Ads account
+            this workspace should sync data from.
+          </p>
           {googleAdsAccountPicker.length === 0 ? (
-            <p className="text-sm text-ink-400">No accessible Google Ads accounts were found for this login.</p>
+            <p className="text-sm text-ink-400">
+              No accessible Google Ads accounts were found for this login.
+            </p>
           ) : (
             <div className="space-y-2">
               {googleAdsAccountPicker.map((customerId) => (
@@ -743,7 +1606,7 @@ export function Integrations() {
                   onClick={() => void handleSelectGoogleAdsAccount(customerId)}
                   className="w-full rounded-lg border border-ink-200 px-4 py-3 text-left text-sm font-medium hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
                 >
-                  {customerId.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3')}
+                  {customerId.replace(/(\d{3})(\d{3})(\d{4})/, "$1-$2-$3")}
                 </button>
               ))}
             </div>
@@ -752,17 +1615,31 @@ export function Integrations() {
       )}
 
       {metaAdsAccountPicker && (
-        <Modal open onClose={() => setMetaAdsAccountPicker(null)} title="Choose a Meta Ads account">
-          <p className="mb-4 text-sm text-ink-500">Meta authorized successfully. Choose which real Meta ad account this workspace should sync data from.</p>
+        <Modal
+          open
+          onClose={() => setMetaAdsAccountPicker(null)}
+          title="Choose a Meta Ads account"
+        >
+          <p className="mb-4 text-sm text-ink-500">
+            Meta authorized successfully. Choose which real Meta ad account this
+            workspace should sync data from.
+          </p>
           {metaAdsAccountPicker.length === 0 ? (
-            <p className="text-sm text-ink-400">No accessible Meta ad accounts were found for this login.</p>
+            <p className="text-sm text-ink-400">
+              No accessible Meta ad accounts were found for this login.
+            </p>
           ) : (
             <div className="space-y-2">
               {metaAdsAccountPicker.map((account) => (
                 <button
                   key={account.adAccountId}
                   disabled={selectingAccount}
-                  onClick={() => void handleSelectMetaAdsAccount(account.adAccountId, account.accountName)}
+                  onClick={() =>
+                    void handleSelectMetaAdsAccount(
+                      account.adAccountId,
+                      account.accountName,
+                    )
+                  }
                   className="w-full rounded-lg border border-ink-200 px-4 py-3 text-left text-sm font-medium hover:border-brand-400 hover:bg-brand-50 disabled:opacity-50"
                 >
                   {account.accountName || account.adAccountId}

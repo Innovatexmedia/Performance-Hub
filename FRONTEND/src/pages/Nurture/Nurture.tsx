@@ -420,17 +420,17 @@ export function Nurture() {
                   const fieldMeta = NURTURE_LEAD_CONDITION_FIELDS.find((f) => f.field === cond.field);
                   return (
                     <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] items-end gap-2">
-                      <Field label={idx === 0 ? 'Field' : undefined}>
+                      <Field label={idx === 0 ? 'Field' : ''}>
                         <Select value={cond.field} onChange={(e) => updateCondition(idx, { field: e.target.value })}>
                           {NURTURE_LEAD_CONDITION_FIELDS.map((f) => <option key={f.field} value={f.field}>{f.label}</option>)}
                         </Select>
                       </Field>
-                      <Field label={idx === 0 ? 'Condition' : undefined}>
+                      <Field label={idx === 0 ? 'Condition' : ''}>
                         <Select value={cond.operator} onChange={(e) => updateCondition(idx, { operator: e.target.value as NurtureCondition['operator'] })}>
                           {NURTURE_CONDITION_OPERATOR_VALUES.map((op) => <option key={op} value={op}>{NURTURE_CONDITION_OPERATOR_LABELS[op]}</option>)}
                         </Select>
                       </Field>
-                      <Field label={idx === 0 ? 'Value' : undefined}>
+                        <Field label={idx === 0 ? 'Value' : ''}>
                         {cond.operator === 'EXISTS' || cond.operator === 'NOT_EXISTS' ? (
                           <Input value="" disabled placeholder="(no value needed)" />
                         ) : (
