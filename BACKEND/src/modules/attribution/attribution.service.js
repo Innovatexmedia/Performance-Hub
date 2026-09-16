@@ -33,7 +33,7 @@ import MetaAdsCampaignMetric from './metaAdsCampaignMetric.model.js';
 import { MetaConversionsProvider } from './providers/metaConversions.provider.js';
 import { GoogleAnalyticsProvider } from './providers/googleAnalytics.provider.js';
 import { safeDecrypt } from '../../utils/crypto.js';
-import { getExchangeRates } from '../../shared/services/exchangeRate.service.js';
+import { getExchangeRates, convertAndSumByCurrency } from '../../shared/services/exchangeRate.service.js';
 
 // ── Import Lead model to enrich events with UTM data ─────────────────────────
 import { Lead } from '../leads/lead/lead.model.js';
@@ -231,9 +231,29 @@ export const getLeadsBySource = (tenantId, filter = {}) =>
 /**
  * getRevenueBySource — data for "Revenue by Source" bar chart.
  * SOURCE: FRONTEND_SPEC §11
+ *
+ * REAL FIX: previously returned attrRepo's raw, currency-blind sum
+ * directly. Now converts each source's real per-currency breakdown
+ * into the tenant's actual workspace currency (see
+ * exchangeRate.service.js's convertAndSumByCurrency) before returning,
+ * and re-sorts by the real converted revenue (the repository can no
+ * longer sort meaningfully by revenue itself, since conversion hasn't
+ * happened yet at that layer).
  */
-export const getRevenueBySource = (tenantId, filter = {}) =>
-  attrRepo.getRevenueBySource(tenantId, filter);
+export const getRevenueBySource = async (tenantId, filter = {}) => {
+  const [tenant, rows] = await Promise.all([
+    Tenant.findById(tenantId).select('currency'),
+    attrRepo.getRevenueBySource(tenantId, filter),
+  ]);
+  const workspaceCurrency = tenant?.currency || 'USD';
+
+  const converted = await Promise.all(rows.map(async (r) => {
+    const { total, hasUnconverted } = await convertAndSumByCurrency(r.byCurrency, workspaceCurrency);
+    return { source: r.source, revenue: total, count: r.count, currency: workspaceCurrency, hasUnconverted };
+  }));
+
+  return converted.sort((a, b) => b.revenue - a.revenue);
+};
 
 /**
  * getBookingsBySource — data for "Bookings by Source" bar chart.
@@ -298,26 +318,56 @@ export const getRecentEvents = async (tenantId, filter = {}, options = {}) => {
  */
 export const getAttributionDashboard = async (tenantId, filter = {}) => {
   const [
-    kpis,
+    tenant,
+    kpisRaw,
     leadsBySource,
     revenueBySource,
     bookingsBySource,
     eventsByType,
-    sourceToRevenue,
+    sourceToRevenueRaw,
     recentEventsResult,
     adSpend,
   ] = await Promise.all([
+    Tenant.findById(tenantId).select('currency'),
     attrRepo.getKpiCounts(tenantId, filter),
     attrRepo.getLeadsBySource(tenantId, filter),
-    attrRepo.getRevenueBySource(tenantId, filter),
+    getRevenueBySource(tenantId, filter), // real per-currency conversion already applied -- see that function's own comment
     attrRepo.getBookingsBySource(tenantId, filter),
     attrRepo.getEventsByType(tenantId, filter),
     attrRepo.getSourceToRevenueBreakdown(tenantId, filter),
     attrRepo.getRecentEvents(tenantId, filter, { skip: 0, limit: 20 }),
     getAdSpendSummary(tenantId),
   ]);
+  const workspaceCurrency = tenant?.currency || 'USD';
+
+  // REAL FIX: the top "Attributed Revenue" KPI previously summed
+  // TrackingEvent.revenue directly with no currency awareness -- the
+  // exact figure most likely to be the "$15k that just became ₹15k"
+  // symptom, since it's the single most prominent revenue number on
+  // this page. Converted here using the same real, shared helper as
+  // every other revenue aggregation on this page.
+  const { total: attributedRevenue } = await convertAndSumByCurrency(kpisRaw.attributedRevenueByCurrency, workspaceCurrency);
+  const kpis = {
+    totalEvents: kpisRaw.totalEvents,
+    attributedRevenue,
+    topSource: kpisRaw.topSource,
+    uniqueSources: kpisRaw.uniqueSources,
+  };
+
+  // REAL FIX: same real conversion applied to the Source-to-Revenue
+  // breakdown table's `revenue` column -- previously always 0 direct
+  // from the repository (see attribution.repository.js's own comment on
+  // why conversion had to move to this layer), now the real converted
+  // total, and re-sorted by it since the repository can no longer sort
+  // meaningfully before conversion happens.
+  const sourceToRevenue = (await Promise.all(sourceToRevenueRaw.map(async (row) => {
+    const { total } = await convertAndSumByCurrency(row.revenueByCurrency, workspaceCurrency);
+    const { revenueByCurrency, ...rest } = row;
+    return { ...rest, revenue: total };
+  }))).sort((a, b) => b.revenue - a.revenue || b.leads - a.leads);
 
   return {
+    currency: workspaceCurrency,
     kpis,
     leadsBySource,
     revenueBySource,
@@ -394,12 +444,6 @@ const getAdSpendSummary = async (tenantId) => {
     return { connected: false, totalSpend: 0, totalConversions: 0, campaigns: [] };
   }
 
-  // Real revenue-by-CAMPAIGN data this app already computes internally
-  // (see getRevenueByCampaign's header comment for why this, not
-  // getRevenueBySource, is the reliable match key).
-  const revenueByCampaign = await attrRepo.getRevenueByCampaign(tenantId, {});
-  const revenueByName = new Map(revenueByCampaign.map((r) => [String(r.campaign || '').toLowerCase(), r.revenue || 0]));
-
   // Real workspace currency -- this is the ONE display/reporting
   // currency every figure below is converted INTO, matching Settings'
   // own currency selector (Tenant.currency). See
@@ -408,6 +452,24 @@ const getAdSpendSummary = async (tenantId) => {
   // match this.
   const tenant = await Tenant.findById(tenantId).select('currency');
   const workspaceCurrency = tenant?.currency || 'USD';
+
+  // Real revenue-by-CAMPAIGN data this app already computes internally
+  // (see getRevenueByCampaign's header comment for why this, not
+  // getRevenueBySource, is the reliable match key). Each campaign's
+  // real per-currency breakdown is converted to workspaceCurrency here
+  // -- see exchangeRate.service.js's convertAndSumByCurrency -- so
+  // matching a real ad campaign's spend against revenue that was
+  // genuinely recorded in a DIFFERENT currency (e.g. before a tenant
+  // switched their workspace currency setting) still produces a real,
+  // correct number instead of silently comparing unlike amounts.
+  const revenueByCampaign = await attrRepo.getRevenueByCampaign(tenantId, {});
+  const revenueByNameEntries = await Promise.all(
+    revenueByCampaign.map(async (r) => {
+      const { total } = await convertAndSumByCurrency(r.byCurrency, workspaceCurrency);
+      return [String(r.campaign || '').toLowerCase(), total];
+    }),
+  );
+  const revenueByName = new Map(revenueByNameEntries);
 
   // REAL FIX: real conversion, not withholding. A campaign's spend is
   // denominated in whatever currency its Google/Meta ad ACCOUNT bills

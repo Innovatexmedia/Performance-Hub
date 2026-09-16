@@ -63,6 +63,13 @@ export interface SourceRevenue {
   source: string;
   revenue: number;
   count: number;
+  /** Real workspace currency `revenue` above is already converted into
+   * -- see attribution.service.js's getRevenueBySource. */
+  currency: string;
+  /** True if any of this source's real revenue couldn't be converted
+   * right now (a real exchange-rate lookup failure) and was excluded
+   * from `revenue` above rather than guessed. */
+  hasUnconverted: boolean;
 }
 
 export interface EventTypeCount {
@@ -141,6 +148,10 @@ export interface AdSpendSummary {
 }
 
 export interface AttributionDashboard {
+  /** Real workspace currency every money figure in this whole response
+   * is denominated in (Settings' currency selector) -- see
+   * attribution.service.js's getAttributionDashboard. */
+  currency: string;
   kpis: AttributionKpis;
   leadsBySource: SourceCount[];
   revenueBySource: SourceRevenue[];

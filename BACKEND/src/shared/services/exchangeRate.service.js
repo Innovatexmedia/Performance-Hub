@@ -108,3 +108,72 @@ export async function getExchangeRates(fromCurrencies, toCurrency) {
   const results = await Promise.all(uniqueFroms.map((from) => getExchangeRate(from, toCurrency)));
   return new Map(uniqueFroms.map((from, i) => [from, results[i]]));
 }
+
+/**
+ * convertAndSumByCurrency -- real, shared "take a real per-currency
+ * revenue breakdown and turn it into ONE genuinely correct total in the
+ * target currency" helper.
+ *
+ * WHY THIS EXISTS: multiple independent revenue aggregations in this
+ * app (Attributed Revenue KPI, Revenue by Source chart, ROAS matching)
+ * were each summing TrackingEvent.revenue directly, with no awareness
+ * that a tenant's own historical payments can genuinely be recorded in
+ * DIFFERENT currencies (Payment.currency reflects whatever the
+ * workspace currency setting was AT THE TIME each payment happened --
+ * see payment.service.js -- not automatically updated when a tenant
+ * later changes that setting in Settings). Summing $5,000 and ₹500,000
+ * together as a single number is not just imprecise, it's meaningless.
+ * This is the ONE real place that conversion logic now lives, reused by
+ * every revenue aggregation instead of four independent, easy-to-miss
+ * copies of the same fix.
+ *
+ * @param {{currency: string|null, revenue: number}[]} byCurrency
+ * @param {string} targetCurrency
+ * @returns {Promise<{total: number, unconverted: number, hasUnconverted: boolean}>}
+ *   `total` -- the real, safely-converted sum in targetCurrency.
+ *   `unconverted` -- revenue that could NOT be converted (a real rate
+ *      lookup failure -- see getExchangeRate) and is EXCLUDED from
+ *      `total`, exactly the same "never silently guess" treatment
+ *      already applied to ad spend's currencyMismatch handling.
+ *   `hasUnconverted` -- true if any real revenue had to be excluded.
+ */
+export async function convertAndSumByCurrency(byCurrency, targetCurrency) {
+  if (!Array.isArray(byCurrency) || byCurrency.length === 0) {
+    return { total: 0, unconverted: 0, hasUnconverted: false };
+  }
+
+  // Real, legacy-data-safe assumption: a row with no recorded currency
+  // at all (created before the `currency` field existed on
+  // TrackingEvent -- see that model's own comment) is treated as
+  // already being in the CURRENT target currency, so historical revenue
+  // doesn't silently vanish from totals the moment this fix deploys.
+  // This is a best-effort assumption for genuinely un-tagged legacy
+  // data, not a guess applied to any row that DOES have a real,
+  // known-different currency recorded.
+  const distinctCurrencies = byCurrency
+    .map((r) => r.currency || targetCurrency)
+    .filter((c) => c !== targetCurrency);
+  const rates = await getExchangeRates(distinctCurrencies, targetCurrency);
+
+  let total = 0;
+  let unconverted = 0;
+  for (const row of byCurrency) {
+    const rowCurrency = row.currency || targetCurrency;
+    if (rowCurrency === targetCurrency) {
+      total += row.revenue;
+      continue;
+    }
+    const rate = rates.get(rowCurrency.toUpperCase());
+    if (rate == null) {
+      unconverted += row.revenue;
+      continue;
+    }
+    total += row.revenue * rate;
+  }
+
+  return {
+    total: Number(total.toFixed(2)),
+    unconverted: Number(unconverted.toFixed(2)),
+    hasUnconverted: unconverted > 0,
+  };
+}

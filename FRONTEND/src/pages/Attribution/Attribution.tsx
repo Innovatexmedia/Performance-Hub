@@ -32,7 +32,7 @@ export function Attribution() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <KpiCard label="Tracking events" value={dashboard?.kpis.totalEvents ?? '—'} icon={<Network size={18} />} accent="#6366f1" />
-        <KpiCard label="Attributed revenue" value={dashboard ? formatCurrencyCompact(dashboard.kpis.attributedRevenue) : '—'} icon={<GitBranch size={18} />} accent="#10b981" />
+        <KpiCard label="Attributed revenue" value={dashboard ? formatCurrencyCompact(dashboard.kpis.attributedRevenue, dashboard.currency) : '—'} icon={<GitBranch size={18} />} accent="#10b981" />
         <KpiCard label="Sources" value={dashboard?.kpis.uniqueSources ?? '—'} icon={<Network size={18} />} accent="#8b5cf6" />
         <KpiCard label="Top source" value={dashboard?.kpis.topSource ?? '—'} icon={<Network size={18} />} accent="#f59e0b" />
       </div>
@@ -87,7 +87,7 @@ export function Attribution() {
                       <Td>{r.booked}</Td>
                       <Td>{r.calls}</Td>
                       <Td>{r.booking_conversion}%</Td>
-                      <Td className="font-semibold text-emerald-700">{formatCurrency(r.revenue)}</Td>
+                      <Td className="font-semibold text-emerald-700">{formatCurrency(r.revenue, r.currency)}</Td>
                     </Tr>
                   ))}
                 </tbody>
@@ -111,7 +111,7 @@ export function Attribution() {
             ) : (
               <>
                 <div className="grid grid-cols-2 gap-3 p-4 lg:grid-cols-4">
-                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Total spend</p><p className="text-lg font-bold text-ink-900">{formatCurrency(dashboard.adSpend.totalSpend)}</p></div>
+                  <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Total spend</p><p className="text-lg font-bold text-ink-900">{formatCurrency(dashboard.adSpend.totalSpend, dashboard.adSpend.currency)}</p></div>
                   <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Conversions</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.totalConversions}</p></div>
                   <div className="rounded-lg border border-ink-100 p-3"><p className="text-xs text-ink-400">Campaigns</p><p className="text-lg font-bold text-ink-900">{dashboard.adSpend.campaigns.length}</p></div>
                 </div>
@@ -146,7 +146,7 @@ export function Attribution() {
                         <Td>{c.clicks}</Td>
                         <Td>{formatCompact(c.impressions)}</Td>
                         <Td>{c.conversions}</Td>
-                        <Td>{c.matchedRevenue !== null ? formatCurrency(c.matchedRevenue) : <span className="text-ink-400">Unmatched</span>}</Td>
+                        <Td>{c.matchedRevenue !== null ? formatCurrency(c.matchedRevenue, dashboard.adSpend.currency) : <span className="text-ink-400">Unmatched</span>}</Td>
                         <Td className={c.roas !== null && c.roas >= 1 ? 'font-semibold text-emerald-700' : ''}>
                           {c.currencyMismatch ? (
                             <span className="inline-flex items-center gap-1 text-xs text-amber-600" title={`Could not fetch a live exchange rate for ${c.currencyOriginal} -> ${c.currency} just now -- ROAS is temporarily withheld rather than shown with a guessed rate. Try refreshing shortly.`}>

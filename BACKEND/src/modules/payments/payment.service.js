@@ -394,6 +394,13 @@ export const markPaid = async (id, tenantId, reqUser) => {
     source:     payment.source   || null,
     campaign:   payment.campaign || null,
     revenue:    amount, // ← this powers the "Revenue by Source" attribution chart
+    // REAL FIX: the real currency this specific revenue figure is
+    // denominated in -- now a first-class field (see
+    // tracking-event.model.js's own comment), not just buried in
+    // metadata below where getRevenueBySource/getRevenueByCampaign
+    // could never see it. Whatever the workspace currency happened to
+    // be AT THE MOMENT this payment was recorded, not re-derived later.
+    currency:   payment.currency,
     metadata:   { payment_id: id, amount, currency: payment.currency },
     created_by: ctx.userId,
   });

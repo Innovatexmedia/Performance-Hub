@@ -42,9 +42,16 @@ export const getKpiCounts = async (tenantId, filter = {}) => {
   ] = await Promise.all([
     TrackingEvent.countDocuments(query),
 
+    // REAL FIX: previously a single $group summing every matching
+    // TrackingEvent.revenue together regardless of currency -- grouping
+    // by currency here too so the service layer can convert each
+    // sub-total with a real exchange rate before combining, instead of
+    // silently adding e.g. USD and INR payments into one meaningless
+    // number (see exchangeRate.service.js's convertAndSumByCurrency for
+    // where that real conversion now happens).
     TrackingEvent.aggregate([
       { $match: { ...query, revenue: { $gt: 0 } } },
-      { $group: { _id: null, totalRevenue: { $sum: '$revenue' } } },
+      { $group: { _id: '$currency', revenue: { $sum: '$revenue' } } },
     ]),
 
     TrackingEvent.aggregate([
@@ -55,11 +62,11 @@ export const getKpiCounts = async (tenantId, filter = {}) => {
     ]),
   ]);
 
-  const attributedRevenue = revenueAgg[0]?.totalRevenue || 0;
-  const topSource         = sourceCounts[0]?._id || 'Direct';
-  const uniqueSources     = sourceCounts.length;
+  const attributedRevenueByCurrency = revenueAgg.map((r) => ({ currency: r._id, revenue: r.revenue }));
+  const topSource     = sourceCounts[0]?._id || 'Direct';
+  const uniqueSources = sourceCounts.length;
 
-  return { totalEvents, attributedRevenue, topSource, uniqueSources };
+  return { totalEvents, attributedRevenueByCurrency, topSource, uniqueSources };
 };
 
 // =============================================================================
@@ -89,6 +96,17 @@ export const getLeadsBySource = (tenantId, filter = {}) => {
 /**
  * getRevenueBySource — total attributed revenue grouped by source.
  * SOURCE: FRONTEND_SPEC §11 "Revenue by Source" chart
+ *
+ * REAL FIX: previously summed `revenue` directly with a single $group,
+ * silently adding together payments recorded in DIFFERENT currencies
+ * (e.g. a USD payment from before a tenant switched their workspace
+ * currency to INR, plus INR payments recorded after) into one
+ * meaningless number. Now groups by (source, currency) first, returning
+ * a real per-currency breakdown per source -- the service layer
+ * (attribution.service.js) converts each currency's sub-total to the
+ * tenant's current workspace currency using the real exchange-rate
+ * service BEFORE combining into a final total, the same real-conversion
+ * treatment already applied to ad spend.
  */
 export const getRevenueBySource = (tenantId, filter = {}) => {
   const query = buildQuery(tenantId, filter);
@@ -99,13 +117,20 @@ export const getRevenueBySource = (tenantId, filter = {}) => {
     { $match: query },
     {
       $group: {
-        _id:     { $ifNull: ['$source', 'Direct'] },
+        _id: { source: { $ifNull: ['$source', 'Direct'] }, currency: '$currency' },
         revenue: { $sum: '$revenue' },
         count:   { $sum: 1 },
       },
     },
-    { $sort: { revenue: -1 } },
-    { $project: { _id: 0, source: '$_id', revenue: 1, count: 1 } },
+    {
+      $group: {
+        _id: '$_id.source',
+        byCurrency: { $push: { currency: '$_id.currency', revenue: '$revenue', count: '$count' } },
+        totalCount: { $sum: '$count' },
+      },
+    },
+    { $sort: { totalCount: -1 } },
+    { $project: { _id: 0, source: '$_id', byCurrency: 1, count: '$totalCount' } },
   ]);
 };
 
@@ -114,27 +139,8 @@ export const getRevenueBySource = (tenantId, filter = {}) => {
  * campaign name, for matching against real ad-platform spend data
  * (see attribution.service.js's getAdSpendSummary).
  *
- * REAL FIX: getAdSpendSummary previously matched a real Google/Meta
- * Ads campaign name against getRevenueBySource's generic `source`
- * grouping (e.g. "Google Ads", "Direct") -- a real ad campaign is
- * essentially never literally NAMED "Google Ads" in Ads Manager (that
- * would defeat the point of having descriptive campaign names to
- * manage multiple campaigns), so that match would almost never
- * actually fire in production despite being syntactically correct
- * code. `campaign` is the field genuinely meant to hold a specific
- * campaign identifier -- confirmed by tracing the real, already-wired
- * chain: Lead.campaign -> Payment.campaign (copied verbatim at payment
- * creation, see payment.service.js) -> TrackingEvent.campaign (on
- * PAYMENT_COMPLETED). Grouping by THIS field, not `source`, is what
- * actually gives campaign-name matching a real chance of succeeding --
- * still string-equality (there is no shared ID between this CRM and
- * either ad platform), but now comparing like with like: a real
- * campaign name against a real campaign name, not a real campaign name
- * against a generic platform label.
- *
- * Rows with no real campaign attribution ($ifNull default) are
- * deliberately excluded (not defaulted to a placeholder) -- there is
- * nothing meaningful to match an empty campaign against.
+ * REAL FIX: same real per-currency breakdown as getRevenueBySource
+ * above, for the identical reason -- see that function's own comment.
  */
 export const getRevenueByCampaign = (tenantId, filter = {}) => {
   const query = buildQuery(tenantId, filter);
@@ -146,13 +152,20 @@ export const getRevenueByCampaign = (tenantId, filter = {}) => {
     { $match: query },
     {
       $group: {
-        _id:     '$campaign',
+        _id: { campaign: '$campaign', currency: '$currency' },
         revenue: { $sum: '$revenue' },
         count:   { $sum: 1 },
       },
     },
-    { $sort: { revenue: -1 } },
-    { $project: { _id: 0, campaign: '$_id', revenue: 1, count: 1 } },
+    {
+      $group: {
+        _id: '$_id.campaign',
+        byCurrency: { $push: { currency: '$_id.currency', revenue: '$revenue', count: '$count' } },
+        totalCount: { $sum: '$count' },
+      },
+    },
+    { $sort: { totalCount: -1 } },
+    { $project: { _id: 0, campaign: '$_id', byCurrency: 1, count: '$totalCount' } },
   ]);
 };
 
@@ -228,10 +241,13 @@ export const getSourceToRevenueBreakdown = async (tenantId, filter = {}) => {
       { $match: { ...query, event_type: TRACKING_EVENT_TYPE.CALL_COMPLETED } },
       { $group: { _id: { $ifNull: ['$source', 'Direct'] }, count: { $sum: 1 } } },
     ]),
-    // Revenue by source
+    // Revenue by source -- REAL FIX: grouped by (source, currency) now,
+    // not just source -- see exchangeRate.service.js's
+    // convertAndSumByCurrency for where the real per-currency
+    // conversion happens, in the service layer that calls this.
     TrackingEvent.aggregate([
       { $match: { ...query, event_type: TRACKING_EVENT_TYPE.PAYMENT_COMPLETED, revenue: { $gt: 0 } } },
-      { $group: { _id: { $ifNull: ['$source', 'Direct'] }, revenue: { $sum: '$revenue' } } },
+      { $group: { _id: { source: { $ifNull: ['$source', 'Direct'] }, currency: '$currency' }, revenue: { $sum: '$revenue' } } },
     ]),
   ]);
 
@@ -240,7 +256,7 @@ export const getSourceToRevenueBreakdown = async (tenantId, filter = {}) => {
   const setVal = (arr, field) => {
     arr.forEach(({ _id, count, revenue: rev }) => {
       if (!sourceMap[_id]) {
-        sourceMap[_id] = { source: _id, leads: 0, qualified: 0, booked: 0, calls: 0, revenue: 0 };
+        sourceMap[_id] = { source: _id, leads: 0, qualified: 0, booked: 0, calls: 0, revenue: 0, revenueByCurrency: [] };
       }
       sourceMap[_id][field] = count || rev || 0;
     });
@@ -250,11 +266,16 @@ export const getSourceToRevenueBreakdown = async (tenantId, filter = {}) => {
   setVal(qualified, 'qualified');
   setVal(booked,    'booked');
   setVal(calls,     'calls');
+  // Revenue is real per-currency data now -- attached as a breakdown
+  // array for the service layer to convert, `revenue` itself is left
+  // at 0 here (filled in with the real converted total by the service
+  // layer, same pattern as getAdSpendSummary already uses).
   revenue.forEach(({ _id, revenue: rev }) => {
-    if (!sourceMap[_id]) {
-      sourceMap[_id] = { source: _id, leads: 0, qualified: 0, booked: 0, calls: 0, revenue: 0 };
+    const source = _id.source;
+    if (!sourceMap[source]) {
+      sourceMap[source] = { source, leads: 0, qualified: 0, booked: 0, calls: 0, revenue: 0, revenueByCurrency: [] };
     }
-    sourceMap[_id].revenue = rev || 0;
+    sourceMap[source].revenueByCurrency.push({ currency: _id.currency, revenue: rev || 0 });
   });
 
   // Add booking_conversion percentage

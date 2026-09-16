@@ -103,6 +103,17 @@ const trackingEventSchema = new Schema(
      * SOURCE: FRONTEND_SPEC §11 "attributed revenue", "revenue by source" chart
      */
     revenue: { type: Number, default: 0, min: 0 },
+    // REAL FIX: which currency `revenue` above is actually denominated
+    // in -- previously never stored as a first-class field (only
+    // buried inside the free-form `metadata` object on some events),
+    // so getRevenueBySource/getRevenueByCampaign had no way to tell a
+    // USD-denominated payment apart from an INR one before summing them
+    // together. Copied from the real Payment.currency at the exact
+    // moment this event is created (see payment.service.js) -- NOT
+    // re-derived from the tenant's CURRENT workspace currency setting,
+    // since a tenant can change that setting later while old payments
+    // stay recorded in whatever currency they actually happened in.
+    currency: { type: String, default: null, trim: true },
 
     /**
      * metadata_json — flexible extra data per event type.
