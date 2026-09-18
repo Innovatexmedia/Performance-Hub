@@ -293,8 +293,17 @@ export function emitToTenant(tenantId, event, payload) {
  * if that user has no active socket connection -- just a no-op then.
  */
 export function emitToUser(userId, event, payload) {
-  if (!io || !userId) return;
-  io.to(`user:${userId}`).emit(event, payload);
+  if (!userId) return;
+  if (io) {
+    io.to(`user:${userId}`).emit(event, payload);
+  } else if (redisEmitterFallbackEnabled) {
+    // Same fallback emitToTenant already had. Without it, anything emitted
+    // from the worker process (src/worker.js -- nurture steps, scheduled
+    // jobs) silently went nowhere, because `io` only exists in the web
+    // process. Notifications are created from both, so a nurture task
+    // assignment would never reach the user's open tab.
+    getRedisEmitter().to(`user:${userId}`).emit(event, payload);
+  }
 }
 
 export function getIO() {

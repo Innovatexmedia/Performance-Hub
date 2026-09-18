@@ -8,6 +8,12 @@ const notificationSchema = new Schema({
   body:     { type: String, default: '' },
   isRead:   { type: Boolean, default: false },
   metadata: { type: Schema.Types.Mixed, default: {} },
+  // Which event this notification describes, matching a key in
+  // Settings > Notification Preferences (see NOTIFICATION_TYPE in
+  // notification.service.js). Nullable: notifications the user configured
+  // directly -- a nurture task, an automation rule's NOTIFY_USER action --
+  // have no preference toggle and carry no type.
+  type:     { type: String, default: null, index: true },
 }, {
   timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
   versionKey: false,

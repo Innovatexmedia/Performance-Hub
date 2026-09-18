@@ -18,7 +18,76 @@
  */
 
 import Notification   from './notification.model.js';
+import Tenant         from '../../auth/models/Tenant.js';
 import { AppError }   from '../../../shared/helpers/lead.helpers.js';
+import { emitToUser } from '../../../realtime/socket.js';
+
+/**
+ * NOTIFICATION_TYPE — the event a notification describes.
+ *
+ * Each value maps to one toggle in Settings > Notification Preferences. Those
+ * toggles were saved to Tenant.notificationPreferences and then read by
+ * nothing at all: every creator wrote its notification unconditionally, so
+ * turning "deal lost" off changed exactly nothing. createNotification now
+ * checks the matching preference before writing, which is what the UI has
+ * been claiming all along.
+ *
+ * A notification with no `type` (a nurture task, an automation rule's
+ * NOTIFY_USER action) has no toggle to consult and is always delivered --
+ * these are explicitly configured by the user elsewhere, so silently
+ * dropping them would be wrong.
+ */
+export const NOTIFICATION_TYPE = Object.freeze({
+  HOT_LEAD_ALERT:    'hot_lead_alert',
+  BOOKING_CREATED:   'booking_created',
+  PAYMENT_RECEIVED:  'payment_received',
+  TEMPLATE_APPROVED: 'template_approved',
+  CAMPAIGN_SENT:     'campaign_sent',
+  DEAL_WON:          'deal_won',
+  DEAL_LOST:         'deal_lost',
+});
+
+/** Maps a notification type to its camelCase key on notificationPreferences. */
+const TYPE_TO_PREFERENCE_KEY = Object.freeze({
+  [NOTIFICATION_TYPE.HOT_LEAD_ALERT]:    'hotLeadAlert',
+  [NOTIFICATION_TYPE.BOOKING_CREATED]:   'bookingCreated',
+  [NOTIFICATION_TYPE.PAYMENT_RECEIVED]:  'paymentReceived',
+  [NOTIFICATION_TYPE.TEMPLATE_APPROVED]: 'templateApproved',
+  [NOTIFICATION_TYPE.CAMPAIGN_SENT]:     'campaignSent',
+  [NOTIFICATION_TYPE.DEAL_WON]:          'dealWon',
+  [NOTIFICATION_TYPE.DEAL_LOST]:         'dealLost',
+});
+
+/**
+ * isTypeEnabled — reads the tenant's toggle for this notification type.
+ *
+ * Defaults to true on any failure or missing record: a notification that
+ * can't be checked should still arrive. The one exception is dealLost, whose
+ * schema default is false -- `?? true` would override that, so the stored
+ * default is read from the schema rather than assumed here.
+ */
+const isTypeEnabled = async (tenantId, type) => {
+  if (!type) return true;
+
+  const key = TYPE_TO_PREFERENCE_KEY[type];
+  if (!key) return true;
+
+  try {
+    const tenant = await Tenant.findById(tenantId).select('notificationPreferences').lean();
+    if (!tenant) return true;
+
+    const value = tenant.notificationPreferences?.[key];
+    if (typeof value === 'boolean') return value;
+
+    // No stored value yet (tenant predates the field): fall back to the
+    // schema's own default rather than a hardcoded true, so dealLost stays
+    // off as designed.
+    return Tenant.schema.path('notificationPreferences').schema.path(key)?.defaultValue ?? true;
+  } catch (err) {
+    console.warn(`[notification] preference lookup failed for ${type}: ${err.message}`);
+    return true;
+  }
+};
 
 // =============================================================================
 // CREATE NOTIFICATION — called by booking, call, qualification, payment services
@@ -37,9 +106,12 @@ export const createNotification = async ({
   title,
   body = '',
   metadata = {},
+  type = null,
 }) => {
   try {
     if (!tenantId || !userId || !title) return null;
+
+    if (!(await isTypeEnabled(tenantId, type))) return null;
 
     const notification = await Notification.create({
       tenantId: String(tenantId),
@@ -48,6 +120,21 @@ export const createNotification = async ({
       body,
       isRead:   false,
       metadata,
+      type,
+    });
+
+    // Push it to that user's open tabs immediately. The bell also polls every
+    // 20s as a safety net, so a dropped socket frame delays a notification
+    // rather than losing it -- but nobody should wait 20 seconds to find out
+    // a payment landed.
+    emitToUser(String(userId), 'notification:new', {
+      _id:        String(notification._id),
+      title:      notification.title,
+      body:       notification.body,
+      type:       notification.type,
+      metadata:   notification.metadata,
+      isRead:     false,
+      created_at: notification.created_at,
     });
 
     return notification;

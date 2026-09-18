@@ -35,7 +35,7 @@ import { Lead }              from '../leads/lead/lead.model.js';
 import { Deal }              from '../pipeline/deals/deal.model.js';
 import { ACTIVITY_TYPE }     from '../leads/activities/activity.model.js';
 import { activityService }   from '../leads/activities/activity.service.js';
-import Notification          from '../leads/notifications/notification.model.js';
+import { createNotification as createNotificationShared, NOTIFICATION_TYPE } from '../leads/notifications/notification.service.js';
 import { createTrackingEvent }    from '../attribution/attribution.service.js';
 import { TRACKING_EVENT_TYPE }    from '../attribution/attribution.constants.js';
 import { NurtureEnrollment } from '../whatsapp/submodules/nurtures/nurtures.model.js';
@@ -62,14 +62,18 @@ const logActivity = async (ctx, leadId, type, message, meta = {}) => {
   }
 };
 
-const createNotification = async (tenantId, userId, title, body, metadata = {}) => {
-  try {
-    if (!userId) return;
-    await Notification.create({ tenantId, userId, title, body, isRead: false, metadata });
-  } catch (err) {
-    console.warn(`[payments] notification failed: ${err.message}`);
-  }
-};
+/**
+ * createNotification — delegates to the shared notification service.
+ *
+ * This used to call Notification.create() directly, which bypassed the
+ * tenant's Settings > Notification Preferences toggles (nothing read them)
+ * and skipped the realtime socket push. Routing through the shared service
+ * means the toggle is honoured and the user's open tabs get it immediately.
+ * Signature unchanged so call sites don't move, plus an optional `type`
+ * naming which preference governs it.
+ */
+const createNotification = (tenantId, userId, title, body, metadata = {}, type = null) =>
+  createNotificationShared({ tenantId: String(tenantId), userId, title, body, metadata, type });
 
 /**
  * generatePaymentLink — builds a shareable payment link.
@@ -370,7 +374,8 @@ export const markPaid = async (id, tenantId, reqUser) => {
     assignedUserId,
     '💰 Payment Received!',
     `Payment of ${payment.currency} ${amount.toLocaleString()} received from ${lead?.name || 'Lead'}. Deal closed Won!`,
-    { payment_id: id, lead_id: String(leadId), amount }
+    { payment_id: id, lead_id: String(leadId), amount },
+    NOTIFICATION_TYPE.PAYMENT_RECEIVED
   );
 
   // Real Automation Rules dispatch for PAYMENT_RECEIVED -- same

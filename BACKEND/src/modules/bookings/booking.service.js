@@ -16,7 +16,7 @@ import { ACTIVITY_TYPE } from '../leads/activities/activity.model.js';
 import { activityService } from '../leads/activities/activity.service.js';
 
 // Notification model — uses tenantId (String) and body field
-import Notification from '../leads/notifications/notification.model.js';
+import { createNotification as createNotificationShared, NOTIFICATION_TYPE } from '../leads/notifications/notification.service.js';
 
 // AppError — from shared helpers matching lead.service.js pattern
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
@@ -63,18 +63,17 @@ const logActivity = async (ctx, leadId, type, message, meta = {}) => {
 };
 
 /**
- * createNotification — creates an in-app notification.
- * Notification model fields: tenantId (String), userId (ObjectId), title, body, isRead, metadata
- * Non-blocking — notification failure never crashes a booking operation.
+ * createNotification — delegates to the shared notification service.
+ *
+ * This used to call Notification.create() directly, which bypassed the
+ * tenant's Settings > Notification Preferences toggles (nothing read them)
+ * and skipped the realtime socket push. Routing through the shared service
+ * means the toggle is honoured and the user's open tabs get it immediately.
+ * Signature unchanged so call sites don't move, plus an optional `type`
+ * naming which preference governs it.
  */
-const createNotification = async (tenantId, userId, title, body, metadata = {}) => {
-  try {
-    if (!userId) return;
-    await Notification.create({ tenantId, userId, title, body, isRead: false, metadata });
-  } catch (err) {
-    console.warn(`[booking] notification failed: ${err.message}`);
-  }
-};
+const createNotification = (tenantId, userId, title, body, metadata = {}, type = null) =>
+  createNotificationShared({ tenantId: String(tenantId), userId, title, body, metadata, type });
 
 /**
  * emitTrackingEvent — placeholder until the tracking module is built.
@@ -303,7 +302,8 @@ export const createBooking = async (data, reqUser) => {
     data.assigned_user_id,
     'New Booking Created',
     `${data.meeting_type || 'Meeting'} scheduled with ${lead.name || lead.email} on ${data.meeting_date} at ${data.meeting_time}`,
-    { booking_id: String(booking._id), lead_id: String(data.lead_id) }
+    { booking_id: String(booking._id), lead_id: String(data.lead_id) },
+    NOTIFICATION_TYPE.BOOKING_CREATED
   );
 
   // ── 8. Emit tracking event ────────────────────────────────────────────────

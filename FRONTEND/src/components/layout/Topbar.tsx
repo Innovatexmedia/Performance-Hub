@@ -7,8 +7,10 @@ import { Avatar, cn, Modal, Button, Field, Input } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
 import { toast } from '@/store/toastStore';
 import { ApiError, apiErrorMessage } from '@/lib/apiClient';
-import { notificationsApi, type NotificationItem } from '@/lib/notificationsApi';
+import { notificationsApi, type NotificationItem, type NotificationPushPayload } from '@/lib/notificationsApi';
 import { ROLE_LABELS } from '@/types/auth';
+import { getSocket } from '@/lib/socket';
+import { playNotificationSound, unlockNotificationSound } from '@/utils/notificationSound';
 
 function useClickOutside(onClose: () => void) {
   const ref = useRef<HTMLDivElement>(null);
@@ -46,9 +48,14 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
   // had zero connection to the real Notification collection, so nothing
   // that ever actually wrote a real notification (qualification,
   // payments, Automation Rules' Notify User action, etc.) could ever be
-  // seen here. Polled every 20s rather than real-time-pushed -- good
-  // enough for a notification bell, and far simpler than wiring a new
-  // socket event for this one panel.
+  // seen here.
+  //
+  // Delivery is now push-first: the server emits 'notification:new' to the
+  // recipient's user room the moment one is created (see
+  // notification.service.js). The 20s poll below is kept as a safety net --
+  // a socket frame dropped during a reconnect then costs a delay instead of
+  // a lost notification -- but it is no longer how notifications normally
+  // arrive.
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [unread, setUnread] = useState(0);
 
@@ -67,6 +74,53 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
     const interval = setInterval(fetchNotifications, 20_000);
     return () => clearInterval(interval);
   }, [fetchNotifications]);
+
+  // Browsers keep an AudioContext suspended until a real user gesture, so the
+  // first notification of a session would otherwise be silent with no error.
+  // One listener, removed as soon as it fires.
+  useEffect(() => {
+    const unlock = () => unlockNotificationSound();
+    window.addEventListener('pointerdown', unlock, { once: true });
+    window.addEventListener('keydown', unlock, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+  }, []);
+
+  // Live push. The socket is established by authStore on login/session
+  // restore; this only attaches a listener to it, so nothing here manages the
+  // connection lifecycle.
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const onNew = (payload: NotificationPushPayload) => {
+      setNotifications((prev) => {
+        // The poll can land the same record first. Without this guard a
+        // notification arriving mid-poll would render twice.
+        if (prev.some((n) => n._id === payload._id)) return prev;
+        const incoming = {
+          ...payload,
+          tenantId: '',
+          userId: '',
+          updated_at: payload.created_at,
+        } as NotificationItem;
+        return [incoming, ...prev].slice(0, 12);
+      });
+      setUnread((prev) => prev + 1);
+      playNotificationSound();
+    };
+
+    socket.on('notification:new', onNew);
+    return () => {
+      socket.off('notification:new', onNew);
+    };
+    // Keyed on the user so this re-runs once the session is established:
+    // on a cold load Topbar can mount before authStore has connected the
+    // socket, and with an empty dep array getSocket() would return null and
+    // the listener would never be attached at all.
+  }, [user?.id]);
 
   const markNotificationRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n._id === id ? { ...n, isRead: true } : n)));

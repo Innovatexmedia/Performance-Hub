@@ -52,7 +52,7 @@ import { ACTIVITY_TYPE } from '../leads/activities/activity.model.js';
 import { activityService } from '../leads/activities/activity.service.js';
 
 // Notifications
-import Notification from '../leads/notifications/notification.model.js';
+import { createNotification as createNotificationShared, NOTIFICATION_TYPE } from '../leads/notifications/notification.service.js';
 
 // AppError and paginationMeta — same import as lead.service.js
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
@@ -91,18 +91,17 @@ const logActivity = async (ctx, leadId, type, message, meta = {}) => {
 };
 
 /**
- * createNotification — non-blocking in-app notification.
- * Pattern matches booking.service.js createNotification exactly.
- * Notification model fields: tenantId(String), userId(ObjectId), title, body, isRead, metadata
+ * createNotification — delegates to the shared notification service.
+ *
+ * This used to call Notification.create() directly, which bypassed the
+ * tenant's Settings > Notification Preferences toggles (nothing read them)
+ * and skipped the realtime socket push. Routing through the shared service
+ * means the toggle is honoured and the user's open tabs get it immediately.
+ * Signature unchanged so call sites don't move, plus an optional `type`
+ * naming which preference governs it.
  */
-const createNotification = async (tenantId, userId, title, body, metadata = {}) => {
-  try {
-    if (!userId) return;
-    await Notification.create({ tenantId, userId, title, body, isRead: false, metadata });
-  } catch (err) {
-    console.warn(`[qualification] notification failed: ${err.message}`);
-  }
-};
+const createNotification = (tenantId, userId, title, body, metadata = {}, type = null) =>
+  createNotificationShared({ tenantId: String(tenantId), userId, title, body, metadata, type });
 
 /**
  * emitTrackingEvent — placeholder until tracking module is built.
@@ -386,7 +385,8 @@ export const applyResult = async (qualificationId, reqUser) => {
         lead_id:          String(leadId),
         fit_score:        score,
         temperature:      temp,
-      }
+      },
+      NOTIFICATION_TYPE.HOT_LEAD_ALERT
     );
   }
 

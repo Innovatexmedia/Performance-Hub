@@ -31,7 +31,9 @@ import { Lead }          from '../leads/lead/lead.model.js';
 import { Deal }          from '../pipeline/deals/deal.model.js';
 import { ACTIVITY_TYPE } from '../leads/activities/activity.model.js';
 import { activityService } from '../leads/activities/activity.service.js';
-import Notification      from '../leads/notifications/notification.model.js';
+// No NOTIFICATION_TYPE import: "call logged" has no toggle in Settings >
+// Notification Preferences, so it carries no type and is always delivered.
+import { createNotification as createNotificationShared } from '../leads/notifications/notification.service.js';
 import { AppError, paginationMeta } from '../../shared/helpers/lead.helpers.js';
 import { resolveActiveAiProvider, callProviderJSON } from '../integrations/aiProviderClient.js';
 
@@ -53,14 +55,18 @@ const logActivity = async (ctx, leadId, type, message, meta = {}) => {
   }
 };
 
-const createNotification = async (tenantId, userId, title, body, metadata = {}) => {
-  try {
-    if (!userId) return;
-    await Notification.create({ tenantId, userId, title, body, isRead: false, metadata });
-  } catch (err) {
-    console.warn(`[calls] notification failed: ${err.message}`);
-  }
-};
+/**
+ * createNotification — delegates to the shared notification service.
+ *
+ * This used to call Notification.create() directly, which bypassed the
+ * tenant's Settings > Notification Preferences toggles (nothing read them)
+ * and skipped the realtime socket push. Routing through the shared service
+ * means the toggle is honoured and the user's open tabs get it immediately.
+ * Signature unchanged so call sites don't move, plus an optional `type`
+ * naming which preference governs it.
+ */
+const createNotification = (tenantId, userId, title, body, metadata = {}, type = null) =>
+  createNotificationShared({ tenantId: String(tenantId), userId, title, body, metadata, type });
 
 // Attribution tracking service
 import { createTrackingEvent } from '../attribution/attribution.service.js';
