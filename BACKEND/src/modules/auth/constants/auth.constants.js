@@ -18,9 +18,77 @@ export const COOKIE_NAMES = Object.freeze({
 
 // ─── Token Expiry ─────────────────────────────────────────────────────────────
 
+/**
+ * parseDuration — turns a jsonwebtoken-style duration string ("15m", "7d",
+ * "90s", "12h") into seconds. Returns null for anything it doesn't
+ * understand, so the caller can fall back rather than silently running on a
+ * garbage value.
+ */
+const DURATION_UNITS = { s: 1, m: 60, h: 3600, d: 86400 };
+
+const parseDuration = (value) => {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d+)\s*([smhd])$/.exec(value.trim().toLowerCase());
+  if (!match) return null;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return amount * DURATION_UNITS[match[2]];
+};
+
+/**
+ * resolveExpiry — reads a duration from env, validates it, and returns BOTH
+ * representations from the one source.
+ *
+ * Why both: every expiry in this file is needed twice, in two different
+ * formats. The "15m" string goes to jsonwebtoken's expiresIn; the seconds
+ * number drives the refresh cookie's maxAge (utils/cookies.js) and the
+ * RefreshToken row's expiresAt (token.service.js). Deriving them separately
+ * is how they drift -- set the JWT to 30d but leave the seconds at 7d and the
+ * token stays valid for 30 days while the cookie and DB row die at 7, so the
+ * effective session is 7 days and nothing says why.
+ *
+ * An unset or malformed env value falls back to the default and warns rather
+ * than throwing: a typo in an optional tuning knob shouldn't take down a
+ * production boot, but it shouldn't pass silently either.
+ *
+ * @param {string} envName — env var to read
+ * @param {string} fallback — duration string used when env is unset/invalid
+ */
+const resolveExpiry = (envName, fallback) => {
+  const raw = process.env[envName];
+  const seconds = parseDuration(raw);
+
+  if (raw && seconds === null) {
+    console.warn(
+      `⚠️  ${envName}="${raw}" is not a valid duration (expected e.g. "15m", "2h", "7d"). ` +
+      `Falling back to ${fallback}.`
+    );
+  }
+
+  const chosen = seconds ?? parseDuration(fallback);
+  return { jwt: seconds ? raw.trim().toLowerCase() : fallback, seconds: chosen };
+};
+
+const ACCESS_EXPIRY  = resolveExpiry('JWT_ACCESS_EXPIRES_IN',  '15m');
+const REFRESH_EXPIRY = resolveExpiry('JWT_REFRESH_EXPIRES_IN', '7d');
+
+// A long-lived access token is the one setting here with real security
+// weight: access tokens are stateless, so nothing -- not "log out all
+// devices", not a password change -- can revoke one before it expires. The
+// refresh token is the opposite: HttpOnly, hashed in the DB, revocable at any
+// time. So a long refresh expiry is fine; a long access expiry is not.
+if (ACCESS_EXPIRY.seconds > 60 * 60) {
+  console.warn(
+    `⚠️  JWT_ACCESS_EXPIRES_IN is set to ${ACCESS_EXPIRY.jwt}. Access tokens cannot be ` +
+    `revoked before they expire, so a leaked one stays usable for that entire window. ` +
+    `Anything above ~1h is a real risk; 15m is the recommended value. Session length is ` +
+    `governed by JWT_REFRESH_EXPIRES_IN, not this.`
+  );
+}
+
 export const TOKEN_EXPIRY = Object.freeze({
-  ACCESS_TOKEN_SECONDS:             15 * 60,              // 15 minutes
-  REFRESH_TOKEN_SECONDS:            7 * 24 * 60 * 60,    // 7 days
+  ACCESS_TOKEN_SECONDS:             ACCESS_EXPIRY.seconds,
+  REFRESH_TOKEN_SECONDS:            REFRESH_EXPIRY.seconds,
   PASSWORD_RESET_SECONDS:           15 * 60,              // 15 minutes
   EMAIL_VERIFICATION_SECONDS:       24 * 60 * 60,         // 24 hours
   INVITATION_SECONDS:               7 * 24 * 60 * 60,     // 7 days
@@ -33,9 +101,10 @@ export const TOKEN_EXPIRY = Object.freeze({
   // short to be useful to an attacker holding a stolen token.
   ROTATION_GRACE_SECONDS:           30,
 
-  // JWT-format strings (used by jsonwebtoken)
-  ACCESS_TOKEN_JWT:                 "15m",
-  REFRESH_TOKEN_JWT:                "7d",
+  // JWT-format strings (used by jsonwebtoken). Derived from the SAME env
+  // value as the *_SECONDS entries above -- see resolveExpiry.
+  ACCESS_TOKEN_JWT:                 ACCESS_EXPIRY.jwt,
+  REFRESH_TOKEN_JWT:                REFRESH_EXPIRY.jwt,
 });
 
 // ─── Account Security Limits ─────────────────────────────────────────────────
