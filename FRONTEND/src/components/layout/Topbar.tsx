@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as Icons from 'lucide-react';
-import { Menu, Search, Bell, ChevronDown, LogOut, RefreshCw, Check, Plus } from 'lucide-react';
-import { useStore } from '@/store/store';
+import { Menu, Search, Bell, ChevronDown, LogOut, Check, Plus } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Avatar, cn, Modal, Button, Field, Input } from '@/components/ui';
 import { timeAgo } from '@/utils/formatters';
@@ -292,9 +291,6 @@ export function Topbar({ onMenu }: { onMenu: () => void }) {
               </button>
               <button onClick={() => { setProfileOpen(false); navigate('/settings'); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 hover:bg-ink-50">
                 <Icons.Settings size={16} /> Settings
-              </button>
-              <button onClick={() => { setProfileOpen(false); useStore.getState().resetDemo(); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-700 hover:bg-ink-50">
-                <RefreshCw size={16} /> Reset demo data
               </button>
               <button onClick={() => { setProfileOpen(false); void authLogout().then(() => navigate('/login')); }} className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-red-600 hover:bg-red-50">
                 <LogOut size={16} /> Sign out

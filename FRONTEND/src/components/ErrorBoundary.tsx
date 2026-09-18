@@ -26,19 +26,10 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="max-w-md rounded-2xl border border-ink-200 bg-white p-8 shadow-soft">
             <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-50 text-2xl">⚠️</div>
             <h1 className="text-lg font-bold text-ink-900">Something went wrong</h1>
-            <p className="mt-2 text-sm text-ink-500">The app hit an unexpected error. Reloading or resetting the demo data usually fixes it.</p>
+            <p className="mt-2 text-sm text-ink-500">The app hit an unexpected error. Reloading usually fixes it. If it keeps happening, please contact support.</p>
             <pre className="mt-3 max-h-32 overflow-auto rounded-lg bg-ink-50 p-3 text-left text-xs text-red-600">{this.state.error.message}</pre>
             <div className="mt-5 flex justify-center gap-2">
               <button onClick={() => window.location.reload()} className="btn-primary">Reload</button>
-              <button
-                onClick={() => {
-                  localStorage.removeItem('innovatex_db_v1');
-                  window.location.reload();
-                }}
-                className="btn-secondary"
-              >
-                Reset demo data
-              </button>
             </div>
           </div>
         </div>
