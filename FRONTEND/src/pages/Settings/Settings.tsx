@@ -123,7 +123,7 @@ function CompanyTab({ data, canEdit, onSaved }: { data: CompanySettings; canEdit
         <Field label="Industry"><Input disabled={!canEdit} value={form.industry} onChange={(e) => setForm({ ...form, industry: e.target.value })} /></Field>
         <Field label="Currency" hint="Used for all revenue/payment figures across the app.">
           <Select disabled={!canEdit} value={form.currency} onChange={(e) => setForm({ ...form, currency: e.target.value })}>
-            {(form.available_currencies || ['USD']).map((c) => <option key={c} value={c}>{c}</option>)}
+            {(form.available_currencies || ['INR']).map((c) => <option key={c} value={c}>{c}</option>)}
           </Select>
         </Field>
       </div>

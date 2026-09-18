@@ -138,7 +138,11 @@ const tenantSchema = new Schema(
     currency: {
       type:    String,
       enum:    PAYMENT_CURRENCY_VALUES,
-      default: 'USD',
+      // INR, not USD: every new workspace is created by this default, and the
+      // product targets Indian SMBs. Existing tenants keep whatever they
+      // already have -- a schema default only applies to new documents -- so
+      // anyone already on USD stays on USD until they change it in Settings.
+      default: 'INR',
     },
 
     // ── Owner (denormalised — see architecture notes in docs) ─────────────────

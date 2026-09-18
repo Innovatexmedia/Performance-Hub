@@ -7,7 +7,7 @@ export function formatCurrency(amount: number, currency?: string): string {
   // with INR configured saw $ signs on every KPI/value that didn't
   // happen to pass currency through by hand (Dashboard, Leads, Pipeline,
   // Campaigns, Reports, Attribution all called it this way).
-  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'USD';
+  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'INR';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: resolvedCurrency,
@@ -26,7 +26,7 @@ export function formatCompact(n: number): string {
  * etc.). Same tenant-currency default as formatCurrency() above.
  */
 export function formatCurrencyCompact(amount: number, currency?: string): string {
-  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'USD';
+  const resolvedCurrency = currency || useCurrencyStore.getState().currency || 'INR';
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: resolvedCurrency,

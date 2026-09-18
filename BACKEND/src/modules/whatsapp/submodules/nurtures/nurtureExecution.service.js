@@ -586,7 +586,7 @@ const sendPaymentAction = async (ctx, step, lead, variableContext, enrollment) =
     const payment = await paymentService.createPayment({
       lead_id: String(lead._id),
       amount: step.paymentAmount,
-      currency: 'USD',
+      currency: 'INR',
     }, systemReqUser(ctx.tenantId));
     await persistPaymentVars({
       'payment.status':   payment.status || '',

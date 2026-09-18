@@ -11,6 +11,6 @@ export function useTenantCurrency(): { currency: string; format: (amount: number
     if (!loaded) void refresh();
   }, [loaded, refresh]);
 
-  const resolved = currency || 'USD';
+  const resolved = currency || 'INR';
   return { currency: resolved, format: (amount: number) => formatCurrency(amount, resolved) };
 }

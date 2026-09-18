@@ -93,7 +93,9 @@ export const PIPELINE_ACTIVITY = Object.freeze({
   DEAL_LOST: 'Deal Lost',
 });
 
-export const DEFAULT_CURRENCY = 'USD';
+/** Fallback for a deal created without an explicit currency. INR to match
+ *  the workspace default on Tenant.currency. */
+export const DEFAULT_CURRENCY = 'INR';
 
 /** Fields scanned by free-text search on GET /api/deals. */
 export const SEARCHABLE_FIELDS = Object.freeze(['title', 'description']);

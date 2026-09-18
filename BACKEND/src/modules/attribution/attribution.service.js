@@ -118,7 +118,7 @@ const sendToAdPlatformsIfConfigured = async (event, lead) => {
 
   // CONFIRMED BUG this fixes: sendToMeta below never passed a currency
   // to the Conversions API, so MetaConversionsProvider's own
-  // `currency || 'USD'` fallback silently mislabeled every real INR
+  // `currency || 'INR'` fallback silently mislabeled every real INR
   // revenue value as USD -- a real ₹5,000 conversion was reaching Meta
   // as "$5,000", corrupting both Meta's own ad-bidding optimization
   // (which uses conversion value) and any ROAS figure Meta shows the
@@ -126,7 +126,7 @@ const sendToAdPlatformsIfConfigured = async (event, lead) => {
   // tenant-level currency field settings.service.js already uses for
   // billing -- not a new concept introduced here.
   const tenant = await Tenant.findById(event.tenant_id).select('currency').lean();
-  const currency = tenant?.currency || 'USD';
+  const currency = tenant?.currency || 'INR';
 
   await Promise.all([
     sendToMeta(settings, event, lead, currency),
@@ -245,7 +245,7 @@ export const getRevenueBySource = async (tenantId, filter = {}) => {
     Tenant.findById(tenantId).select('currency'),
     attrRepo.getRevenueBySource(tenantId, filter),
   ]);
-  const workspaceCurrency = tenant?.currency || 'USD';
+  const workspaceCurrency = tenant?.currency || 'INR';
 
   const converted = await Promise.all(rows.map(async (r) => {
     const { total, hasUnconverted } = await convertAndSumByCurrency(r.byCurrency, workspaceCurrency);
@@ -338,7 +338,7 @@ export const getAttributionDashboard = async (tenantId, filter = {}) => {
     attrRepo.getRecentEvents(tenantId, filter, { skip: 0, limit: 20 }),
     getAdSpendSummary(tenantId),
   ]);
-  const workspaceCurrency = tenant?.currency || 'USD';
+  const workspaceCurrency = tenant?.currency || 'INR';
 
   // REAL FIX: the top "Attributed Revenue" KPI previously summed
   // TrackingEvent.revenue directly with no currency awareness -- the
@@ -451,7 +451,7 @@ const getAdSpendSummary = async (tenantId) => {
   // own comments on why ad-account currency is never assumed to already
   // match this.
   const tenant = await Tenant.findById(tenantId).select('currency');
-  const workspaceCurrency = tenant?.currency || 'USD';
+  const workspaceCurrency = tenant?.currency || 'INR';
 
   // Real revenue-by-CAMPAIGN data this app already computes internally
   // (see getRevenueByCampaign's header comment for why this, not

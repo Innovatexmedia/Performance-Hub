@@ -228,7 +228,7 @@ export const getBrandingPublic = async (tenantId) => {
  */
 export const getCurrencyPublic = async (tenantId) => {
   const tenant = await getTenant(tenantId);
-  return { currency: tenant.currency || 'USD' };
+  return { currency: tenant.currency || 'INR' };
 };
 
 /**
@@ -343,7 +343,7 @@ export const getAllSettings = async (tenantId) => {
       description:     tenant.description || '',
       business_type:   tenant.businessType || 'other',
       industry:        tenant.industry || '',
-      currency:        tenant.currency || 'USD',
+      currency:        tenant.currency || 'INR',
       available_currencies: PAYMENT_CURRENCY_VALUES,
     },
 
@@ -540,7 +540,7 @@ export const updateCompany = async (tenantId, data, reqUser) => {
     description:     tenant.description || '',
     business_type:   tenant.businessType,
     industry:        tenant.industry || '',
-    currency:        tenant.currency || 'USD',
+    currency:        tenant.currency || 'INR',
     available_currencies: PAYMENT_CURRENCY_VALUES,
   };
 };

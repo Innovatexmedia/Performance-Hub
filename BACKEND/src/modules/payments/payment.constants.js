@@ -51,11 +51,16 @@ export const PAYMENT_METHOD_VALUES = Object.freeze(Object.values(PAYMENT_METHOD)
 
 /**
  * PAYMENT_CURRENCY — supported currencies.
- * Default: USD
+ * Default: INR.
+ *
+ * INR is listed first deliberately: Object.values() order is what reaches the
+ * currency <select> in Settings, so whatever sits first is what a new
+ * workspace owner sees at the top of the list. This product targets Indian
+ * SMBs, so USD leading the list was simply wrong for the audience.
  */
 export const PAYMENT_CURRENCY = Object.freeze({
-  USD: 'USD',
   INR: 'INR',
+  USD: 'USD',
   EUR: 'EUR',
   GBP: 'GBP',
 });

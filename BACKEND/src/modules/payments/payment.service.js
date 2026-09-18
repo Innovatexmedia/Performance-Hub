@@ -175,7 +175,7 @@ export const createPayment = async (data, reqUser) => {
     lead_id:        data.lead_id,
     deal_id:        data.deal_id || null,
     amount:         data.amount,
-    currency:       data.currency       || 'USD',
+    currency:       data.currency       || 'INR',
     payment_method: data.payment_method || 'Card',
     status:         PAYMENT_STATUS.PENDING,
     source:         lead.source   || null,
