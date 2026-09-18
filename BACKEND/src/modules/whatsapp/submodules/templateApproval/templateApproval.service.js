@@ -542,16 +542,47 @@ export const templateApprovalService = {
     const now = new Date();
     const entry = buildHistoryEntry(from, to, APPROVAL_ACTION.SUBMIT_TO_PROVIDER, '', ctx.userId, now);
 
-    // Only attempt a real Meta submission when the tenant is actually
-    // configured for it -- same fallback pattern as resolveProvider() on
-    // the messaging side. A tenant still in Simulation Mode (or using a
-    // different provider) keeps the old local-only behavior; nothing here
-    // silently pretends a submission happened when it didn't.
-    let metaResult = null;
+    // A submission is either real or it is refused -- there is no third
+    // option. This used to skip the Meta call when the tenant had no live
+    // connection and then mark the template SUBMITTED_TO_PROVIDER anyway,
+    // which put a state in the database that claims Meta has the template
+    // when Meta has never heard of it. The user saw "SUBMITTED", waited for
+    // an approval that could never arrive, and the only hint anything was
+    // wrong was a toast calling it "simulated".
+    //
+    // Every other WhatsApp BSP (AiSensy, WATI, Interakt) refuses at this
+    // point instead: no connected WABA, no template submission. Refusing
+    // here keeps the approvalStatus column honest -- SUBMITTED_TO_PROVIDER
+    // now means Meta genuinely accepted it.
+    //
+    // providerMode is NOT a user-selectable demo switch: it starts at
+    // SIMULATION and resets to SIMULATION whenever credentials change (see
+    // whatsappSettings.constants.js), so it means "not yet proven live",
+    // which is exactly the case that must be refused.
     const settingsConfig = await whatsappSettingsService.getProviderConfig(ctx).catch(() => null);
-    if (settingsConfig?.provider === PROVIDER.META_CLOUD && settingsConfig?.providerMode !== 'SIMULATION') {
-      metaResult = await submitTemplateToMeta(ctx, template); // throws with a clear message on real failure -- not caught here on purpose
+
+    const isLiveMetaConnection =
+      settingsConfig?.provider === PROVIDER.META_CLOUD &&
+      settingsConfig?.providerMode !== 'SIMULATION';
+
+    if (!isLiveMetaConnection) {
+      // `code` is set as a property, not via the constructor's third
+      // argument (that's `details`, rendered as field errors). See
+      // errorHandler.middleware.js, which passes err.code through as
+      // response.code -- the same pattern AppError.planLimitExceeded uses,
+      // so the frontend can branch on it without matching on message text.
+      const err = new AppError(
+        409,
+        'WhatsApp is not connected yet, so this template cannot be submitted to Meta. ' +
+        'Connect your WhatsApp Business Account in WhatsApp Settings, then submit again.'
+      );
+      err.code = 'WHATSAPP_NOT_CONNECTED';
+      throw err;
     }
+
+    // Throws with a clear message on real failure -- deliberately not caught,
+    // so a rejected submission never gets recorded as a successful one.
+    const metaResult = await submitTemplateToMeta(ctx, template);
 
     const updated = await templateApprovalRepository.submitToProvider(ctx.tenantId, id, {
       now,
@@ -562,7 +593,7 @@ export const templateApprovalService = {
     });
 
     await logActivity(ctx, updated, ACTIVITY_TYPE.WHATSAPP_TEMPLATE_SUBMITTED_TO_PROVIDER,
-      metaResult ? 'Template submitted to Meta for real review' : 'Template submitted to provider (simulated)', { from, to });
+      'Template submitted to Meta for real review', { from, to });
     return toTemplateDTO(updated);
   },
 
