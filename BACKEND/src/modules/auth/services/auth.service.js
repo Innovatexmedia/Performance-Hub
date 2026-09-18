@@ -852,11 +852,45 @@ export const refreshTokens = async (plainRefreshToken, req) => {
     throw new AppError('Invalid or expired refresh token', 401);
   }
 
-  // Find stored token record
+  // Find stored token record (active, non-rotated, non-revoked)
   const tokenRecord = await tokenSvc.validateRefreshToken(plainRefreshToken);
+
   if (!tokenRecord) {
-    // Not in DB — possible replay attack: revoke all sessions for this user
-    await tokenSvc.revokeAllSessions(decoded.sub);
+    // No ACTIVE row for this token. Before treating it as an attack, check
+    // whether it was simply rotated moments ago by a concurrent request --
+    // two tabs, or a socket-driven permission refresh landing at the same
+    // instant as a 401-driven one, both carry the SAME cookie and both reach
+    // here. This used to call revokeAllSessions(), which logged the user out
+    // of every device for an ordinary race; that is the single biggest cause
+    // of the "randomly logged out after a while" reports.
+    const rotatedRecord = await tokenSvc.findTokenRecordByPlain(plainRefreshToken);
+
+    if (rotatedRecord && tokenSvc.isWithinRotationGrace(rotatedRecord)) {
+      const graceUser = await userRepo.findById(decoded.sub);
+      if (!graceUser || graceUser.status !== USER_STATUS.ACTIVE) {
+        throw new AppError('User account is not active', 401);
+      }
+
+      // Deliberately does NOT rotate again and returns no refreshToken: the
+      // request that won the race has already set the new cookie on its own
+      // response, and the browser shares one cookie jar across tabs. Issuing
+      // a second rotation here would invalidate that cookie and restart the
+      // exact race we're fixing. The controller skips setting a cookie when
+      // refreshToken is absent.
+      const { accessToken } = tokenSvc.issueAccessTokenForSession(
+        graceUser,
+        rotatedRecord.sessionId
+      );
+
+      return { user: graceUser.getPublicProfile(), accessToken, refreshToken: null };
+    }
+
+    // Genuinely unknown, long-expired, or revoked token. Reject this ONE
+    // request. No mass revocation: a cookie can legitimately go stale (the
+    // session was revoked from another device, the row hit its TTL), and
+    // punishing every other live session for it is both wrong and, in the
+    // race case above, self-inflicted. A real stolen token still can't be
+    // used -- it is rejected right here.
     throw new AppError('Refresh token has been revoked', 401);
   }
 
@@ -866,18 +900,19 @@ export const refreshTokens = async (plainRefreshToken, req) => {
     throw new AppError('User account is not active', 401);
   }
 
-  // Rotate: delete old token, issue new pair
+  // Rotate: mark old token rotated, issue new pair
   const meta = getClientMeta(req);
   let result;
 
   try {
     result = await tokenSvc.rotateRefreshToken(plainRefreshToken, user, meta);
   } catch (error) {
-    if (error.message === 'REFRESH_TOKEN_REUSE_DETECTED') {
-      throw new AppError(
-        'Security alert: refresh token reuse detected. All sessions have been revoked.',
-        401
-      );
+    if (error.code === 'ROTATION_ALREADY_CLAIMED' || error.message === 'ROTATION_ALREADY_CLAIMED') {
+      // Lost the atomic claim between the lookup above and the update --
+      // same race, caught one step later. Same handling: hand back a fresh
+      // access token on the existing session, set no cookie, revoke nothing.
+      const { accessToken } = tokenSvc.issueAccessTokenForSession(user, tokenRecord.sessionId);
+      return { user: user.getPublicProfile(), accessToken, refreshToken: null };
     }
     throw error;
   }

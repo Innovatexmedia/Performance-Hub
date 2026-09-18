@@ -25,6 +25,14 @@ export const TOKEN_EXPIRY = Object.freeze({
   EMAIL_VERIFICATION_SECONDS:       24 * 60 * 60,         // 24 hours
   INVITATION_SECONDS:               7 * 24 * 60 * 60,     // 7 days
 
+  // How long a just-rotated refresh token still counts as "the same
+  // rotation" rather than a replay. Two concurrent /auth/refresh calls
+  // carrying the same cookie (two tabs, socket-triggered refresh racing a
+  // 401-triggered one) land milliseconds apart, so this only needs to cover
+  // request latency -- 30s is generous for that while still being far too
+  // short to be useful to an attacker holding a stolen token.
+  ROTATION_GRACE_SECONDS:           30,
+
   // JWT-format strings (used by jsonwebtoken)
   ACCESS_TOKEN_JWT:                 "15m",
   REFRESH_TOKEN_JWT:                "7d",

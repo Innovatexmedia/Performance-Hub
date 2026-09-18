@@ -170,7 +170,14 @@ export const refresh = asyncHandler(async (req, res) => {
   const refreshToken = getRefreshTokenFromCookies(req);
   const result = await authService.refreshTokens(refreshToken, req);
 
-  setRefreshTokenCookie(res, result.refreshToken);
+  // result.refreshToken is deliberately null when this request lost a
+  // rotation race (see auth.service.js refreshTokens). The request that won
+  // it already set the new cookie, and the browser shares one cookie jar
+  // across tabs -- overwriting it here with an older value would break the
+  // session that was just established. Only set the cookie on a real rotation.
+  if (result.refreshToken) {
+    setRefreshTokenCookie(res, result.refreshToken);
+  }
 
   return sendSuccess(res, {
     user:        result.user,

@@ -19,7 +19,7 @@
  * TOKEN PAYLOAD SHAPE
  * ───────────────────
  * Access Token:
- *   { sub: userId, tenantId, role, sessionId, type: 'access' }
+ *   { sub: userId, tenantId, role, permissions, sessionId, type: 'access' }
  *
  * Refresh Token:
  *   { sub: userId, sessionId, type: 'refresh' }
@@ -51,12 +51,21 @@ const REFRESH_SECRET = () => process.env.JWT_REFRESH_SECRET;
  * @param {Object} payload — { userId, tenantId, role, sessionId }
  * @returns {string} signed JWT
  */
-export const signAccessToken = ({ userId, tenantId, role, sessionId }) => {
+export const signAccessToken = ({ userId, tenantId, role, permissions, sessionId }) => {
   return jwt.sign(
     {
       sub:       userId,
       tenantId:  tenantId ?? null,
       role,
+      // token.service.js has always PASSED permissions into this function,
+      // but the parameter was never destructured here, so it was silently
+      // dropped from every access token ever signed. Downstream that means
+      // req.user.permissions was permanently [] -- requirePermission and
+      // every ctx.permissions check in the service layer saw an empty list,
+      // and the live permission-propagation flow (socket
+      // 'auth:permissions-updated' -> refresh) re-issued a token that was
+      // just as empty as the one it replaced.
+      permissions: Array.isArray(permissions) ? permissions : [],
       sessionId,
       type:      TOKEN_TYPES.ACCESS,
     },

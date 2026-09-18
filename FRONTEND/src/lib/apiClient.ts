@@ -1,4 +1,4 @@
-import type { ApiEnvelope } from '@/types/auth';
+import type { ApiEnvelope, AuthUser } from '@/types/auth';
 
 const BASE_URL: string = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
 
@@ -68,10 +68,27 @@ export function setAuthHandlers(handlers: AuthHandlers): void {
 
 const NO_REFRESH_PATHS = ['/auth/login', '/auth/register', '/auth/refresh', '/auth/logout'];
 
-let refreshInFlight: Promise<string | null> | null = null;
+/** What POST /auth/refresh actually returns on success. */
+export interface RefreshResult {
+  user: AuthUser;
+  accessToken: string;
+}
 
-async function attemptRefresh(): Promise<string | null> {
-  if (!authHandlers) return null;
+/**
+ * Single-flight guard. EVERY caller must go through refreshSession() --
+ * including authStore.initialize() and refreshPermissions(), which used to
+ * call apiClient.post('/auth/refresh') directly and so bypassed this
+ * entirely. Two un-deduped refresh calls carrying the same cookie is exactly
+ * the race the backend now tolerates; not creating it in the first place is
+ * better.
+ */
+let refreshInFlight: Promise<RefreshResult | null> | null = null;
+
+/**
+ * refreshSession -- refreshes the session at most once at a time.
+ * Concurrent callers share the one in-flight request and its result.
+ */
+export async function refreshSession(): Promise<RefreshResult | null> {
   if (!refreshInFlight) {
     refreshInFlight = doRefresh().finally(() => {
       refreshInFlight = null;
@@ -80,24 +97,54 @@ async function attemptRefresh(): Promise<string | null> {
   return refreshInFlight;
 }
 
-async function doRefresh(): Promise<string | null> {
+async function attemptRefresh(): Promise<string | null> {
+  if (!authHandlers) return null;
+  const result = await refreshSession();
+  return result?.accessToken ?? null;
+}
+
+async function doRefresh(): Promise<RefreshResult | null> {
+  let res: Response;
+
   try {
-    const res = await fetch(`${BASE_URL}/auth/refresh`, {
+    res = await fetch(`${BASE_URL}/auth/refresh`, {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
     });
-    const body = (await res.json()) as ApiEnvelope<{ accessToken: string }>;
-    if (!res.ok || !body.success) {
-      authHandlers?.onRefreshFailed();
-      return null;
-    }
-    authHandlers?.onTokenRefreshed(body.data.accessToken);
-    return body.data.accessToken;
   } catch {
+    // Network-level failure: offline for a moment, a Render cold start, DNS
+    // hiccup, request aborted on navigation. This says nothing about whether
+    // the session is still valid, so the session is LEFT ALONE. Previously
+    // any of these called onRefreshFailed() and logged the user straight out
+    // -- a dropped packet was indistinguishable from an expired session.
+    return null;
+  }
+
+  // Only the server actually rejecting our credentials ends the session.
+  if (res.status === 401 || res.status === 403) {
     authHandlers?.onRefreshFailed();
     return null;
   }
+
+  if (!res.ok) {
+    // 5xx, 502 from a sleeping backend, rate limiting, a proxy error page.
+    // A server-side problem is not proof of a dead session -- fail this
+    // attempt, keep the user signed in, let the next call retry.
+    return null;
+  }
+
+  let body: ApiEnvelope<RefreshResult>;
+  try {
+    body = (await res.json()) as ApiEnvelope<RefreshResult>;
+  } catch {
+    return null;
+  }
+
+  if (!body.success || !body.data?.accessToken) return null;
+
+  authHandlers?.onTokenRefreshed(body.data.accessToken);
+  return body.data;
 }
 
 export interface RequestOptions {

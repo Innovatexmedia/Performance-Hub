@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { authApi } from '@/lib/authApi';
-import { ApiError, setAuthHandlers } from '@/lib/apiClient';
+import { ApiError, setAuthHandlers, refreshSession } from '@/lib/apiClient';
 import { connectSocket, disconnectSocket } from '@/lib/socket';
 import { toast } from '@/store/toastStore';
 import { isWorkspaceSelectionResult, isEmailVerificationRequiredResult } from '@/types/auth';
@@ -105,14 +105,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   initialize: async () => {
     set({ status: 'loading' });
-    try {
-      const { user, accessToken } = await authApi.refresh();
-      set({ user, accessToken, status: 'authenticated', error: null });
+
+    // Goes through refreshSession() rather than authApi.refresh() so it
+    // shares apiClient's single-flight guard. This effect runs twice under
+    // React.StrictMode in development, and any second tab runs it too --
+    // previously each of those was an independent POST /auth/refresh with
+    // the same cookie, which raced on the server.
+    const result = await refreshSession();
+
+    if (result) {
+      set({ user: result.user, accessToken: result.accessToken, status: 'authenticated', error: null });
       connectSocketAndListen();
-    } catch {
-      // No valid session cookie -- this is the normal logged-out state, not an error.
-      set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
+      return;
     }
+
+    // No valid session cookie -- this is the normal logged-out state, not an error.
+    set({ user: null, accessToken: null, status: 'unauthenticated', error: null });
   },
 
   login: async (payload) => {
@@ -271,15 +279,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   refreshPermissions: async () => {
-    try {
-      const { user, accessToken } = await authApi.refresh();
-      set({ user, accessToken });
-      toast.success('Your permissions were updated', 'Some actions may now be available or restricted.');
-    } catch {
-      // If this silently fails (e.g. session already expired), the next
-      // real request will surface the normal 401 flow -- no need to
-      // interrupt the user just because this background sync didn't land.
+    // Same single-flight path as initialize(). This one is socket-triggered,
+    // so it can fire at any moment -- including the exact moment a 401-driven
+    // refresh is already in flight. Sharing the guard means the two collapse
+    // into one request instead of racing over the same cookie.
+    const result = await refreshSession();
+
+    if (!result) {
+      // Silently failed (network blip, or the session really did end -- in
+      // which case apiClient has already cleared it). Either way the next
+      // real request surfaces the normal flow; no need to interrupt the user
+      // because a background sync didn't land.
+      return;
     }
+
+    set({ user: result.user, accessToken: result.accessToken });
+    toast.success('Your permissions were updated', 'Some actions may now be available or restricted.');
   },
 
   clearError: () => set({ error: null }),

@@ -86,29 +86,96 @@ export const issueTokenPair = async (user, meta = {}) => {
 
 /**
  * rotateRefreshToken — implements refresh token rotation.
- * Invalidates the old token, issues a new pair.
- * If the old token is not found (already used), this is a replay attack.
+ *
+ * Claims the old token atomically (see tokenRepo.markRefreshTokenRotated),
+ * then issues a new pair. Only the request that wins the claim rotates.
+ *
+ * Throws ROTATION_ALREADY_CLAIMED when another concurrent request got there
+ * first. That is NOT an attack -- two tabs sharing one cookie produce it
+ * routinely -- so the caller (auth.service.js refreshTokens) handles it via
+ * the grace path instead of revoking anything.
+ *
+ * What changed and why: this used to deleteOne() the old row and, on a
+ * falsy result, revoke EVERY session the user had. Two problems. First, the
+ * Mongoose delete result is an object and therefore always truthy, so that
+ * branch never actually ran. Second, the equivalent check in
+ * auth.service.js DID run, and revoked all sessions for what is normally
+ * just a race -- logging the user out of every device.
  *
  * @param {string} oldPlainRefreshToken
  * @param {Object} user
  * @param {Object} meta
- * @returns {{ accessToken, refreshToken }}
+ * @returns {{ accessToken, refreshToken, sessionId }}
+ * @throws {Error} ROTATION_ALREADY_CLAIMED
  */
 export const rotateRefreshToken = async (oldPlainRefreshToken, user, meta = {}) => {
   const oldHash = hashToken(oldPlainRefreshToken);
 
-  // Delete old token (rotation — one-time use)
-  const deleted = await tokenRepo.deleteRefreshTokenByHash(oldHash);
-  if (!deleted) {
-    // Token not found or already deleted — possible replay attack
-    // Revoke ALL sessions for this user as a security measure
-    await tokenRepo.revokeAllUserRefreshTokens(user._id);
-    throw new Error('REFRESH_TOKEN_REUSE_DETECTED');
+  const claimed = await tokenRepo.markRefreshTokenRotated(oldHash, {
+    graceSeconds: TOKEN_EXPIRY.ROTATION_GRACE_SECONDS,
+  });
+
+  if (!claimed) {
+    // Someone else already rotated this exact token (or it was revoked).
+    const err = new Error('ROTATION_ALREADY_CLAIMED');
+    err.code = 'ROTATION_ALREADY_CLAIMED';
+    throw err;
   }
 
-  // Issue new pair
-  return issueTokenPair(user, meta);
+  const pair = await issueTokenPair(user, meta);
+
+  // Audit/debug link from the old row to its replacement. Best-effort: a
+  // failure here must not fail a refresh that has already succeeded.
+  try {
+    await tokenRepo.linkRotatedToken(oldHash, hashToken(pair.refreshToken));
+  } catch {
+    // Intentionally ignored -- see above.
+  }
+
+  return pair;
 };
+
+/**
+ * isWithinRotationGrace — true when a rotated token was rotated recently
+ * enough that a second request presenting it is the other half of a race,
+ * not a replay of a stolen token.
+ *
+ * @param {Object} tokenRecord — a row with isRotated: true
+ * @returns {boolean}
+ */
+export const isWithinRotationGrace = (tokenRecord) => {
+  if (!tokenRecord?.isRotated || !tokenRecord.rotatedAt) return false;
+  if (tokenRecord.isRevoked) return false;
+  const ageMs = Date.now() - new Date(tokenRecord.rotatedAt).getTime();
+  return ageMs >= 0 && ageMs <= TOKEN_EXPIRY.ROTATION_GRACE_SECONDS * 1000;
+};
+
+/**
+ * findTokenRecordByPlain — raw lookup including rotated/expired rows.
+ * Only for the grace check above.
+ */
+export const findTokenRecordByPlain = (plainToken) =>
+  tokenRepo.findAnyRefreshTokenByHash(hashToken(plainToken));
+
+/**
+ * issueAccessTokenForSession — mints a fresh access token WITHOUT rotating
+ * anything, for the losing side of a rotation race. The winner has already
+ * set the new refresh cookie on its own response; this request just needs a
+ * usable access token so the user's page load doesn't fail.
+ *
+ * @param {Object} user
+ * @param {string} sessionId — the session the caller was already on
+ * @returns {{ accessToken }}
+ */
+export const issueAccessTokenForSession = (user, sessionId) => ({
+  accessToken: signAccessToken({
+    userId:      user._id.toString(),
+    tenantId:    user.tenantId?.toString() ?? null,
+    role:        user.role,
+    permissions: user.permissions || [],
+    sessionId,
+  }),
+});
 
 /**
  * revokeSession — logs out a specific session (single device logout).
