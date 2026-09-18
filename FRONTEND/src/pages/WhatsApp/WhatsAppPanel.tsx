@@ -1216,6 +1216,16 @@ function TemplatesTab() {
               </div>
               <div className="flex items-center gap-1.5">
                 <button className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700" onClick={() => setPreviewTpl(t)} title="Preview"><Eye size={14} /></button>
+                {/* Both badges, because `status` and `approvalStatus` are
+                    different axes and showing only the first was actively
+                    misleading: a template awaiting submission to Meta and one
+                    already sent to Meta BOTH render `status` as "SUBMITTED",
+                    so two cards in genuinely different states looked
+                    identical. approvalStatus is the one that says where the
+                    template actually is in the review workflow. */}
+                <Badge tone={APPROVAL_STATUS_TONE[t.approvalStatus] ?? 'gray'}>
+                  {APPROVAL_STATUS_LABEL[t.approvalStatus] ?? t.approvalStatus}
+                </Badge>
                 <StatusBadge status={t.status} />
               </div>
             </div>
