@@ -100,3 +100,22 @@ export const pauseCampaign = asyncHandler(async (req, res) => {
   });
   return sendSuccess(res, toCampaignDTO(campaign), 'API campaign paused');
 });
+
+/**
+ * publicApiBase — the origin a customer should call, as seen from outside.
+ *
+ * Derived from the request itself rather than from an environment variable.
+ * The dashboard previously built its documentation URL from the frontend's
+ * VITE_API_URL, which meant a deployment that forgot to set that variable
+ * showed customers `http://localhost:4001` in production — confidently, and
+ * with no error anywhere. The backend is the only thing that actually knows
+ * its own public address, so it is the thing that should say it.
+ *
+ * req.protocol is correct behind Render's proxy because app.js sets
+ * `trust proxy`, which makes Express read X-Forwarded-Proto instead of
+ * assuming http.
+ */
+export const getPublicApiBase = asyncHandler(async (req, res) => {
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  return sendSuccess(res, { baseUrl });
+});

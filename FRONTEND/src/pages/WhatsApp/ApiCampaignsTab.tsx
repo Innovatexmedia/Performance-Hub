@@ -46,13 +46,52 @@ import type { CampaignRun, ApiKey, CreatedApiKey } from '@/types/apiCampaign';
 import { runProgress } from '@/types/apiCampaign';
 
 /**
- * API_BASE — the URL a customer will paste into their own code.
+ * apiBaseFromEnv — the fallback origin, used only until the backend answers.
  *
- * Derived from the same env var apiClient uses, so the docs shown here can
- * never drift from the deployment they were read on: a staging dashboard
- * shows the staging URL without anyone maintaining a second constant.
+ * Strips the trailing /api because VITE_API_URL points at the API root
+ * (".../api") while the documentation shows full paths that begin with
+ * /api/v1 — concatenating both would produce ".../api/api/v1".
+ *
+ * This is a fallback, NOT the source of truth. A build that never set
+ * VITE_API_URL used to show customers `http://localhost:4001` in production
+ * documentation, confidently and with nothing anywhere to flag it. The
+ * backend reports its own public origin instead (see useApiBase); this only
+ * fills the gap for the first render.
  */
-const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').replace(/\/api\/?$/, '');
+function apiBaseFromEnv(): string {
+  const fromEnv = import.meta.env.VITE_API_URL as string | undefined;
+  if (fromEnv) return fromEnv.replace(/\/api\/?$/, '');
+  // Same-origin guess beats a hardcoded localhost in a deployed build.
+  if (typeof window !== 'undefined') return window.location.origin;
+  return 'http://localhost:4001';
+}
+
+/**
+ * useApiBase — asks the backend what its public origin is.
+ *
+ * The backend derives it from the request it receives, so it is right by
+ * construction on every environment, including ones nobody remembered to
+ * configure.
+ */
+function useApiBase(): string {
+  const [base, setBase] = useState(apiBaseFromEnv);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { baseUrl } = await apiCampaignsApi.getApiBase();
+        if (!cancelled && baseUrl) setBase(baseUrl.replace(/\/$/, ''));
+      } catch {
+        // Keep the fallback. Documentation with a best-guess URL is better
+        // than documentation that fails to render.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return base;
+}
 
 /** Sample values used in the docs, so the variable table and the request
  *  example always show the SAME value for a given position -- a reader
@@ -458,8 +497,11 @@ function ApiKeysPanel() {
 function IntegrationDocs({ campaign, templateBody }: { campaign: WhatsAppCampaign; templateBody: string }) {
   const placeholders = useMemo(() => placeholdersOf(templateBody), [templateBody]);
 
-  const path = `/api/v1/campaigns/${campaign.id}/trigger`;
-  const endpoint = `${API_BASE}${path}`;
+  // Every example below -- endpoint, cURL, JavaScript, Node.js, Python --
+  // interpolates this one value, so they cannot disagree with each other or
+  // with the environment the page is being read on.
+  const apiBase = useApiBase();
+  const endpoint = `${apiBase}/api/v1/campaigns/${campaign.id}/trigger`;
 
   // Built from this campaign's REAL template placeholders, so what gets copied
   // already matches this campaign instead of a generic sample the reader has

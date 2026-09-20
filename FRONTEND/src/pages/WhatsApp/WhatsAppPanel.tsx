@@ -214,8 +214,11 @@ export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab, campa
   // page-scrolling layout it already had.
   if (tab === 'inbox') return <Inbox onGoToSettings={() => onNavigateTab?.('settings')} />;
 
+  // Extra right padding: the workspace's Exit control floats at the top-right
+  // of this area, and without reserved space it lands on top of whatever
+  // action a tab puts in its own header (the campaign Delete button, for one).
   return (
-    <div className="h-full overflow-y-auto p-4 lg:p-6">
+    <div className="h-full overflow-y-auto p-4 pr-20 lg:p-6 lg:pr-24">
       {tab === 'contacts' && <ContactsTab />}
       {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}

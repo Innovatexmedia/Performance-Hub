@@ -28,6 +28,15 @@ export const apiCampaignsApi = {
   getRun: (runId: string) => apiClient.get<CampaignRun>(`/whatsapp/campaign-runs/${runId}`),
 
   /**
+   * The public origin customers should call, as the backend sees itself.
+   *
+   * Asked rather than assumed: building it from VITE_API_URL meant a
+   * deployment that forgot to set that variable showed `localhost:4001` in
+   * production documentation, with nothing to indicate it was wrong.
+   */
+  getApiBase: () => apiClient.get<{ baseUrl: string }>('/whatsapp/campaign-runs/api-base'),
+
+  /**
    * Lifecycle. NOT the campaign approve/schedule endpoints: those require a
    * saved audience, which an API campaign has none of by design. DRAFT →
    * ACTIVE ⇄ PAUSED is the whole state machine.
