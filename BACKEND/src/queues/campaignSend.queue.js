@@ -1,7 +1,8 @@
 import { Queue } from 'bullmq';
 import { redisConnection } from './redis.js';
+import { queueName } from './queueName.js';
 
-export const CAMPAIGN_SEND_QUEUE_NAME = 'campaign-send';
+export const CAMPAIGN_SEND_QUEUE_NAME = queueName('campaign-send');
 
 export const campaignSendQueue = new Queue(CAMPAIGN_SEND_QUEUE_NAME, {
   connection: redisConnection,
@@ -27,7 +28,7 @@ export const campaignSendQueue = new Queue(CAMPAIGN_SEND_QUEUE_NAME, {
  * a safe no-op for any lead whose job already exists in the queue, rather
  * than silently double-sending them.
  */
-export async function enqueueCampaignSend(ctx, { kind, entityId, leadIds }) {
+export async function enqueueCampaignSend(ctx, { kind, entityId, leadIds, runId = null, variablesByLeadId = null }) {
   const jobs = leadIds.map((leadId) => ({
     name: 'send',
     data: {
@@ -36,9 +37,25 @@ export async function enqueueCampaignSend(ctx, { kind, entityId, leadIds }) {
       kind,
       entityId: String(entityId),
       leadId: String(leadId),
+      // Both null for every existing caller (dashboard campaigns and
+      // broadcasts), which is what keeps the worker's original path
+      // byte-for-byte unchanged for them.
+      //
+      // runId: set by API-triggered runs so the worker can also increment that
+      // run's counters and finalise it independently of the campaign, which
+      // stays open for the next trigger.
+      runId: runId ? String(runId) : null,
+      // variables: this recipient's caller-supplied template values.
+      variables: variablesByLeadId ? (variablesByLeadId[String(leadId)] ?? null) : null,
     },
     opts: {
-      jobId: `${kind}-${entityId}-${leadId}`,
+      // runId is part of the id for API runs. Without it, triggering the same
+      // campaign for the same contact twice -- a completely legitimate thing
+      // to do, e.g. two different orders for one customer -- would collide
+      // with the earlier run's job and be silently dropped as a duplicate.
+      jobId: runId
+        ? `${kind}-${entityId}-${runId}-${leadId}`
+        : `${kind}-${entityId}-${leadId}`,
     },
   }));
 

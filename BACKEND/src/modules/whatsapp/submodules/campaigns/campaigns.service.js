@@ -38,7 +38,9 @@ const ENTITY_TYPE = 'whatsapp_campaign';
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-function toCampaignDTO(doc) {
+// Exported so the API-campaign module can return the same campaign shape the
+// dashboard already consumes, instead of a second, drifting serialisation.
+export function toCampaignDTO(doc) {
   if (!doc) return null;
   const o = typeof doc.toObject === 'function' ? doc.toObject() : doc;
   const { _id, ...rest } = o;

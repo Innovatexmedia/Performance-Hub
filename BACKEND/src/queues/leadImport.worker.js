@@ -1,5 +1,5 @@
 import { Worker } from 'bullmq';
-import { redisConnection } from './redis.js';
+import { createWorkerConnection } from './redis.js';
 import { LEAD_IMPORT_QUEUE_NAME } from './leadImport.queue.js';
 import config from '../config/config.js';
 
@@ -73,7 +73,10 @@ async function processImportRowJob(job) {
 
 export function startLeadImportWorker() {
   const worker = new Worker(LEAD_IMPORT_QUEUE_NAME, processImportRowJob, {
-    connection: redisConnection,
+    // Dedicated connection -- must NOT be shared with the campaign-send
+    // Worker or with any Queue's connection. See redis.js's
+    // createWorkerConnection doc comment for why.
+    connection: createWorkerConnection('lead-import-worker'),
     concurrency: config.LEAD_IMPORT_CONCURRENCY,
   });
 

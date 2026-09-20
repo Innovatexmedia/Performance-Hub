@@ -4,8 +4,7 @@ import {
   Plus, Send, Sparkles, Copy, CheckCircle2, XCircle, MessageSquare, Server, RefreshCw,
   ChevronLeft, ChevronRight, Trash2, Inbox as InboxIcon, Users, Layers, FileText,
   ShieldCheck, Megaphone, Repeat, Radio, Zap, ScrollText, BarChart3, Settings as SettingsIcon,
-  Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X, Eye,
-} from 'lucide-react';
+  Phone, Hash, Building2, KeyRound, Link2, Fingerprint, Search, ChevronDown, X, Eye, Terminal as TerminalIcon } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { atLeast, hasRoleOrPermission } from '@/lib/permissions';
@@ -89,6 +88,7 @@ import type { DeliveryLog, DeliveryStatus, DeliveryProvider } from '@/types/what
 import { DELIVERY_PROVIDER_VALUES } from '@/types/whatsappDeliveryLog';
 import { useWhatsAppRealtime } from '@/hooks/useWhatsAppRealtime';
 import { usePermissions } from '@/hooks/usePermissions';
+import { ApiCampaignsTab } from './ApiCampaignsTab';
 import { useConsent, useConsentStats } from '@/hooks/useConsent';
 import type { Consent, ConsentStatus, ConsentSource, CreateConsentInput } from '@/types/whatsappConsent';
 import { CONSENT_STATUS_VALUES, CONSENT_SOURCE_VALUES } from '@/types/whatsappConsent';
@@ -100,6 +100,12 @@ export const TABS = [
   { id: 'templates', label: 'Templates' },
   { id: 'approval', label: 'Template Approval' },
   { id: 'campaigns', label: 'Campaigns' },
+  // Same Campaigns feature, different trigger: these are campaigns of type
+  // 'API' that the customer's own system fires over HTTP. Kept as its own tab
+  // rather than a filter inside Campaigns because what it needs on screen is
+  // entirely different -- credentials, a request contract, run history --
+  // none of which a dashboard-sent campaign has.
+  { id: 'api-campaigns', label: 'API Campaigns' },
   // 'nurture' tab hidden for v1 launch -- feature stays in the codebase
   // (Automation Rules' Start/Stop Nurture actions and Booking/Lead
   // auto-enroll all still work), just not exposed in this plan's UI yet.
@@ -131,6 +137,7 @@ export const TAB_ICONS: Record<string, React.ReactNode> = {
   templates: <FileText size={16} />,
   approval: <ShieldCheck size={16} />,
   campaigns: <Megaphone size={16} />,
+  'api-campaigns': <TerminalIcon size={16} />,
   nurture: <Repeat size={16} />,
   ai: <Sparkles size={16} />,
   broadcasts: <Radio size={16} />,
@@ -149,7 +156,7 @@ export const TAB_ICONS: Record<string, React.ReactNode> = {
  * (the old PageHeader + horizontal Tabs bar) moved out, in favor of the
  * workspace's vertical navigation using the same TABS/TAB_ICONS above.
  */
-export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab }: { tab: string; onApprovalBadgeChange?: (count: number) => void; onNavigateTab?: (tabId: string) => void }) {
+export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab, campaignFilter, onOpenCampaignPicker }: { tab: string; onApprovalBadgeChange?: (count: number) => void; onNavigateTab?: (tabId: string) => void; campaignFilter?: 'all' | 'broadcast' | 'scheduled'; onOpenCampaignPicker?: () => void }) {
   const currentUser = useAuthStore((s) => s.user);
   const canApproveTemplates = hasRoleOrPermission(currentUser?.role, currentUser?.permissions, 'tenant_admin', 'approve_templates');
 
@@ -213,7 +220,8 @@ export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab }: { t
       {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}
       {tab === 'approval' && <ApprovalTab />}
-      {tab === 'campaigns' && <CampaignsTab broadcast={false} />}
+      {tab === 'campaigns' && <CampaignsTab broadcast={false} initialFilter={campaignFilter} onBack={onOpenCampaignPicker} />}
+      {tab === 'api-campaigns' && <ApiCampaignsTab onBack={onOpenCampaignPicker} />}
       {tab === 'nurture' && <NurtureMessagesTab />}
       {tab === 'ai' && <AIAssistantTab />}
       {tab === 'broadcasts' && <CampaignsTab broadcast />}
@@ -1581,7 +1589,7 @@ function ApprovalTab() {
 const CAMPAIGN_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'BOOKING', 'FOLLOW_UP', 'PAYMENT', 'REMINDER', 'NURTURE', 'BROADCAST', 'CUSTOM'];
 const BROADCAST_TYPE_OPTIONS = ['MARKETING', 'PROMOTIONAL', 'ANNOUNCEMENT', 'OFFER', 'REMINDER', 'FESTIVAL', 'PRODUCT_UPDATE', 'CUSTOM'];
 
-function CampaignsTab({ broadcast }: { broadcast: boolean }) {
+function CampaignsTab({ broadcast, initialFilter = 'all', onBack }: { broadcast: boolean; initialFilter?: 'all' | 'broadcast' | 'scheduled'; onBack?: () => void }) {
   const resource: 'campaigns' | 'broadcasts' = broadcast ? 'broadcasts' : 'campaigns';
   const {
     campaigns, loading, error, refetch,
@@ -1647,7 +1655,12 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
   const [starting, setStarting] = useState(false);
   const [resendTarget, setResendTarget] = useState<WhatsAppCampaignReal | null>(null);
   const [resending, setResending] = useState(false);
-  const [filterTab, setFilterTab] = useState<'all' | 'broadcast' | 'scheduled'>('all');
+  // Seeded from the workspace picker so choosing "Broadcast" or "Scheduled"
+  // there lands on that filter directly. Still freely switchable afterwards --
+  // the picker sets the starting point, it doesn't lock the view.
+  const [filterTab, setFilterTab] = useState<'all' | 'broadcast' | 'scheduled'>(initialFilter);
+
+  useEffect(() => { setFilterTab(initialFilter); }, [initialFilter]);
   const typeOptions = broadcast ? BROADCAST_TYPE_OPTIONS : CAMPAIGN_TYPE_OPTIONS;
   const { members } = useTeamMembers();
 
@@ -1837,7 +1850,20 @@ function CampaignsTab({ broadcast }: { broadcast: boolean }) {
           icon={broadcast ? TAB_ICONS.broadcasts : TAB_ICONS.campaigns}
           title={broadcast ? 'Broadcasts' : 'Campaigns'}
           subtitle={broadcast ? 'Broadcast-flagged campaigns — opted-out contacts are always excluded.' : 'Audience filter + approved template, with approve/schedule/send.'}
-          action={<Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button>}
+          action={
+            <div className="flex items-center gap-2">
+              {/* Campaigns is reached through a chooser, so it needs a way
+                  back to it. Without this the only route was clicking
+                  Campaigns in the nav again, which isn't discoverable --
+                  the nav item looks like where you already are. */}
+              {onBack && (
+                <Button variant="secondary" onClick={onBack} title="Back to campaign types">
+                  <ChevronLeft size={16} /> All campaign types
+                </Button>
+              )}
+              <Button onClick={() => { resetForm(); setShow(true); }}><Plus size={16} /> New {broadcast ? 'Broadcast' : 'Campaign'}</Button>
+            </div>
+          }
         />
       </Card>
       {(() => {

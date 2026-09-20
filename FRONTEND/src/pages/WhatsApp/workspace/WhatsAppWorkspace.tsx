@@ -4,6 +4,7 @@ import { Menu, PanelLeftClose, PanelLeftOpen, X, Zap } from 'lucide-react';
 import { cn } from '@/components/ui';
 import { WhatsAppPanel } from '../WhatsAppPanel';
 import { WhatsAppSidebarNav } from './WhatsAppSidebarNav';
+import { CampaignsPicker, type CampaignKind } from './CampaignsPicker';
 import { getLastRoute } from './lastRoute';
 
 const COLLAPSE_KEY = 'innovatex:whatsapp-sidebar-collapsed';
@@ -79,9 +80,36 @@ export function WhatsAppWorkspace() {
     });
   };
 
+  // Campaigns covers four different things -- two sending modes and two
+  // filtered views -- so clicking it opens a chooser instead of dropping the
+  // user into whichever list happened to be first. See CampaignsPicker.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [campaignFilter, setCampaignFilter] = useState<'all' | 'broadcast' | 'scheduled'>('all');
+
   const selectTab = (id: string) => {
+    if (id === 'campaigns') {
+      setPickerOpen(true);
+      setMobileNavOpen(false);
+      return;
+    }
     setActiveTab(id);
     setMobileNavOpen(false);
+  };
+
+  const chooseCampaignKind = (kind: CampaignKind) => {
+    setPickerOpen(false);
+    setMobileNavOpen(false);
+
+    if (kind === 'api') {
+      setActiveTab('api-campaigns');
+      return;
+    }
+
+    // Broadcast and Scheduled are filters over the same list, not separate
+    // destinations -- so they land on the Campaigns tab with the filter
+    // pre-selected rather than on a tab of their own.
+    setCampaignFilter(kind === 'campaigns' ? 'all' : kind);
+    setActiveTab('campaigns');
   };
 
   // Exit is now direct -- no confirmation step. It never protected
@@ -202,7 +230,13 @@ export function WhatsAppWorkspace() {
 
         {/* ---- Active view ---- */}
         <main className="min-w-0 flex-1 overflow-hidden bg-ink-50">
-          <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} onNavigateTab={selectTab} />
+          <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} onNavigateTab={selectTab} campaignFilter={campaignFilter} onOpenCampaignPicker={() => setPickerOpen(true)} />
+
+          <CampaignsPicker
+            open={pickerOpen}
+            onClose={() => setPickerOpen(false)}
+            onSelect={chooseCampaignKind}
+          />
         </main>
       </div>
     </div>

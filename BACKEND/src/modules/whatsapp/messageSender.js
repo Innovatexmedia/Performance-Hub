@@ -101,10 +101,14 @@ async function getOrCreateConversation(ctx, lead, phone) {
  * schema already allows this) and activity-log/delivery-log source
  * fall back to a generic label instead of the campaign/broadcast name.
  */
-export async function sendToOneRecipient(ctx, { cfg = null, entity = null, template, lead }) {
+export async function sendToOneRecipient(ctx, { cfg = null, entity = null, template, lead, variables = null }) {
   const phone = lead.whatsapp_number || lead.phone;
 
-  const bodyParams = buildBodyParams(template, lead);
+  // `variables` is supplied only by API-triggered runs, where the caller's
+  // own system owns the values (order ids, delivery slots -- things no lead
+  // field could hold). It defaults to null, so every existing caller resolves
+  // from the lead exactly as before.
+  const bodyParams = buildBodyParams(template, lead, variables);
 
   if (!phone) {
     return { outcome: 'failed', reason: 'Lead has no WhatsApp number' };
@@ -121,7 +125,9 @@ export async function sendToOneRecipient(ctx, { cfg = null, entity = null, templ
   }
 
   const conversation = await getOrCreateConversation(ctx, lead, phone);
-  const previewText = renderBody(template, lead);
+  // Same overrides as the send itself, so the inbox preview and the delivery
+  // log can never drift from what was actually transmitted.
+  const previewText = renderBody(template, lead, variables);
   const provider = await resolveProvider(ctx);
 
   let transport;

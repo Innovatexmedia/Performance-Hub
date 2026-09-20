@@ -193,6 +193,33 @@ export const publicCaptureRateLimit = rateLimit({
  * code, and the substantially raised limit above makes this far less
  * necessary anyway.
  */
+/**
+ * publicApiRateLimit — for the API-key-authenticated public API (/api/v1).
+ *
+ * Keyed on the API KEY, not the IP. Two customers behind one corporate NAT,
+ * or two n8n workflows on the same host, must not consume each other's
+ * budget — and a customer running from a serverless platform has a different
+ * IP on nearly every invocation, which would make an IP-keyed limit both
+ * useless as a control and unpredictable to them.
+ *
+ * Falls back to the IP when no key was presented, so unauthenticated probing
+ * is still limited. ipKeyGenerator is mandatory for that path: see the note on
+ * ERR_ERL_KEY_GEN_IPV6 above.
+ *
+ * 120/minute suits the shape of this API — each call carries up to 1000
+ * recipients, so a generous per-call budget matters more than a high call
+ * rate, and a legitimate integration rarely exceeds a couple per second.
+ */
+export const publicApiRateLimit = rateLimit({
+  windowMs:        60 * 1000,
+  max:             120,
+  standardHeaders: true,
+  legacyHeaders:   false,
+  keyGenerator:    (req) =>
+    (req.apiKey?._id && `key:${req.apiKey._id}`) || `ip:${ipKeyGenerator(req.ip)}`,
+  handler:         rateLimitHandler,
+});
+
 export const generalApiRateLimit = rateLimit({
   windowMs:        RATE_LIMITS.GENERAL_API_WINDOW_MINUTES * 60 * 1000,
   max:             RATE_LIMITS.GENERAL_API_REQUESTS,

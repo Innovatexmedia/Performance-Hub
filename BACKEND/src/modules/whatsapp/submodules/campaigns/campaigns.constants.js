@@ -12,6 +12,18 @@ export const CAMPAIGN_STATUS = Object.freeze({
   COMPLETED: 'COMPLETED',
   FAILED: 'FAILED',
   CANCELLED: 'CANCELLED',
+
+  // ── API-campaign-only statuses ───────────────────────────────────────────
+  // An API campaign is a standing endpoint, not a one-shot send, so the
+  // dashboard lifecycle doesn't fit it: APPROVED/RUNNING/COMPLETED all
+  // describe a single execution with a fixed audience, and CANCELLED is
+  // terminal (see ALLOWED_TRANSITIONS below) so it could never be resumed.
+  //
+  // These two are used ONLY when type === 'API'. Adding them to the enum is
+  // additive -- no existing campaign can reach them, because nothing in the
+  // dashboard flow transitions to them.
+  ACTIVE: 'ACTIVE',   // accepting API traffic
+  PAUSED: 'PAUSED',   // temporarily refusing it; resumable
 });
 export const CAMPAIGN_STATUS_VALUES = Object.freeze(Object.values(CAMPAIGN_STATUS));
 
@@ -25,6 +37,11 @@ export const CAMPAIGN_TYPE = Object.freeze({
   REMINDER: 'REMINDER',
   NURTURE: 'NURTURE',
   BROADCAST: 'BROADCAST',
+  // Triggered over the public API rather than from the dashboard. It carries
+  // no saved audience: every trigger supplies its own recipients, which is
+  // why apiCampaign.service.js refuses to trigger any other type and the
+  // dashboard's start/schedule flow refuses this one.
+  API: 'API',
   CUSTOM: 'CUSTOM',
 });
 export const CAMPAIGN_TYPE_VALUES = Object.freeze(Object.values(CAMPAIGN_TYPE));
@@ -43,6 +60,24 @@ export const CAMPAIGN_ACTION = Object.freeze({
 });
 
 // ── Allowed status transitions ─────────────────────────────────────────────────
+/**
+ * API_ALLOWED_TRANSITIONS — the lifecycle for type: 'API' campaigns.
+ *
+ * Kept as a separate map rather than merged into ALLOWED_TRANSITIONS so the
+ * broadcast state machine is untouched: a dashboard campaign still cannot
+ * reach ACTIVE or PAUSED, and an API campaign never goes through
+ * APPROVED/SCHEDULED/RUNNING, which would each imply a fixed audience it
+ * doesn't have.
+ *
+ * DRAFT → ACTIVE ⇄ PAUSED, plus CANCELLED as the one-way exit.
+ */
+export const API_ALLOWED_TRANSITIONS = Object.freeze({
+  [CAMPAIGN_STATUS.DRAFT]:     [CAMPAIGN_STATUS.ACTIVE, CAMPAIGN_STATUS.CANCELLED],
+  [CAMPAIGN_STATUS.ACTIVE]:    [CAMPAIGN_STATUS.PAUSED, CAMPAIGN_STATUS.CANCELLED],
+  [CAMPAIGN_STATUS.PAUSED]:    [CAMPAIGN_STATUS.ACTIVE, CAMPAIGN_STATUS.CANCELLED],
+  [CAMPAIGN_STATUS.CANCELLED]: [],
+});
+
 export const ALLOWED_TRANSITIONS = Object.freeze({
   [CAMPAIGN_STATUS.DRAFT]:      [CAMPAIGN_STATUS.APPROVED, CAMPAIGN_STATUS.CANCELLED],
   [CAMPAIGN_STATUS.APPROVED]:   [CAMPAIGN_STATUS.SCHEDULED, CAMPAIGN_STATUS.RUNNING, CAMPAIGN_STATUS.CANCELLED],

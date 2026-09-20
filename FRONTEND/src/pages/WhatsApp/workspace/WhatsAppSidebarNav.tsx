@@ -13,6 +13,12 @@ import { TABS, TAB_ICONS } from '../WhatsAppPanel';
 // WhatsAppPanel.tsx are untouched; it's simply unreachable from this nav.
 const NAV_GROUPS: { label: string; tabIds: string[] }[] = [
   { label: 'Messaging', tabIds: ['inbox', 'contacts', 'groups'] },
+  // 'api-campaigns' is deliberately absent: it is reached through the
+  // Campaigns picker, not as a sibling of Campaigns. Listing both would say
+  // they are two separate features, when an API campaign is one of the four
+  // things Campaigns covers -- the picker is what makes that relationship
+  // visible. The tab itself still exists in WhatsAppPanel's TABS; it is just
+  // not its own nav entry.
   { label: 'Outreach', tabIds: ['templates', 'approval', 'campaigns', 'broadcasts', 'nurture', 'rules'] },
   { label: 'Operations', tabIds: ['consent', 'logs', 'analytics', 'settings'] },
 ];
@@ -43,7 +49,11 @@ export function WhatsAppSidebarNav({
             {group.tabIds.map((id) => {
               const item = byId[id];
               if (!item) return null;
-              const active = activeTab === id;
+              // API Campaigns has no nav entry of its own, so while it's
+              // open nothing would appear selected and the sidebar would look
+              // like it had lost its place. Campaigns stays lit, which is also
+              // the truth: that's where the user is.
+              const active = activeTab === id || (id === 'campaigns' && activeTab === 'api-campaigns');
               const badge = id === 'approval' && approvalBadgeCount > 0 ? approvalBadgeCount : 0;
               return (
                 <li key={id} className="group/navitem relative">

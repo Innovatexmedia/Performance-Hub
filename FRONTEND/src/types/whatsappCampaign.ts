@@ -14,12 +14,19 @@ export type CampaignResource = 'campaigns' | 'broadcasts';
 
 /** Mirrors CAMPAIGN_STATUS / BROADCAST_STATUS (identical values on both). */
 export type CampaignStatus =
-  | 'DRAFT' | 'APPROVED' | 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  | 'DRAFT' | 'APPROVED' | 'SCHEDULED' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+  // API-campaign-only. A dashboard campaign never reaches these: an API
+  // campaign is a standing endpoint, so it has no APPROVED/RUNNING/COMPLETED
+  // single execution, and CANCELLED is terminal so it could never be resumed.
+  | 'ACTIVE' | 'PAUSED';
 
 /** Mirrors CAMPAIGN_TYPE (campaigns.constants.js). */
 export type CampaignType =
   | 'MARKETING' | 'PROMOTIONAL' | 'BOOKING' | 'FOLLOW_UP' | 'PAYMENT'
-  | 'REMINDER' | 'NURTURE' | 'BROADCAST' | 'CUSTOM';
+  // 'API' — triggered over the public API rather than from the dashboard, and
+  // carrying no saved audience (every trigger supplies its own recipients).
+  // See BACKEND campaigns.constants.js CAMPAIGN_TYPE.
+  | 'REMINDER' | 'NURTURE' | 'BROADCAST' | 'API' | 'CUSTOM';
 
 /** Mirrors BROADCAST_TYPE (broadcasts.constants.js) -- a DIFFERENT list from CampaignType. */
 export type BroadcastType =

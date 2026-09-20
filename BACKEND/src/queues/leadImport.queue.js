@@ -1,7 +1,8 @@
 import { Queue } from 'bullmq';
 import { redisConnection } from './redis.js';
+import { queueName } from './queueName.js';
 
-export const LEAD_IMPORT_QUEUE_NAME = 'lead-import';
+export const LEAD_IMPORT_QUEUE_NAME = queueName('lead-import');
 
 export const leadImportQueue = new Queue(LEAD_IMPORT_QUEUE_NAME, {
   connection: redisConnection,

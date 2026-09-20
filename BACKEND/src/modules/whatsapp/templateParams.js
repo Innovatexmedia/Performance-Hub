@@ -1,5 +1,3 @@
-
-
 import { VARIABLE_PATTERN } from './submodules/templates/templates.constants.js';
 
 /**
@@ -119,17 +117,76 @@ export function resolveLeadValue(lead, key, fallbackName) {
  * buildMetaComponents). `name` is null for a positional template, where
  * Meta expects no parameter_name field at all.
  */
-export function buildBodyParams(template, lead) {
+/**
+ * resolveOverride -- looks up a caller-supplied value for one placeholder.
+ *
+ * API campaigns carry their variables in the request body rather than on a
+ * lead, because the caller's system is the source of truth for things the CRM
+ * has never seen (an order id, a delivery slot). Accepts both addressing
+ * styles so a customer can use whichever their template uses:
+ *
+ *   positional: { "1": "Ravi", "2": "ORD123" }
+ *   named:      { "customer_name": "Ravi", "order_id": "ORD123" }
+ *
+ * Returns undefined -- not '' -- when there is no override, so the caller can
+ * tell "not supplied" from "deliberately blank" and fall back to the lead.
+ */
+function resolveOverride(overrides, placeholder, index) {
+  if (!overrides || typeof overrides !== 'object') return undefined;
+
+  // Positional first: {{1}} means overrides['1'], and a template whose
+  // placeholder literally IS a number must never be matched by name.
+  const byPosition = overrides[String(index + 1)];
+  if (byPosition !== undefined && byPosition !== null) return String(byPosition);
+
+  if (placeholder) {
+    const byName = overrides[placeholder];
+    if (byName !== undefined && byName !== null) return String(byName);
+  }
+
+  return undefined;
+}
+
+export function buildBodyParams(template, lead, overrides = null) {
   const { names, positional } = extractPlaceholders(template?.body);
   const nameMap = Array.isArray(template?.variables) ? template.variables : [];
 
   return names.map((placeholder, index) => {
+    // `overrides` defaults to null, so every existing caller -- dashboard
+    // campaigns, broadcasts, nurtures, automation rules -- takes exactly the
+    // lead-resolution path it always did. This is purely additive.
+    const override = resolveOverride(overrides, positional ? null : placeholder, index);
+
     if (positional) {
       // {{1}} carries no field name of its own -- variables[0] supplies it.
-      return { name: null, value: resolveLeadValue(lead, nameMap[index], null) };
+      return {
+        name: null,
+        value: override !== undefined ? override : resolveLeadValue(lead, nameMap[index], null),
+      };
     }
-    return { name: placeholder, value: resolveLeadValue(lead, placeholder, nameMap[index]) };
+    return {
+      name: placeholder,
+      value: override !== undefined ? override : resolveLeadValue(lead, placeholder, nameMap[index]),
+    };
   });
+}
+
+/**
+ * requiredPlaceholders -- the placeholder list a caller must satisfy, in
+ * order. Used by the API layer to validate a request BEFORE enqueueing
+ * anything: a missing variable is Meta error 132000, which fails identically
+ * for every recipient, so catching it once at the edge beats discovering it
+ * per message.
+ */
+export function requiredPlaceholders(template) {
+  const { names, positional } = extractPlaceholders(template?.body);
+  const nameMap = Array.isArray(template?.variables) ? template.variables : [];
+
+  return names.map((placeholder, index) => ({
+    position: index + 1,
+    name: positional ? (nameMap[index] || null) : placeholder,
+    positional,
+  }));
 }
 
 /**
@@ -137,9 +194,9 @@ export function buildBodyParams(template, lead) {
  * Uses the SAME resolution as buildBodyParams so the preview cannot drift
  * from what was actually transmitted.
  */
-export function renderBody(template, lead) {
+export function renderBody(template, lead, overrides = null) {
   const { names, positional } = extractPlaceholders(template?.body);
-  const params = buildBodyParams(template, lead);
+  const params = buildBodyParams(template, lead, overrides);
 
   let text = String(template?.body || '');
   names.forEach((placeholder, index) => {

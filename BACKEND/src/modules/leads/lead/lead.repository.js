@@ -30,14 +30,30 @@ export const leadRepository = {
    * insert on any later .save() call).
    */
   async findOneAndUpsert(filter, data) {
+    // `includeResultMetadata`, not `rawResult`. rawResult was removed in
+    // Mongoose 8 (this project is on 9.x), where it is silently IGNORED --
+    // findOneAndUpdate then returns a plain hydrated document instead of the
+    // { value, lastErrorObject } envelope this function was written against.
+    // `result.value` was therefore always undefined, so every caller got
+    // lead: null and isNew: false, with no error anywhere to say so.
     const result = await Lead.findOneAndUpdate(
       filter,
       { $setOnInsert: data },
-      { upsert: true, new: true, rawResult: true, setDefaultsOnInsert: true },
+      { upsert: true, new: true, includeResultMetadata: true, setDefaultsOnInsert: true },
     );
+
+    // Tolerates both shapes on purpose: if a future Mongoose version returns
+    // the document directly again, this keeps working rather than silently
+    // going back to returning null.
+    const hasMetadata = result && typeof result === 'object' && 'lastErrorObject' in result;
+    const raw = hasMetadata ? result.value : result;
+
     return {
-      lead: result.value ? Lead.hydrate(result.value) : null,
-      isNew: Boolean(result.lastErrorObject?.upserted),
+      // hydrate() only for the plain driver object from the metadata path --
+      // the direct path is already a real document, and hydrating one again
+      // would strip the state Mongoose keeps on it.
+      lead: raw ? (hasMetadata ? Lead.hydrate(raw) : raw) : null,
+      isNew: hasMetadata ? Boolean(result.lastErrorObject?.upserted) : false,
     };
   },
 

@@ -57,6 +57,9 @@ import shopifyOAuthRoutes from './modules/shopify/shopifyOAuth.routes.js';
 // ── Middleware Imports ────────────────────────────────────────────────────────
 import { errorHandler, notFoundHandler } from './shared/middlewares/errorHandler.middleware.js';
 import { generalApiRateLimit }           from './shared/middlewares/rateLimit.middleware.js';
+import publicApiRoutes                  from './modules/whatsapp/submodules/apiCampaigns/publicApi.routes.js';
+import apiCampaignRoutes                from './modules/whatsapp/submodules/apiCampaigns/apiCampaign.routes.js';
+import apiKeyRoutes                     from './modules/apiKeys/apiKey.routes.js';
 
 const app = express();
 
@@ -186,6 +189,13 @@ app.get('/', (req, res) => {
 | API Rate Limiting (global)
 |--------------------------------------------------------------------------
 */
+// Public API mounted BEFORE the global /api limiter on purpose: it carries its
+// own per-API-key limiter (publicApiRateLimit). Leaving it under the global
+// IP-keyed limit too would mean one customer's serverless platform, or two
+// customers behind one NAT, could exhaust a shared budget and rate-limit each
+// other out of an API they pay for.
+app.use('/api/v1', publicApiRoutes);
+
 app.use('/api', generalApiRateLimit);
 
 /*
@@ -210,12 +220,18 @@ app.use('/api/auth',      authRoutes);
 app.use('/api/leads',     leadRoutes);
 app.use('/api/pipeline',  pipelineRouter);
 app.use('/api/whatsapp/nurtures/webhook-trigger', nurtureWebhookTriggerRoutes);
+// Runs belong to WhatsApp campaigns, so they mount under the WhatsApp module
+// rather than the generic /api/campaigns one (a different model entirely).
+// Declared BEFORE whatsappRouter so it isn't shadowed by any /:id route there.
+app.use('/api/whatsapp/campaign-runs', apiCampaignRoutes);
 app.use('/api/whatsapp',  whatsappRouter);
 app.use('/api/calls',          callRoutes);
 app.use('/api/qualification', qualificationRoutes);
 app.use('/api/attribution',  attributionRoutes);
 app.use('/api/payments',   paymentRoutes);
 app.use('/api/campaigns',  campaignRoutes);
+
+app.use('/api/api-keys',   apiKeyRoutes);
 app.use('/api/bookings/calcom/webhook', calcomWebhookRoutes);
 app.use('/api/public/calcom', calcomPublicBookingRoutes);
 app.use('/api/public/capture', publicCaptureRoutes);
