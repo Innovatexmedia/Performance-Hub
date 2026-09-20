@@ -218,7 +218,7 @@ export function WhatsAppPanel({ tab, onApprovalBadgeChange, onNavigateTab, campa
   // of this area, and without reserved space it lands on top of whatever
   // action a tab puts in its own header (the campaign Delete button, for one).
   return (
-    <div className="h-full overflow-y-auto p-4 pr-20 lg:p-6 lg:pr-24">
+    <div className="h-full overflow-y-auto p-4 pr-12 lg:p-6 lg:pr-14">
       {tab === 'contacts' && <ContactsTab />}
       {tab === 'groups' && <GroupsTab />}
       {tab === 'templates' && <TemplatesTab />}

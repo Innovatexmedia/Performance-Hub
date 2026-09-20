@@ -261,15 +261,20 @@ export function WhatsAppWorkspace() {
             <Menu size={16} />
           </button>
 
+          {/* Icon only. A labelled pill had to be opaque enough to stay
+              readable over whatever sits beneath it, which made it a light
+              rectangle punched into any dark page. An arrow needs no
+              background of its own -- the title and aria-label carry the
+              meaning. */}
           <button
             ref={exitButtonRef}
             type="button"
             onClick={exit}
             title="Exit WhatsApp Workspace"
             aria-label="Exit WhatsApp Workspace"
-            className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white/90 px-2.5 py-1.5 text-xs font-medium text-ink-600 shadow-sm backdrop-blur transition-colors hover:border-ink-300 hover:bg-white hover:text-ink-900 motion-reduce:transition-none"
+            className="absolute right-2 top-2 z-20 rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-black/10 hover:text-ink-800 motion-reduce:transition-none"
           >
-            <ChevronLeft size={14} /> Exit
+            <ChevronLeft size={18} />
           </button>
 
           <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} onNavigateTab={selectTab} campaignFilter={campaignFilter} onOpenCampaignPicker={() => setPickerOpen(true)} />

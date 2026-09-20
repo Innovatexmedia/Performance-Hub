@@ -26,12 +26,26 @@ const OPTIONS: {
   description: string;
   icon: React.ReactNode;
   tag?: string;
+  /** The icon tile's own colour.
+   *
+   *  Each option gets one, not just the API entry: a single coloured tile in a
+   *  row of grey ones made the other three look disabled. The colours aren't
+   *  decoration either -- they say what kind of thing each option is. The two
+   *  real sending modes get their own hues, the two filtered views share one,
+   *  and API Campaigns carries the dark warm tint of the section it opens, so
+   *  the tile previews where it leads.
+   *
+   *  The cards themselves stay white. Tinting a whole card in a row of four
+   *  reads as a rendering fault; a tile is already a distinct element and can
+   *  carry the difference without breaking the rhythm. */
+  tile: string;
 }[] = [
   {
     id: 'campaigns',
     label: 'Campaigns',
     description: 'Send to an audience you build here — filters, tags, contact lists.',
     icon: <Megaphone size={18} />,
+    tile: 'bg-brand-50 text-brand-600',
   },
   {
     id: 'api',
@@ -39,6 +53,7 @@ const OPTIONS: {
     description: 'Your application triggers the send over HTTP and supplies the recipients each time.',
     icon: <Terminal size={18} />,
     tag: 'For developers',
+    tile: 'bg-[#16100d] text-amber-200/90',
   },
   {
     id: 'broadcast',
@@ -46,6 +61,7 @@ const OPTIONS: {
     description: 'Campaigns of type Broadcast.',
     icon: <Radio size={18} />,
     tag: 'Filtered view',
+    tile: 'bg-teal-50 text-teal-600',
   },
   {
     id: 'scheduled',
@@ -53,6 +69,7 @@ const OPTIONS: {
     description: 'Campaigns with a send time set. Not a separate way of sending — the same campaigns, waiting.',
     icon: <Clock size={18} />,
     tag: 'Filtered view',
+    tile: 'bg-teal-50 text-teal-600',
   },
 ];
 
@@ -80,7 +97,7 @@ export function CampaignsPicker({
               'hover:border-brand-300 hover:bg-brand-50/50 focus:outline-none focus:ring-2 focus:ring-brand-500'
             )}
           >
-            <span className="mt-0.5 rounded-lg bg-ink-100 p-2 text-ink-600">{option.icon}</span>
+            <span className={cn('mt-0.5 shrink-0 rounded-lg p-2', option.tile)}>{option.icon}</span>
             <span className="min-w-0 flex-1">
               <span className="flex items-center gap-2">
                 <span className="font-medium text-ink-900">{option.label}</span>
