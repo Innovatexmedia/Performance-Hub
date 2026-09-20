@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Menu, PanelLeftClose, PanelLeftOpen, X, Zap } from 'lucide-react';
+import { ChevronLeft, Menu, PanelLeftClose, PanelLeftOpen, X, Zap } from 'lucide-react';
 import { cn } from '@/components/ui';
 import { WhatsAppPanel } from '../WhatsAppPanel';
 import { WhatsAppSidebarNav } from './WhatsAppSidebarNav';
@@ -18,11 +18,22 @@ function readInitialTab(): string {
   }
 }
 
+/**
+ * The rail starts COLLAPSED unless the user has explicitly opened it before.
+ *
+ * `=== '1'` would have done that too, but it can't tell "never chose" from
+ * "chose collapsed", so the default has to be stated rather than implied: an
+ * absent key means collapsed, and only a stored '0' counts as a deliberate
+ * choice to keep it open. The workspace is where people read conversations,
+ * so the default should hand that space to the content.
+ */
 function readInitialCollapsed(): boolean {
   try {
-    return localStorage.getItem(COLLAPSE_KEY) === '1';
+    const stored = localStorage.getItem(COLLAPSE_KEY);
+    if (stored === null) return true;
+    return stored === '1';
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -40,6 +51,12 @@ export function WhatsAppWorkspace() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState(readInitialTab);
   const [collapsed, setCollapsed] = useState(readInitialCollapsed);
+
+  // No hover-to-expand. It was tried and removed: expanding the rail on hover
+  // and showing a tooltip on hover are the same gesture, so the rail always
+  // won and the tooltips -- the thing that actually makes an icon rail usable
+  // -- could never appear. Hover now does one job: name the icon. Opening the
+  // rail is a deliberate click on the header toggle.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [approvalBadgeCount, setApprovalBadgeCount] = useState(0);
   const exitButtonRef = useRef<HTMLButtonElement>(null);
@@ -142,62 +159,64 @@ export function WhatsAppWorkspace() {
         entered ? 'opacity-100' : 'opacity-0',
       )}
     >
-      {/* ---- Header ---- */}
-      <header className="flex h-14 shrink-0 items-center gap-3 bg-sidebar px-3 text-white lg:px-4">
-        <button
-          type="button"
-          onClick={() => setMobileNavOpen(true)}
-          className="rounded-lg p-2 text-ink-300 hover:bg-sidebar-hover hover:text-white lg:hidden"
-          aria-label="Open WhatsApp navigation"
-        >
-          <Menu size={18} />
-        </button>
-        <button
-          type="button"
-          onClick={toggleCollapsed}
-          className="hidden rounded-lg p-2 text-ink-300 hover:bg-sidebar-hover hover:text-white lg:inline-flex"
-          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-          title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
-        >
-          {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-        </button>
-
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-violet-500 shadow-sm">
-            <Zap size={15} fill="white" />
-          </div>
-          <div className="min-w-0 leading-tight">
-            <p className="truncate text-sm font-semibold text-white">WhatsApp Workspace</p>
-            <p className="truncate text-[11px] text-ink-400">InnovateX Revenue OS</p>
-          </div>
-        </div>
-
-        <div className="ml-auto flex items-center gap-1">
-          <button
-            ref={exitButtonRef}
-            type="button"
-            onClick={exit}
-            title="Exit WhatsApp Workspace"
-            aria-label="Exit WhatsApp Workspace"
-            className="rounded-lg bg-white/10 p-2 text-white transition hover:bg-red-500/90 hover:text-white"
-          >
-            <X size={18} />
-          </button>
-        </div>
-      </header>
+      {/* No top bar.
+          It was a full-width dark strip carrying three controls and a title,
+          and it cost ~48px of every screen to say what the rail already says.
+          Its contents moved to where they belong: branding and the collapse
+          toggle into the rail itself, and Exit to the top-right of the
+          content, where a "leave this place" control is normally looked for. */}
 
       <div className="relative flex min-h-0 flex-1">
-        {/* ---- Desktop vertical nav (collapsible rail) ---- */}
+        {/* ---- Desktop vertical nav (collapsible rail) ----
+            overflow-visible, not hidden: the collapsed rail's tooltips are
+            positioned outside its own 68px, and clipping them would leave the
+            icons with no labels at all. */}
         <aside
           className={cn(
-            'sidebar-scroll hidden shrink-0 flex-col overflow-hidden bg-sidebar transition-[width] duration-200 ease-out lg:flex',
-            collapsed ? 'w-[68px]' : 'w-60',
+            'hidden shrink-0 flex-col overflow-visible bg-sidebar lg:flex',
+            'transition-[width] duration-200 ease-out motion-reduce:transition-none',
+            // 48px collapsed: a 16px icon inside a 32px hit area, plus 8px of
+            // breathing room each side. Anything wider is padding pretending
+            // to be layout.
+            collapsed ? 'w-12' : 'w-56',
           )}
         >
+          {/* Rail head. The logo doubles as the collapse toggle when the rail
+              is closed -- a separate toggle button would take a second row in
+              a 48px column, and the logo is already the obvious thing to
+              click. Expanded, the toggle appears beside it. */}
+          <div className={cn('flex shrink-0 items-center py-2', collapsed ? 'justify-center px-1.5' : 'gap-2 px-3')}>
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+              title={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+              className="group/logo flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-brand-500 to-violet-500 shadow-sm transition-transform duration-150 hover:scale-105 motion-reduce:transition-none"
+            >
+              <Zap size={15} fill="white" className={cn(collapsed && 'group-hover/logo:hidden')} />
+              {collapsed && <PanelLeftOpen size={15} className="hidden text-white group-hover/logo:block" />}
+            </button>
+
+            {!collapsed && (
+              <>
+                <p className="min-w-0 flex-1 truncate text-sm font-semibold text-white">WhatsApp</p>
+                <button
+                  type="button"
+                  onClick={toggleCollapsed}
+                  aria-label="Collapse navigation"
+                  title="Collapse navigation"
+                  className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-sidebar-hover hover:text-white motion-reduce:transition-none"
+                >
+                  <PanelLeftClose size={16} />
+                </button>
+              </>
+            )}
+          </div>
+
           <WhatsAppSidebarNav
             activeTab={activeTab}
             onSelect={selectTab}
-            collapsed={collapsed}
+            expanded={!collapsed}
             approvalBadgeCount={approvalBadgeCount}
           />
         </aside>
@@ -221,7 +240,7 @@ export function WhatsAppWorkspace() {
               <WhatsAppSidebarNav
                 activeTab={activeTab}
                 onSelect={selectTab}
-                collapsed={false}
+                expanded
                 approvalBadgeCount={approvalBadgeCount}
               />
             </div>
@@ -229,7 +248,30 @@ export function WhatsAppWorkspace() {
         )}
 
         {/* ---- Active view ---- */}
-        <main className="min-w-0 flex-1 overflow-hidden bg-ink-50">
+        <main className="relative min-w-0 flex-1 overflow-hidden bg-ink-50">
+          {/* Exit, and the mobile nav opener, float over the content instead
+              of occupying a bar of their own. Both are small, both are at the
+              edges, and neither takes a row from the page. */}
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open WhatsApp navigation"
+            className="absolute left-3 top-3 z-20 rounded-lg border border-ink-200 bg-white/90 p-1.5 text-ink-600 shadow-sm backdrop-blur transition-colors hover:bg-white hover:text-ink-900 lg:hidden motion-reduce:transition-none"
+          >
+            <Menu size={16} />
+          </button>
+
+          <button
+            ref={exitButtonRef}
+            type="button"
+            onClick={exit}
+            title="Exit WhatsApp Workspace"
+            aria-label="Exit WhatsApp Workspace"
+            className="absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-lg border border-ink-200 bg-white/90 px-2.5 py-1.5 text-xs font-medium text-ink-600 shadow-sm backdrop-blur transition-colors hover:border-ink-300 hover:bg-white hover:text-ink-900 motion-reduce:transition-none"
+          >
+            <ChevronLeft size={14} /> Exit
+          </button>
+
           <WhatsAppPanel tab={activeTab} onApprovalBadgeChange={setApprovalBadgeCount} onNavigateTab={selectTab} campaignFilter={campaignFilter} onOpenCampaignPicker={() => setPickerOpen(true)} />
 
           <CampaignsPicker

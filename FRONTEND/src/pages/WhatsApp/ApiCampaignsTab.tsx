@@ -24,7 +24,7 @@ import {
 } from 'lucide-react';
 import {
   Card, CardHeader, Button, Badge, Modal, Field, Input, Select,
-  EmptyState, Table, Th, Td, Tr, Tabs, cn,
+  EmptyState, Table, Th, Td, Tr, cn,
 } from '@/components/ui';
 import { toast } from '@/store/toastStore';
 import { ApiError } from '@/lib/apiClient';
@@ -58,7 +58,7 @@ const API_BASE = (import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api').r
  *  example always show the SAME value for a given position -- a reader
  *  comparing the two should not have to wonder whether they differ for a
  *  reason. */
-const SAMPLE_VALUES = ['Ravi', 'ORD-123', '2 Oct, 4:30 PM', '₹1,499', 'Mumbai'];
+const SAMPLE_VALUES = ['Ram Kshatriya', 'ORD-4821', '2 Oct, 4:30 PM', '₹1,499', 'Mumbai'];
 
 /** Error contract, kept as data so the table stays readable and the list is
  *  edited in one place when the API adds a case. */
@@ -71,7 +71,80 @@ const ERROR_ROWS: [string, string, string][] = [
   ['413', 'More than 1000 recipients in one call', 'Split the batch'],
   ['422', 'Idempotency-Key reused with a different body', 'Use a fresh key per distinct request'],
   ['429', 'Rate limit — 120 requests per minute per key', 'Back off and retry'],
+  ['429', 'Daily or monthly send limit reached (code SEND_QUOTA_EXCEEDED)', 'Wait for the reset, or raise the limit in WhatsApp Settings'],
 ];
+
+/**
+ * SubTabs — a quieter tab strip than the shared `Tabs` component.
+ *
+ * Local rather than a change to components/ui: that one is used across the
+ * whole app, and restyling it to suit this page would silently restyle every
+ * other page that relies on its current weight. Here the tabs sit directly
+ * under a page title and should read as secondary navigation, not as a second
+ * headline — so: no filled pills, a thin underline on the active item, and
+ * colour doing the work instead of weight.
+ */
+function SubTabs({
+  tabs, active, onChange,
+}: { tabs: { id: string; label: string; count?: number }[]; active: string; onChange: (id: string) => void }) {
+  return (
+    <div className="flex items-center gap-5 border-b border-ink-200">
+      {tabs.map((tab) => {
+        const isActive = tab.id === active;
+        return (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => onChange(tab.id)}
+            className={cn(
+              'relative -mb-px flex items-center gap-1.5 rounded-t-md border-b-2 px-1 pb-2.5 pt-1 text-sm',
+              'transition-colors duration-150 ease-out motion-reduce:transition-none',
+              // outline-none + an explicit focus-visible ring: the browser's
+              // default outline drew a hard black box around the active tab,
+              // which read as a rendering bug rather than focus. Removing it
+              // without replacing it would break keyboard navigation, so the
+              // ring is the replacement, not the removal.
+              'outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40',
+              isActive
+                ? 'border-brand-600 font-semibold text-ink-900'
+                : 'border-transparent font-medium text-ink-500 hover:text-ink-800',
+            )}
+          >
+            {tab.label}
+            {tab.count != null && (
+              <span className={cn('text-xs tabular-nums', isActive ? 'text-brand-600' : 'text-ink-400')}>
+                {tab.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * formatDuration — how long a run took, or has been running.
+ *
+ * Returns null rather than "0s" when there is nothing to measure: a run that
+ * never started has no duration, and printing a zero would suggest it finished
+ * instantly.
+ */
+function formatDuration(run: CampaignRun): string | null {
+  const start = run.startedAt ? new Date(run.startedAt).getTime() : null;
+  if (!start) return null;
+
+  const end = run.completedAt ? new Date(run.completedAt).getTime() : Date.now();
+  const seconds = Math.max(Math.round((end - start) / 1000), 0);
+
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+/** Short, readable run handle. The full id stays available to copy. */
+const shortRunId = (id: string) => id.slice(-8).toUpperCase();
 
 /** Extracts {{1}}/{{name}} placeholders from a template body — the same shape
  *  the backend's extractPlaceholders finds, so the docs list exactly the
@@ -184,11 +257,11 @@ function Section({
   label, title, description, children,
 }: { label: string; title?: string; description?: string; children: React.ReactNode }) {
   return (
-    <section className="border-t border-ink-200 pt-5">
+    <section className="border-t border-ink-200 pt-4">
       <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-600">{label}</p>
       {title && <h3 className="mt-1 text-sm font-semibold text-ink-900">{title}</h3>}
       {description && <p className="mt-0.5 max-w-2xl text-sm text-ink-500">{description}</p>}
-      <div className="mt-3">{children}</div>
+      <div className="mt-2.5">{children}</div>
     </section>
   );
 }
@@ -277,27 +350,42 @@ function ApiKeysPanel() {
         <Table>
           <thead>
             <Tr>
-              <Th>Name</Th><Th>Key</Th><Th>Last used</Th><Th>Status</Th><Th />
+              <Th>Name</Th><Th>Key</Th><Th>Created</Th><Th>Last used</Th><Th>Status</Th><Th />
             </Tr>
           </thead>
           <tbody>
             {keys.map((k) => (
-              <Tr key={k.id}>
-                <Td className="font-medium">{k.name}</Td>
-                <Td><code className="text-xs text-ink-600">{k.prefix}…</code></Td>
-                <Td className="text-ink-500">{k.lastUsedAt ? timeAgo(k.lastUsedAt) : 'Never'}</Td>
+              <Tr key={k.id} className={cn(!k.isActive && 'opacity-60')}>
+                <Td className="font-medium text-ink-900">{k.name}</Td>
+
+                {/* Prefix only, always. The rest of the key exists nowhere --
+                    only a hash is stored -- so there is nothing to reveal even
+                    if the UI offered to. */}
+                <Td>
+                  <code className="font-mono text-xs text-ink-600">{k.prefix}</code>
+                  <span className="text-ink-300">••••••••</span>
+                </Td>
+
+                <Td className="whitespace-nowrap text-ink-500">{timeAgo(k.createdAt)}</Td>
+
+                <Td className="whitespace-nowrap text-ink-500">
+                  {k.lastUsedAt ? timeAgo(k.lastUsedAt) : <span className="text-ink-400">Never used</span>}
+                </Td>
+
                 <Td>
                   <Badge tone={k.isActive ? 'green' : 'gray'}>{k.isActive ? 'Active' : 'Revoked'}</Badge>
                 </Td>
-                <Td>
-                  {k.isActive && (
+
+                <Td className="text-right">
+                  {k.isActive ? (
                     <button
                       onClick={() => setConfirmRevoke(k)}
-                      className="rounded-lg p-1.5 text-ink-400 hover:bg-red-50 hover:text-red-600"
-                      title="Revoke key"
+                      className="rounded-md px-2 py-1 text-xs font-medium text-ink-500 transition-colors duration-150 hover:bg-red-50 hover:text-red-600 motion-reduce:transition-none"
                     >
-                      <Trash2 size={14} />
+                      Revoke
                     </button>
+                  ) : (
+                    <span className="px-2 text-xs text-ink-400">{k.revokedAt ? timeAgo(k.revokedAt) : ''}</span>
                   )}
                 </Td>
               </Tr>
@@ -339,7 +427,7 @@ function ApiKeysPanel() {
         </div>
 
         <div className="mt-3 flex items-center gap-2">
-          <code className="flex-1 overflow-x-auto rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 text-xs">
+          <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-lg border border-ink-200 bg-ink-50 px-3 py-2 font-mono text-xs text-ink-800">
             {justCreated?.key}
           </code>
           <CopyButton value={justCreated?.key ?? ''} />
@@ -373,9 +461,9 @@ function IntegrationDocs({ campaign, templateBody }: { campaign: WhatsAppCampaig
   const path = `/api/v1/campaigns/${campaign.id}/trigger`;
   const endpoint = `${API_BASE}${path}`;
 
-  // Built from the campaign's REAL template placeholders, so what the customer
-  // copies already matches this campaign instead of a generic sample they have
-  // to reverse-engineer.
+  // Built from this campaign's REAL template placeholders, so what gets copied
+  // already matches this campaign instead of a generic sample the reader has
+  // to translate.
   const sampleVariables = placeholders.reduce<Record<string, string>>((acc, ph, i) => {
     acc[/^\d+$/.test(ph) ? String(i + 1) : ph] = SAMPLE_VALUES[i % SAMPLE_VALUES.length];
     return acc;
@@ -383,42 +471,79 @@ function IntegrationDocs({ campaign, templateBody }: { campaign: WhatsAppCampaig
 
   const requestBody = {
     recipients: [
-      { phone: '919876543210', name: 'Ravi', ...(placeholders.length ? { variables: sampleVariables } : {}) },
+      {
+        phone: '919876543210',
+        name: 'Ram Kshatriya',
+        ...(placeholders.length ? { variables: sampleVariables } : {}),
+      },
     ],
   };
 
   const bodyJson = JSON.stringify(requestBody, null, 2);
+  const inlineBody = JSON.stringify(requestBody);
 
   const curl = `curl -X POST '${endpoint}' \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -H 'Content-Type: application/json' \
-  -H 'Idempotency-Key: order-12345' \
-  -d '${JSON.stringify(requestBody)}'`;
+  -H 'Idempotency-Key: order-4821' \
+  -d '${inlineBody}'`;
 
-  const js = `const res = await fetch('${endpoint}', {
+  const browserJs = `const res = await fetch('${endpoint}', {
   method: 'POST',
   headers: {
-    'Authorization': \`Bearer \${process.env.INNOVATEX_API_KEY}\`,
+    'Authorization': 'Bearer ' + API_KEY,
     'Content-Type': 'application/json',
-    // Reuse the same key when retrying the same send, so a network
-    // failure can't deliver the message twice.
     'Idempotency-Key': orderId,
   },
-  body: JSON.stringify(${JSON.stringify(requestBody)}),
+  body: JSON.stringify(${inlineBody}),
 });
 
-const { runId, queuedCount, rejected } = await res.json();`;
+const result = await res.json();
 
-  const python = `import requests
+if (res.status === 202) {
+  // Accepted and queued -- NOT yet delivered.
+  console.log(result.runId, result.queuedCount);
+} else {
+  console.error(result.message);
+}`;
 
-requests.post(
+  const nodeJs = `import fetch from 'node-fetch';
+
+const res = await fetch('${endpoint}', {
+  method: 'POST',
+  headers: {
+    Authorization: \`Bearer \${process.env.INNOVATEX_API_KEY}\`,
+    'Content-Type': 'application/json',
+    // Same key on a retry of the same send, so a dropped
+    // connection can't deliver the message twice.
+    'Idempotency-Key': order.id,
+  },
+  body: JSON.stringify({
+    recipients: order.customers.map((c) => ({
+      phone: c.whatsapp,
+      name: c.name,
+    })),
+  }),
+});
+
+const { runId, queuedCount, rejected } = await res.json();
+if (rejected.length) console.warn('Not sent:', rejected);`;
+
+  const python = `import os, requests
+
+res = requests.post(
     "${endpoint}",
     headers={
-        "Authorization": f"Bearer {API_KEY}",
+        "Authorization": f"Bearer {os.environ['INNOVATEX_API_KEY']}",
+        "Content-Type": "application/json",
         "Idempotency-Key": order_id,
     },
-    json=${JSON.stringify(requestBody)},
-)`;
+    json=${inlineBody},
+    timeout=30,
+)
+
+res.raise_for_status()
+print(res.json()["runId"])`;
 
   const responseSample = JSON.stringify(
     {
@@ -427,74 +552,144 @@ requests.post(
       campaignId: campaign.id,
       campaignName: campaign.name,
       status: 'queued',
-      requestedCount: 1,
+      requestedCount: 2,
       queuedCount: 1,
-      rejectedCount: 0,
-      rejected: [],
+      rejectedCount: 1,
+      rejected: [
+        { phone: '9876543210', reason: 'Phone number is missing its country code', code: 'INVALID_PHONE' },
+      ],
     },
     null,
     2
   );
 
   return (
-    <div className="space-y-5">
-      {/* ENDPOINT -- first, because it is the one thing a developer scrolls
-          looking for. Method and path are visually separated so the line reads
-          as an endpoint rather than a URL in a text field. */}
-      <section>
-        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-600">Endpoint</p>
-        <div className="mt-2 flex items-stretch gap-2">
-          <div className="flex min-w-0 flex-1 items-center gap-0 overflow-hidden rounded-lg border border-ink-200 bg-white">
-            <span className="shrink-0 self-stretch bg-brand-600 px-3 py-2.5 font-mono text-xs font-bold text-white">POST</span>
-            <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2.5 font-mono text-[13px] text-ink-800">
-              {endpoint}
-            </code>
-          </div>
-          <CopyButton value={endpoint} label="Copy URL" />
+    <div className="space-y-4">
+      <Section label="Endpoint">
+        {/* The method is a quiet label, not a filled block. A solid brand-
+            coloured POST chip made the endpoint the loudest thing on a page
+            of documentation, competing with the content it introduces --
+            reference docs read better when the URL is just legible. */}
+        <div className="flex items-center gap-2 rounded-lg border border-ink-200 bg-white px-3 py-2">
+          <span className="shrink-0 rounded bg-ink-100 px-1.5 py-0.5 font-mono text-[11px] font-bold text-ink-700">
+            POST
+          </span>
+          <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap font-mono text-[13px] text-ink-800">
+            {endpoint}
+          </code>
+          <CopyButton value={endpoint} label="" subtle />
         </div>
-        <p className="mt-2 text-sm text-ink-500">
-          Returns <code className="font-mono text-xs text-ink-700">202 Accepted</code> as soon as the recipients are
-          queued — it does not wait for messages to be delivered.
-        </p>
-      </section>
+
+        {/* Immediately under the endpoint on purpose: async behaviour is the
+            single thing a developer most often gets wrong about this API, and
+            it should be answered before they read anything else. */}
+        <div className="mt-2 flex gap-2 rounded-lg border border-brand-200 bg-brand-50/60 px-3 py-2">
+          <span className="shrink-0 rounded bg-brand-600 px-1.5 py-0.5 font-mono text-[11px] font-bold text-white">
+            202
+          </span>
+          <p className="text-sm text-ink-700">
+            <strong>Accepted</strong> means the recipients were validated and queued — not that WhatsApp has
+            delivered anything. Sending happens asynchronously; follow it with the returned{' '}
+            <code className="font-mono text-xs">runId</code> on <strong>Runs &amp; Logs</strong>.
+          </p>
+        </div>
+      </Section>
 
       <Section
         label="Authentication"
-        description="Send your API key on every request. Either header works; use whichever your tool makes easier."
+        description="Every request carries your API key. Either header works — use whichever your tool makes easier."
       >
-        <Code label="http" maxHeight="max-h-40" code={`Authorization: Bearer YOUR_API_KEY
-Content-Type: application/json
-Idempotency-Key: order-12345    # optional, strongly recommended`} />
+        <CodeTabs
+          items={[
+            {
+              id: 'http',
+              label: 'HTTP',
+              code: `Authorization: Bearer YOUR_API_KEY
+
+# or, if your tool makes a custom header easier:
+X-API-Key: YOUR_API_KEY`,
+            },
+            { id: 'curl', label: 'cURL', code: `-H 'Authorization: Bearer YOUR_API_KEY'` },
+            {
+              id: 'js',
+              label: 'JavaScript',
+              code: `headers: {
+  'Authorization': 'Bearer ' + API_KEY,
+}`,
+            },
+            {
+              id: 'node',
+              label: 'Node.js',
+              code: `headers: {
+  Authorization: \`Bearer \${process.env.INNOVATEX_API_KEY}\`,
+}`,
+            },
+            {
+              id: 'py',
+              label: 'Python',
+              code: `headers={
+    "Authorization": f"Bearer {os.environ['INNOVATEX_API_KEY']}",
+}`,
+            },
+          ]}
+        />
         <p className="mt-2 text-sm text-ink-500">
-          Keys live on the <strong>API keys</strong> tab. Keep them on your server — anything shipped to a browser
-          or mobile app can be read by anyone using it.
+          Keys are created on the <strong>API keys</strong> tab and shown once. Keep them on your server —
+          anything shipped to a browser or mobile app can be read by whoever is using it.
         </p>
       </Section>
 
       <Section
-        label="Template variables"
-        description={
-          placeholders.length
-            ? 'Every recipient must supply all of these. A recipient missing one is rejected; the rest of the batch still sends.'
-            : undefined
-        }
+        label="Request body"
+        description="One to 1000 recipients per request. Phone numbers must include the country code and no +."
       >
-        {placeholders.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5">
-            <Check size={15} className="shrink-0 text-emerald-600" />
-            <p className="text-sm text-emerald-900">
-              This template needs no variables — send just <code className="font-mono text-xs">phone</code> for each
-              recipient.
-            </p>
-          </div>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-ink-200">
+        <Code label="json" code={bodyJson} maxHeight="max-h-60" />
+
+        <div className="mt-3 overflow-hidden rounded-lg border border-ink-200">
+          <table className="w-full border-collapse text-sm">
+            <thead>
+              <tr className="bg-ink-50">
+                <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Field</th>
+                <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Required</th>
+                <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td className="border-b border-ink-100 px-3 py-2 font-mono text-xs text-ink-700">recipients[].phone</td>
+                <td className="border-b border-ink-100 px-3 py-2 text-ink-600">Yes</td>
+                <td className="border-b border-ink-100 px-3 py-2 text-ink-500">
+                  International format, digits only — <code className="font-mono text-xs">919876543210</code>. A
+                  10-digit number is rejected rather than guessed at.
+                </td>
+              </tr>
+              <tr>
+                <td className="border-b border-ink-100 px-3 py-2 font-mono text-xs text-ink-700">recipients[].name</td>
+                <td className="border-b border-ink-100 px-3 py-2 text-ink-600">No</td>
+                <td className="border-b border-ink-100 px-3 py-2 text-ink-500">
+                  Used only when creating a new contact. An existing contact's name is never overwritten.
+                </td>
+              </tr>
+              <tr>
+                <td className="px-3 py-2 font-mono text-xs text-ink-700">recipients[].variables</td>
+                <td className="px-3 py-2 text-ink-600">{placeholders.length ? 'Yes' : 'No'}</td>
+                <td className="px-3 py-2 text-ink-500">
+                  {placeholders.length
+                    ? 'Every template variable must be supplied. A recipient missing one is rejected; the rest of the batch still sends.'
+                    : 'This template has no variables, so it can be omitted.'}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {placeholders.length > 0 && (
+          <div className="mt-3 overflow-hidden rounded-lg border border-ink-200">
             <table className="w-full border-collapse text-sm">
               <thead>
                 <tr className="bg-ink-50">
                   <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Variable</th>
                   <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Send as</th>
-                  <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Required</th>
                   <th className="border-b border-ink-200 px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-ink-500">Example</th>
                 </tr>
               </thead>
@@ -505,7 +700,6 @@ Idempotency-Key: order-12345    # optional, strongly recommended`} />
                     <td className="border-b border-ink-100 px-3 py-2 font-mono text-xs text-ink-700">
                       {/^\d+$/.test(ph) ? `"${i + 1}"` : `"${ph}"`}
                     </td>
-                    <td className="border-b border-ink-100 px-3 py-2 text-ink-600">Yes</td>
                     <td className="border-b border-ink-100 px-3 py-2 font-mono text-xs text-ink-500">
                       {SAMPLE_VALUES[i % SAMPLE_VALUES.length]}
                     </td>
@@ -517,30 +711,74 @@ Idempotency-Key: order-12345    # optional, strongly recommended`} />
         )}
       </Section>
 
-      <Section
-        label="Request body"
-        description="One or more recipients, up to 1000 per request. Phone numbers must include the country code."
-      >
-        <Code label="json" code={bodyJson} maxHeight="max-h-64" />
-      </Section>
-
-      <Section label="Examples" description="The same request, in whichever form suits your stack.">
+      <Section label="Code examples" description="The same request in whichever form suits your stack.">
         <CodeTabs
           items={[
             { id: 'curl', label: 'cURL', code: curl },
-            { id: 'js', label: 'JavaScript', code: js },
+            { id: 'js', label: 'JavaScript', code: browserJs },
+            { id: 'node', label: 'Node.js', code: nodeJs },
             { id: 'py', label: 'Python', code: python },
-            { id: 'res', label: '202 Response', code: responseSample },
           ]}
         />
+      </Section>
+
+      <Section label="Response" description="202 Accepted. The 202 callout under the endpoint explains what that does and doesn't mean.">
+        <Code label="json" code={responseSample} maxHeight="max-h-72" />
+        <p className="mt-2 text-sm text-ink-500">
+          <code className="font-mono text-xs">requestedCount</code> is what you sent,{' '}
+          <code className="font-mono text-xs">queuedCount</code> what was accepted, and{' '}
+          <code className="font-mono text-xs">rejected</code> says which ones were dropped and why. One bad
+          number never rejects the batch.
+        </p>
+      </Section>
+
+      <Section
+        label="Idempotency"
+        description="Optional, and strongly recommended for anything triggered by your own retries."
+      >
+        <Code
+          label="http"
+          maxHeight="max-h-24"
+          code={`Idempotency-Key: order-4821`}
+        />
+        <p className="mt-2 text-sm text-ink-500">
+          Reuse the same key when retrying the <em>same</em> send — a connection that drops after we accepted
+          the request is the case this exists for, and without it the retry sends everything twice. Keys are
+          remembered for 24 hours. The same key with a different body returns{' '}
+          <code className="font-mono text-xs">422</code>, and a retry arriving while the first is still
+          processing returns <code className="font-mono text-xs">409</code>.
+        </p>
+      </Section>
+
+      <Section label="Rate limits">
+        <dl className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-ink-200 px-3 py-2.5">
+            <dt className="font-mono text-[11px] uppercase tracking-wide text-ink-400">Requests</dt>
+            <dd className="mt-0.5 text-sm text-ink-800">120 per minute, per API key</dd>
+          </div>
+          <div className="rounded-lg border border-ink-200 px-3 py-2.5">
+            <dt className="font-mono text-[11px] uppercase tracking-wide text-ink-400">Recipients</dt>
+            <dd className="mt-0.5 text-sm text-ink-800">1000 per request</dd>
+          </div>
+          <div className="rounded-lg border border-ink-200 px-3 py-2.5">
+            <dt className="font-mono text-[11px] uppercase tracking-wide text-ink-400">Send volume</dt>
+            <dd className="mt-0.5 text-sm text-ink-800">Daily and monthly caps, set in WhatsApp Settings</dd>
+          </div>
+        </dl>
+        <p className="mt-2 text-sm text-ink-500">
+          Both return <code className="font-mono text-xs">429</code>, but for different reasons: the per-minute
+          limit should be retried after a short back-off, while a send-volume refusal carries{' '}
+          <code className="font-mono text-xs">SEND_QUOTA_EXCEEDED</code> and will keep refusing until the cap
+          resets or is raised.
+        </p>
       </Section>
 
       <Section label="Errors" description="Every failure returns a status and a message you can branch on.">
         <div className="overflow-hidden rounded-lg border border-ink-200">
           <table className="w-full border-collapse text-sm">
             <tbody>
-              {ERROR_ROWS.map(([code, when, action]) => (
-                <tr key={code}>
+              {ERROR_ROWS.map(([code, when, action], i) => (
+                <tr key={`${code}-${i}`}>
                   <td className="w-16 border-b border-ink-100 px-3 py-2 font-mono text-xs font-semibold text-ink-900">{code}</td>
                   <td className="border-b border-ink-100 px-3 py-2 text-ink-700">{when}</td>
                   <td className="border-b border-ink-100 px-3 py-2 text-ink-500">{action}</td>
@@ -595,65 +833,115 @@ function RunsPanel({ campaignId }: { campaignId?: string }) {
         <Table>
           <thead>
             <Tr>
-              <Th>When</Th><Th>Status</Th><Th>Queued</Th><Th>Sent</Th><Th>Failed</Th><Th>Rejected</Th><Th>Key</Th><Th />
+              <Th>Run ID</Th><Th>Status</Th><Th>Recipients</Th><Th>Created</Th><Th>Duration</Th><Th>Key</Th><Th />
             </Tr>
           </thead>
           <tbody>
             {runs.map((run) => {
-              const pct = Math.round(runProgress(run) * 100);
+              // queuedCount 0 means nothing was ever queued, so there is no
+              // progress to report -- showing 100% there read as "finished
+              // successfully" for a run that did nothing at all.
+              const pct = run.queuedCount > 0 ? Math.round(runProgress(run) * 100) : null;
+              const duration = formatDuration(run);
               const isOpen = expanded === run.id;
+
               return (
                 <Fragment key={run.id}>
                   <Tr>
-                    <Td className="whitespace-nowrap text-ink-500">{timeAgo(run.createdAt)}</Td>
+                    <Td>
+                      <span className="font-mono text-xs font-semibold text-ink-800">{shortRunId(run.id)}</span>
+                    </Td>
+
                     <Td>
                       <div className="flex items-center gap-2">
                         <Badge tone={RUN_STATUS_TONE[run.status] ?? 'gray'}>{run.status}</Badge>
-                        {(run.status === 'RUNNING' || run.status === 'QUEUED') && (
-                          <span className="text-xs text-ink-500">{pct}%</span>
+                        {pct !== null && (run.status === 'RUNNING' || run.status === 'QUEUED') && (
+                          <span className="text-xs tabular-nums text-ink-500">{pct}%</span>
                         )}
                       </div>
                     </Td>
-                    <Td>{run.queuedCount}</Td>
-                    <Td className="text-green-700">{run.sentCount}</Td>
-                    <Td className={cn(run.failedCount > 0 && 'text-red-600')}>{run.failedCount}</Td>
-                    <Td className={cn(run.rejectedCount > 0 && 'text-amber-600')}>{run.rejectedCount}</Td>
-                    <Td><code className="text-xs text-ink-500">{run.apiKeyPrefix || '—'}</code></Td>
+
+                    {/* One column instead of four. Queued/sent/failed/rejected
+                        as separate columns made every row mostly zeros and
+                        pushed the useful ones off screen; the breakdown that
+                        matters is in the expanded view. */}
                     <Td>
-                      {(run.rejectedRecipients.length > 0 || run.failureReason) && (
-                        <button
-                          onClick={() => setExpanded(isOpen ? null : run.id)}
-                          className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700"
-                          title="Show details"
-                        >
-                          <ChevronRight size={14} className={cn('transition', isOpen && 'rotate-90')} />
-                        </button>
+                      <span className="tabular-nums text-ink-800">{run.queuedCount}</span>
+                      {run.sentCount > 0 && (
+                        <span className="ml-2 text-xs text-emerald-600">{run.sentCount} sent</span>
                       )}
+                      {run.failedCount > 0 && (
+                        <span className="ml-2 text-xs text-red-600">{run.failedCount} failed</span>
+                      )}
+                      {run.rejectedCount > 0 && (
+                        <span className="ml-2 text-xs text-amber-600">{run.rejectedCount} rejected</span>
+                      )}
+                    </Td>
+
+                    {/* title sits on the span, not the Td: the shared Td
+                        takes className and colSpan only, and widening it for
+                        one tooltip would change a component every table in
+                        the app renders through. */}
+                    <Td className="whitespace-nowrap text-ink-500">
+                      <span title={new Date(run.createdAt).toLocaleString()}>{timeAgo(run.createdAt)}</span>
+                    </Td>
+
+                    {/* Em dash, not 0s: a run that never started has no
+                        duration, and a zero would read as "finished
+                        instantly". */}
+                    <Td className="tabular-nums text-ink-500">{duration ?? '—'}</Td>
+
+                    <Td><code className="font-mono text-xs text-ink-500">{run.apiKeyPrefix || '—'}</code></Td>
+
+                    <Td>
+                      {/* Every row expands, not only failed ones: the most
+                          confusing run is the one that looks fine and isn't --
+                          queued, no worker, nothing in any error column. The
+                          lifecycle inside is what reveals it. */}
+                      <button
+                        onClick={() => setExpanded(isOpen ? null : run.id)}
+                        className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-700"
+                        title={isOpen ? 'Hide details' : 'Show details'}
+                      >
+                        <ChevronRight size={14} className={cn('transition-transform duration-150', isOpen && 'rotate-90')} />
+                      </button>
                     </Td>
                   </Tr>
 
                   {isOpen && (
                     <Tr>
-                      <Td colSpan={8}>
-                        <div className="rounded-lg bg-ink-50 p-3">
+                      <Td colSpan={7}>
+                        <div className="space-y-4 rounded-lg bg-ink-50 p-4">
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px] text-ink-500">
+                            <span className="flex items-center gap-1">
+                              run {run.id}
+                              <CopyButton value={run.id} label="" subtle />
+                            </span>
+                            {run.idempotencyKey && <span>idempotency-key {run.idempotencyKey}</span>}
+                            <span>key {run.apiKeyPrefix || '—'}</span>
+                          </div>
+
+                          <RunLifecycle run={run} />
+
                           {run.failureReason && (
-                            <p className="mb-2 text-sm text-red-700">{run.failureReason}</p>
+                            <p className="text-sm text-red-700">{run.failureReason}</p>
                           )}
+
                           {run.rejectedRecipients.length > 0 && (
-                            <>
+                            <div>
                               <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-500">
                                 Rejected before sending
                               </p>
                               <ul className="space-y-1">
                                 {run.rejectedRecipients.map((r, i) => (
                                   <li key={`${r.phone}-${i}`} className="text-sm text-ink-700">
-                                    <code className="text-xs">{r.phone || '(no phone)'}</code>
+                                    <code className="font-mono text-xs">{r.phone || '(no phone)'}</code>
                                     <span className="text-ink-400"> — </span>
                                     {r.reason}
                                   </li>
                                 ))}
                               </ul>
-                            </>
+                            </div>
                           )}
                         </div>
                       </Td>
@@ -669,6 +957,294 @@ function RunsPanel({ campaignId }: { campaignId?: string }) {
   );
 }
 
+/**
+ * RunLifecycle — where a run actually got to.
+ *
+ * Built ONLY from timestamps the run really carries (created_at, startedAt,
+ * completedAt) plus its counters. Stages the data can't prove -- "delivered to
+ * the handset", which lives in DeliveryLog and arrives by webhook -- are
+ * deliberately absent rather than shown as a guess: a timeline that invents
+ * steps is worse than a short honest one, because it gets trusted during an
+ * incident.
+ */
+function RunLifecycle({ run }: { run: CampaignRun }) {
+  const processed = run.sentCount + run.failedCount + run.skippedCount;
+
+  // A run that has sat QUEUED without a worker ever touching it is the exact
+  // failure that is invisible everywhere else: the API returned 202, the
+  // record looks fine, and nothing is wrong except that no worker is
+  // consuming. Two minutes is well past normal pickup time.
+  const isStalled =
+    run.status === 'QUEUED' &&
+    !run.startedAt &&
+    Date.now() - new Date(run.createdAt).getTime() > 2 * 60 * 1000;
+
+  const stages = [
+    {
+      label: 'Request accepted',
+      at: run.createdAt,
+      done: true,
+      detail: `${run.requestedCount} recipient${run.requestedCount === 1 ? '' : 's'} received`,
+    },
+    {
+      label: 'Recipients validated',
+      at: run.createdAt,
+      done: true,
+      detail: run.rejectedCount > 0
+        ? `${run.queuedCount} accepted, ${run.rejectedCount} rejected`
+        : `${run.queuedCount} accepted`,
+    },
+    {
+      label: 'Queued for sending',
+      at: run.createdAt,
+      done: run.queuedCount > 0,
+      detail: run.queuedCount > 0 ? 'Handed to the send queue' : 'Nothing queued',
+    },
+    {
+      label: 'Worker processing',
+      at: run.startedAt,
+      done: !!run.startedAt,
+      detail: run.startedAt ? `${processed} of ${run.queuedCount} processed` : 'Not picked up yet',
+    },
+    {
+      label: 'Sent to WhatsApp',
+      at: run.startedAt,
+      done: run.sentCount + run.failedCount > 0,
+      detail:
+        run.sentCount + run.failedCount > 0
+          ? `${run.sentCount} accepted by WhatsApp, ${run.failedCount} rejected`
+          : 'No send attempted yet',
+    },
+    {
+      label: run.status === 'FAILED' ? 'Finished with failures' : 'Finished',
+      at: run.completedAt,
+      done: !!run.completedAt,
+      detail: run.completedAt ? `${run.sentCount} sent, ${run.failedCount} failed` : 'Still running',
+    },
+  ];
+
+  return (
+    <div className="space-y-3">
+      {isStalled && (
+        <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <AlertTriangle size={15} className="mt-0.5 shrink-0 text-amber-600" />
+          <div className="text-sm text-amber-900">
+            <p className="font-medium">Queued, but no worker has picked it up</p>
+            <p className="mt-0.5">
+              The messages were accepted and queued, but nothing has processed them. This usually means the
+              worker process isn't running, or is connected to a different Redis than the API server.
+            </p>
+          </div>
+        </div>
+      )}
+
+      <ol className="space-y-0">
+        {stages.map((stage, i) => {
+          const isLast = i === stages.length - 1;
+          return (
+            <li key={stage.label} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <span
+                  className={cn(
+                    'mt-1 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2',
+                    stage.done ? 'border-emerald-500 bg-emerald-500' : 'border-ink-300 bg-white'
+                  )}
+                >
+                  {stage.done && <Check size={9} className="text-white" strokeWidth={4} />}
+                </span>
+                {!isLast && (
+                  <span className={cn('w-0.5 flex-1', stage.done ? 'bg-emerald-200' : 'bg-ink-200')} />
+                )}
+              </div>
+
+              <div className={cn('min-w-0 flex-1', isLast ? 'pb-0' : 'pb-4')}>
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className={cn('text-sm font-medium', stage.done ? 'text-ink-900' : 'text-ink-400')}>
+                    {stage.label}
+                  </span>
+                  {stage.at && (
+                    <span className="font-mono text-[11px] text-ink-400">
+                      {new Date(stage.at).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 text-xs text-ink-500">{stage.detail}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+
+      {/* Delivery deliberately is NOT a stage above.
+          "Accepted by WhatsApp" is the last thing a run knows: delivery and
+          read receipts arrive later by webhook and live on DeliveryLog, per
+          message, not on the run. Drawing a Delivered tick here would mean
+          inventing a status the run cannot confirm -- and a timeline that
+          invents steps is exactly what stops being trusted during an
+          incident. */}
+      <p className="mt-3 border-t border-ink-200 pt-3 text-xs text-ink-500">
+        Delivery and read receipts arrive separately from WhatsApp, per message — see <strong>Delivery Logs</strong>.
+      </p>
+    </div>
+  );
+}
+
+/** A single headline number. */
+function Stat({ label, value, tone }: { label: string; value: number | string; tone?: 'good' | 'bad' }) {
+  return (
+    <div className="rounded-lg border border-ink-200 bg-white px-3 py-2">
+      <p className="font-mono text-[10px] uppercase tracking-wide text-ink-400">{label}</p>
+      <p
+        className={cn(
+          'mt-0.5 text-xl font-semibold leading-tight tabular-nums',
+          tone === 'good' ? 'text-emerald-600' : tone === 'bad' ? 'text-red-600' : 'text-ink-900'
+        )}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * OverviewPanel — what the campaign has actually done, and what to do next.
+ *
+ * Counts come from the runs this page already loads rather than a new
+ * endpoint: "requests" is a number only the run history knows, and deriving it
+ * here keeps it consistent with the Logs tab instead of drifting from it.
+ */
+function OverviewPanel({
+  campaign, templateBody, onGoToReference,
+}: { campaign: WhatsAppCampaign; templateBody: string; onGoToReference: () => void }) {
+  const [runs, setRuns] = useState<CampaignRun[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await apiCampaignsApi.listRuns({ campaignId: campaign.id, limit: 100 });
+        if (!cancelled) setRuns(result.runs);
+      } catch {
+        // The stats are a convenience; the tab still works without them and
+        // the Logs tab will surface the same failure with a toast.
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [campaign.id]);
+
+  const totals = useMemo(() => runs.reduce(
+    (acc, r) => ({
+      requests: acc.requests + 1,
+      messages: acc.messages + r.queuedCount,
+      sent: acc.sent + r.sentCount,
+      failed: acc.failed + r.failedCount,
+      rejected: acc.rejected + r.rejectedCount,
+    }),
+    { requests: 0, messages: 0, sent: 0, failed: 0, rejected: 0 }
+  ), [runs]);
+
+  const placeholders = useMemo(() => placeholdersOf(templateBody), [templateBody]);
+  const lastRun = runs[0];
+
+  return (
+    <div className="space-y-4">
+      <section>
+        <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-brand-600">
+          Activity
+        </p>
+        <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="API requests" value={loading ? '—' : totals.requests} />
+          <Stat label="Messages queued" value={loading ? '—' : totals.messages} />
+          <Stat label="Sent" value={loading ? '—' : totals.sent} tone={totals.sent > 0 ? 'good' : undefined} />
+          <Stat
+            label="Failed"
+            value={loading ? '—' : totals.failed + totals.rejected}
+            tone={totals.failed + totals.rejected > 0 ? 'bad' : undefined}
+          />
+        </div>
+      </section>
+
+      <Section label="Configuration">
+        <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-500">Template</dt>
+            <dd className="mt-1 font-mono text-sm text-ink-800">{campaign.templateName || '—'}</dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-500">Variables required</dt>
+            <dd className="mt-1 text-sm text-ink-800">
+              {placeholders.length === 0
+                ? 'None — send just a phone number'
+                : placeholders.map((ph) => `{{${ph}}}`).join(', ')}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-500">Audience</dt>
+            <dd className="mt-1 text-sm text-ink-800">
+              Supplied per request — this campaign has no saved audience
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs font-semibold uppercase tracking-wide text-ink-500">Campaign ID</dt>
+            <dd className="mt-1 flex items-center gap-2">
+              <code className="font-mono text-xs text-ink-700">{campaign.id}</code>
+              <CopyButton value={campaign.id} label="" subtle />
+            </dd>
+          </div>
+        </dl>
+      </Section>
+
+      {lastRun && (
+        <Section label="Most recent run">
+          {/* Boxed, with its own header row. Unboxed, the timeline ran
+              straight off the bottom of the page and looked like content that
+              had been cut off rather than a finished block. */}
+          <div className="overflow-hidden rounded-lg border border-ink-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-ink-100 bg-ink-50/60 px-4 py-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-xs font-semibold text-ink-800">{shortRunId(lastRun.id)}</span>
+                <Badge tone={RUN_STATUS_TONE[lastRun.status] ?? 'gray'}>{lastRun.status}</Badge>
+              </div>
+              <div className="flex flex-wrap items-center gap-x-2 text-xs text-ink-500">
+                <span>{timeAgo(lastRun.createdAt)}</span>
+                {formatDuration(lastRun) && (
+                  <>
+                    <span className="text-ink-300">·</span>
+                    <span>took {formatDuration(lastRun)}</span>
+                  </>
+                )}
+                <span className="text-ink-300">·</span>
+                <code className="font-mono">{lastRun.apiKeyPrefix || '—'}</code>
+              </div>
+            </div>
+
+            <div className="px-4 py-3">
+              <RunLifecycle run={lastRun} />
+            </div>
+          </div>
+        </Section>
+      )}
+
+      {!loading && runs.length === 0 && (
+        <Section label="Next step">
+          <div className="rounded-lg border border-ink-200 bg-ink-50 p-4">
+            <p className="text-sm text-ink-700">
+              This campaign hasn't been triggered yet. The API Reference tab has the endpoint, your headers and
+              a ready-to-paste cURL command.
+            </p>
+            <Button className="mt-3" onClick={onGoToReference}>
+              <Terminal size={15} /> Open API Reference
+            </Button>
+          </div>
+        </Section>
+      )}
+    </div>
+  );
+}
+
 // ── Main tab ────────────────────────────────────────────────────────────────
 
 export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
@@ -676,7 +1252,7 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<WhatsAppCampaign | null>(null);
   const [view, setView] = useState<'list' | 'keys'>('list');
-  const [detailTab, setDetailTab] = useState('integration');
+  const [detailTab, setDetailTab] = useState('overview');
 
   const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({ name: '', templateId: '' });
@@ -775,6 +1351,25 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  // Last activity comes from the newest run, not from the campaign record --
+  // the campaign has no "last triggered" field, and inventing one would mean a
+  // second write on every send for something the runs already know.
+  const [lastActivityAt, setLastActivityAt] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selected) { setLastActivityAt(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await apiCampaignsApi.listRuns({ campaignId: selected.id, limit: 1 });
+        if (!cancelled) setLastActivityAt(result.runs[0]?.createdAt ?? null);
+      } catch {
+        // Header detail only -- its absence must not break the page.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selected]);
+
   const selectedTemplateBody = useMemo(() => {
     if (!selected) return '';
     const tpl = templates.find((t) => t.id === String(selected.templateId));
@@ -787,33 +1382,48 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
 
     return (
       <div className="space-y-4">
-        {/* Header is plain markup rather than a Card: on a documentation page
-            the title should introduce the content below it, not sit in a
-            container that competes with the sections it introduces. */}
-        <div className="flex flex-wrap items-start justify-between gap-3">
+        {/* Compact header. Everything a glance should answer -- is it live,
+            which template, how much has it sent, when was it last used -- on
+            one line under the title, instead of spread down the page in its
+            own card. */}
+        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
           <div className="min-w-0">
-            <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-400">
-              API Campaign
-            </p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-bold text-ink-900">{selected.name}</h2>
-              <Badge tone={selected.status === 'ACTIVE' ? 'green' : selected.status === 'PAUSED' ? 'amber' : 'gray'}>{isLive ? 'Live' : selected.status}</Badge>
+            <button
+              type="button"
+              onClick={() => setSelected(null)}
+              className="-ml-1 mb-0.5 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800"
+            >
+              <ChevronLeft size={13} /> API Campaigns
+            </button>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-lg font-bold text-ink-900">{selected.name}</h2>
+              <Badge tone={selected.status === 'ACTIVE' ? 'green' : selected.status === 'PAUSED' ? 'amber' : 'gray'}>
+                {STATUS_LABEL[selected.status] ?? selected.status}
+              </Badge>
             </div>
-            <p className="mt-1 max-w-2xl text-sm text-ink-500">
-              Trigger this WhatsApp campaign programmatically from your website, app or backend.
-              {selected.templateName && (
-                <> Sends the <code className="font-mono text-xs text-ink-700">{selected.templateName}</code> template.</>
+
+            {/* Separated by dots rather than boxed into stat cards: these are
+                four small facts, and four cards would take a third of the
+                viewport to say what one line says. */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-ink-500">
+              <span className="font-mono text-xs text-ink-700">{selected.templateName || 'no template'}</span>
+              <span className="text-ink-300">·</span>
+              <span>{selected.metrics?.sentCount ?? 0} sent</span>
+              <span className="text-ink-300">·</span>
+              <span className={cn((selected.metrics?.failedCount ?? 0) > 0 && 'text-red-600')}>
+                {selected.metrics?.failedCount ?? 0} failed
+              </span>
+              {lastActivityAt && (
+                <>
+                  <span className="text-ink-300">·</span>
+                  <span>last triggered {timeAgo(lastActivityAt)}</span>
+                </>
               )}
-            </p>
-            <p className="mt-1.5 text-xs text-ink-400">
-              {selected.metrics?.sentCount ?? 0} sent · {selected.metrics?.failedCount ?? 0} failed, all time
-            </p>
+            </div>
           </div>
 
           <div className="flex shrink-0 items-center gap-2">
-            <Button variant="secondary" onClick={() => setSelected(null)}>
-              <ChevronLeft size={15} /> All API campaigns
-            </Button>
             {selected.status === 'ACTIVE' ? (
               <Button variant="secondary" onClick={() => void setLive(selected, false)}>
                 <PauseIcon size={14} /> Pause
@@ -821,7 +1431,7 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
             ) : selected.status === 'PAUSED' ? (
               <Button onClick={() => void setLive(selected, true)}><PlayIcon size={14} /> Resume</Button>
             ) : (
-              <Button onClick={() => void setLive(selected, true)}>Activate API campaign</Button>
+              <Button onClick={() => void setLive(selected, true)}>Activate</Button>
             )}
             <Button variant="secondary" onClick={() => setConfirmDelete(selected)} title="Delete campaign">
               <Trash2 size={14} />
@@ -840,15 +1450,25 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
           </div>
         )}
 
-        <Tabs
-          tabs={[{ id: 'integration', label: 'Integration' }, { id: 'runs', label: 'Runs' }]}
+        <SubTabs
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'reference', label: 'API Reference' },
+            { id: 'logs', label: 'Runs & Logs' },
+          ]}
           active={detailTab}
           onChange={setDetailTab}
         />
 
-        {detailTab === 'integration'
-          ? <IntegrationDocs campaign={selected} templateBody={selectedTemplateBody} />
-          : <RunsPanel campaignId={selected.id} />}
+        {detailTab === 'overview' && (
+          <OverviewPanel
+            campaign={selected}
+            templateBody={selectedTemplateBody}
+            onGoToReference={() => setDetailTab('reference')}
+          />
+        )}
+        {detailTab === 'reference' && <IntegrationDocs campaign={selected} templateBody={selectedTemplateBody} />}
+        {detailTab === 'logs' && <RunsPanel campaignId={selected.id} />}
 
         <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete this API campaign?">
           <p className="text-sm text-ink-600">
@@ -867,28 +1487,41 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
   // ── List view ─────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader
-          icon={<Terminal size={18} />}
-          title="API Campaigns"
-          subtitle="Campaigns your own systems trigger over HTTP. Each call supplies its own recipients and variables."
-          action={
-            <>
-              {/* Same affordance as the Campaigns tab: this view is reached
-                  from the chooser, so it needs a way back to it. */}
-              {onBack && (
-                <Button variant="secondary" onClick={onBack} title="Back to campaign types">
-                  <ChevronLeft size={16} /> All campaign types
-                </Button>
-              )}
-              <Button variant={view === 'keys' ? 'primary' : 'secondary'} onClick={() => setView(view === 'keys' ? 'list' : 'keys')}>
-                <KeyRound size={16} /> API keys
-              </Button>
-              <Button onClick={() => setShowCreate(true)}><Plus size={16} /> Create API campaign</Button>
-            </>
-          }
-        />
-      </Card>
+      {/* Header is plain markup, not a Card: three buttons crammed into a
+          CardHeader's action slot were wrapping onto two lines, and the middle
+          one ("API keys") was a toggle that swapped the page under you with no
+          indication of where you were. Navigation belongs in tabs; the header
+          keeps only the title and the one primary action. */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="-ml-1 mb-1 inline-flex items-center gap-1 rounded-md px-1 py-0.5 text-xs font-medium text-ink-500 transition-colors hover:bg-ink-100 hover:text-ink-800"
+            >
+              <ChevronLeft size={13} /> All campaign types
+            </button>
+          )}
+          <h2 className="text-xl font-bold text-ink-900">API Campaigns</h2>
+          <p className="mt-0.5 max-w-2xl text-sm text-ink-500">
+            Campaigns your own systems trigger over HTTP. Each call supplies its own recipients and variables.
+          </p>
+        </div>
+
+        <Button className="shrink-0 whitespace-nowrap" onClick={() => setShowCreate(true)}>
+          <Plus size={16} /> Create API campaign
+        </Button>
+      </div>
+
+      <SubTabs
+        tabs={[
+          { id: 'list', label: 'Campaigns', count: campaigns.length },
+          { id: 'keys', label: 'API keys' },
+        ]}
+        active={view}
+        onChange={(id) => setView(id as 'list' | 'keys')}
+      />
 
       {view === 'keys' ? (
         <ApiKeysPanel />
@@ -922,7 +1555,7 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
                   <Td>{c.metrics?.sentCount ?? 0}</Td>
                   <Td className={cn((c.metrics?.failedCount ?? 0) > 0 && 'text-red-600')}>{c.metrics?.failedCount ?? 0}</Td>
                   <Td>
-                    <Button variant="secondary" onClick={() => { setSelected(c); setDetailTab('integration'); }}>
+                    <Button variant="secondary" onClick={() => { setSelected(c); setDetailTab('overview'); }}>
                       Integration <ChevronRight size={14} />
                     </Button>
                   </Td>

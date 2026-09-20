@@ -102,5 +102,11 @@ const campaignRunSchema = new Schema(
 // "Recent runs" for one campaign, newest first — the dashboard's main query.
 campaignRunSchema.index({ tenantId: 1, campaignId: 1, created_at: -1 });
 
+// Tenant-wide runs in a date window. Used by the monthly send cap, which runs
+// on every API trigger: without this, that query would fall back to the index
+// above and scan every run the tenant has ever made, on the hot path of the
+// public API.
+campaignRunSchema.index({ tenantId: 1, created_at: -1 });
+
 export const CampaignRun = mongoose.model('CampaignRun', campaignRunSchema);
 export default CampaignRun;

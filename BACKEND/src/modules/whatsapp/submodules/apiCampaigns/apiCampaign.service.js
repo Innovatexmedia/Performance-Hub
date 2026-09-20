@@ -31,6 +31,7 @@ import { leadRepository } from '../../../leads/lead/lead.repository.js';
 import { enqueueCampaignSend } from '../../../../queues/campaignSend.queue.js';
 import { AppError } from '../../../../shared/helpers/lead.helpers.js';
 
+import { whatsappSettingsService } from '../whatsappSettings/whatsappSettings.service.js';
 import { CampaignRun, RUN_STATUS, RUN_SOURCE } from './campaignRun.model.js';
 import { IdempotencyRecord } from './idempotencyRecord.model.js';
 
@@ -66,6 +67,38 @@ export function normalisePhone(raw) {
 
 const hashRequest = (body) =>
   crypto.createHash('sha256').update(JSON.stringify(body ?? {})).digest('hex');
+
+/** UTC, not local: the server's timezone must not decide when a tenant's
+ *  allowance resets, and UTC is what every other window in this codebase
+ *  uses. */
+const startOfUtcDay = () => {
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+};
+
+const startOfUtcMonth = () => {
+  const d = startOfUtcDay();
+  d.setUTCDate(1);
+  return d;
+};
+
+/**
+ * countApiMessagesSince — messages this tenant has queued through the API
+ * since `since`.
+ *
+ * Sums CampaignRun.queuedCount rather than counting Message documents: one
+ * document per API call instead of one per message, backed by the
+ * { tenantId, created_at } index, and it measures exactly what is capped —
+ * what the API accepted. Dashboard sending deliberately does not count.
+ */
+const countApiMessagesSince = async (tenantId, since) => {
+  const [agg] = await CampaignRun.aggregate([
+    { $match: { tenantId: String(tenantId), source: RUN_SOURCE.API, created_at: { $gte: since } } },
+    { $group: { _id: null, used: { $sum: '$queuedCount' } } },
+  ]);
+  return agg?.used ?? 0;
+};
 
 export const apiCampaignService = {
   /**
@@ -114,6 +147,81 @@ export const apiCampaignService = {
     }
 
     return { campaign, template };
+  },
+
+  /**
+   * assertSendQuota — caps how much a tenant can send through the API in a
+   * calendar month.
+   *
+   * WHY THIS EXISTS ONLY ON THE API PATH
+   * ────────────────────────────────────
+   * Message volume has never been capped anywhere in this codebase, on any
+   * path, and adding a cap to dashboard sending would change behaviour for
+   * every existing tenant without warning. The API is different in kind, not
+   * degree: a person clicking Send is self-limiting, while a script can issue
+   * 120 requests a minute carrying 1000 recipients each. A single buggy
+   * integration — a retry loop, a webhook fired per order-status change — can
+   * run up a tenant's Meta bill and saturate the shared queue before anyone
+   * notices. The cap is a blast radius, not a pricing mechanism.
+   *
+   * It reads whatsappSettings.monthlyMessages, which already exists, is
+   * already per-tenant and already shown in the UI — it was simply never
+   * enforced. No new configuration to set, and a tenant who needs more has a
+   * field to raise.
+   *
+   * Counted from CampaignRun.queuedCount rather than the Message collection:
+   * one document per API call instead of one per message, and it measures
+   * exactly what is being capped (what the API accepted). Messages sent from
+   * the dashboard deliberately do not count against it.
+   */
+  async assertSendQuota(ctx, incomingCount) {
+    let limits = null;
+    try {
+      const settings = await whatsappSettingsService.getSettings(ctx);
+      limits = settings?.limits ?? null;
+    } catch {
+      // Settings unreadable — fail OPEN. A safety cap must never be the reason
+      // a paying tenant's order confirmations stop going out.
+      return null;
+    }
+
+    if (!limits) return null;
+
+    // Daily first. It is the one that actually contains a runaway script: a
+    // monthly cap alone lets a retry loop burn the entire month's allowance
+    // in an afternoon, which is the failure this is here to prevent. Both
+    // fields already exist on WhatsAppSettings with sensible defaults (1000 /
+    // 30000) and are editable per tenant — they were simply never enforced.
+    const windows = [
+      { key: 'dailyMessages', limit: Number(limits.dailyMessages ?? 0), label: 'daily', start: startOfUtcDay(), resets: 'at midnight UTC' },
+      { key: 'monthlyMessages', limit: Number(limits.monthlyMessages ?? 0), label: 'monthly', start: startOfUtcMonth(), resets: 'on the 1st' },
+    ];
+
+    for (const window of windows) {
+      if (!window.limit || window.limit <= 0) continue; // 0 means unlimited
+
+      const used = await countApiMessagesSince(ctx.tenantId, window.start);
+
+      if (used + incomingCount > window.limit) {
+        const remaining = Math.max(window.limit - used, 0);
+        const err = new AppError(
+          429,
+          `This request would exceed your ${window.label} API send limit of ${window.limit} messages. ` +
+          `${used} used, ${remaining} remaining, ${incomingCount} requested. ` +
+          `The limit resets ${window.resets}, and can be raised in WhatsApp Settings.`
+        );
+        // A stable code so an integration can tell a quota refusal (wait, or
+        // raise the limit) from the per-minute rate limit (retry shortly).
+        err.code = 'SEND_QUOTA_EXCEEDED';
+        err.scope = window.label;
+        err.limit = window.limit;
+        err.used = used;
+        err.remaining = remaining;
+        throw err;
+      }
+    }
+
+    return null;
   },
 
   /**
@@ -286,6 +394,14 @@ export const apiCampaignService = {
 
     const { campaign, template } = await this.assertTriggerable(ctx, campaignId);
     const { accepted, rejected } = this.validateRecipients(recipients, template);
+
+    // Checked on `accepted`, not on the raw request: a recipient rejected for
+    // a bad phone number never costs a message, so it must not cost quota
+    // either. Checked BEFORE the run is created so a refused request leaves
+    // no half-finished run behind.
+    if (accepted.length > 0) {
+      await this.assertSendQuota(ctx, accepted.length);
+    }
 
     const run = await CampaignRun.create({
       tenantId:       String(ctx.tenantId),
