@@ -201,6 +201,8 @@ app.get('/', (req, res) => {
 app.get('/__marker_appjs_direct__', (req, res) => res.json({ marker: 'this app.js is running', mountLine: 'about to mount /api/v1' }));
 
 app.use('/api/v1', publicApiRoutes);
+console.log('[boot] publicApiRoutes typeof:', typeof publicApiRoutes, '-- is a function (Express router):', typeof publicApiRoutes === 'function');
+console.log('[boot] apiCampaignRoutes typeof:', typeof apiCampaignRoutes, '-- same reference as publicApiRoutes?', publicApiRoutes === apiCampaignRoutes);
 
 // Boot-time proof of what the public API router actually contains. Added
 // while diagnosing a production-only 404 on /api/v1 where the same commit
