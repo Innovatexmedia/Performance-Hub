@@ -196,6 +196,20 @@ app.get('/', (req, res) => {
 // other out of an API they pay for.
 app.use('/api/v1', publicApiRoutes);
 
+// Boot-time proof of what the public API router actually contains. Added
+// while diagnosing a production-only 404 on /api/v1 where the same commit
+// served the route locally: a request with a VALID key still fell through to
+// notFoundHandler, which only happens if the router mounted here has no
+// matching layer. This prints how many layers it has and their paths, so the
+// deployed process can be checked directly from its own logs.
+{
+  const layers = publicApiRoutes?.stack ?? [];
+  const paths = layers
+    .map((l) => (l.route ? `${Object.keys(l.route.methods).join(',').toUpperCase()} ${l.route.path}` : `use:${l.name}`))
+    .join(' | ');
+  console.log(`[boot] /api/v1 router: ${layers.length} layer(s) -- ${paths || '(none)'}`);
+}
+
 app.use('/api', generalApiRateLimit);
 
 /*
