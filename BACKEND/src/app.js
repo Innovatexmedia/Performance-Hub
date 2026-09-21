@@ -194,6 +194,12 @@ app.get('/', (req, res) => {
 // IP-keyed limit too would mean one customer's serverless platform, or two
 // customers behind one NAT, could exhaust a shared budget and rate-limit each
 // other out of an API they pay for.
+// Standalone marker, defined directly in app.js with no router import at
+// all. If THIS 404s in production while other routes work, the deployed
+// process is not running this file -- full stop, nothing left to check in
+// the route modules.
+app.get('/__marker_appjs_direct__', (req, res) => res.json({ marker: 'this app.js is running', mountLine: 'about to mount /api/v1' }));
+
 app.use('/api/v1', publicApiRoutes);
 
 // Boot-time proof of what the public API router actually contains. Added
