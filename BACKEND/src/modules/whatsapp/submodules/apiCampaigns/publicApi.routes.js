@@ -1,30 +1,73 @@
 /**
- * API Campaign — dashboard routes (JWT-authenticated).
+ * Public API — /api/v1/**
  *
- * Mount at: app.use('/api/whatsapp/campaign-runs', apiCampaignRoutes)
+ * The ONLY externally-callable surface. Separate from the dashboard routes on
+ * purpose:
+ *   - different authentication (API key, never a JWT or cookie)
+ *   - different rate limit (per key, not per IP)
+ *   - a versioned path, so this contract can be kept stable for customers
+ *     whose code we don't control, while internal routes keep changing freely
  *
- * Read-only. Creating and configuring an API campaign goes through the
- * EXISTING campaign endpoints (/api/whatsapp/campaigns) with type: 'API' —
- * there is no separate creation path, because an API campaign is an ordinary
- * campaign with a different trigger, not a different entity.
+ * Nothing here touches Meta directly. The controller validates, records a run
+ * and enqueues; the existing worker does the sending. Meta credentials are
+ * resolved server-side inside the provider, exactly as for dashboard sends,
+ * and never travel anywhere near this layer.
  */
 
 import { Router } from 'express';
 
-import { authenticate } from '../../../../shared/middlewares/auth.middleware.js';
-import { resolveTenant } from '../../../../shared/middlewares/tenant.middleware.js';
+import { authenticateApiKey, requireScope } from '../../../../shared/middlewares/apiKeyAuth.middleware.js';
+import { publicApiRateLimit } from '../../../../shared/middlewares/rateLimit.middleware.js';
+import { API_KEY_SCOPE } from '../../../apiKeys/apiKey.model.js';
 import * as controller from './apiCampaign.controller.js';
 
 const router = Router();
 
-// Literal paths first: '/:runId' would otherwise swallow every one of them.
-router.get('/api-base', authenticate, controller.getPublicApiBase);
+// TEMP MARKER — proves this exact file is the one mounted at /api/v1.
+// No auth, no params: if this 404s while other /api/v1 routes exist, the
+// module loaded here is not this file. Remove once the mismatch is found.
+router.get('/__marker_publicapi__', (req, res) => res.json({ marker: 'publicApi.routes.js is loaded' }));
 
-// Lifecycle next, same reason.
-router.post('/campaigns/:campaignId/activate', authenticate, resolveTenant, controller.activateCampaign);
-router.post('/campaigns/:campaignId/pause',    authenticate, resolveTenant, controller.pauseCampaign);
+// Order matters: authenticate first so the limiter can key on the resolved
+// API key rather than on an IP.
+router.use(authenticateApiKey);
+router.use(publicApiRateLimit);
 
-router.get('/', authenticate, resolveTenant, controller.listRuns);
-router.get('/:runId', authenticate, resolveTenant, controller.getRun);
+/**
+ * POST /api/v1/campaigns/:campaignId/trigger
+ *
+ * Body:
+ *   {
+ *     "recipients": [
+ *       { "phone": "919XXXXXXXXX", "name": "Ravi", "variables": { "1": "Ravi", "2": "ORD123" } }
+ *     ]
+ *   }
+ *
+ * Headers:
+ *   Authorization: Bearer ixk_live_...   (or X-API-Key)
+ *   Idempotency-Key: <unique per request>  (optional, strongly recommended)
+ *
+ * Returns 202 Accepted — the messages have been queued, not yet delivered.
+ * 200 would claim more than we know.
+ */
+router.post(
+  '/campaigns/:campaignId/trigger',
+  requireScope(API_KEY_SCOPE.CAMPAIGNS_SEND),
+  controller.triggerCampaign
+);
+
+/**
+ * Convenience alias taking campaignId in the body instead of the path. Some
+ * no-code tools (Zapier-style builders) can only issue a request to a fixed
+ * URL, so requiring the id in the path would lock them out.
+ */
+router.post(
+  '/campaigns/send',
+  requireScope(API_KEY_SCOPE.CAMPAIGNS_SEND),
+  controller.triggerCampaignFromBody
+);
+
+/** GET /api/v1/campaigns/runs/:runId — poll a run's progress. */
+router.get('/campaigns/runs/:runId', controller.getRunPublic);
 
 export default router;
