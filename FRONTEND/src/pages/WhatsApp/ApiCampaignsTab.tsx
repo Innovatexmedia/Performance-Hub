@@ -137,10 +137,22 @@ const ERROR_ROWS: [string, string, string][] = [
  * other dialog in the app exactly as it was.
  */
 const API_DIALOG = cn(
-  'bg-[#16100d] text-ink-300 ring-1 ring-white/10',
+  // color-scheme: dark is what fixes native controls. A <select>'s open list
+  // is drawn by the browser/OS, not by CSS -- styling the select's text light
+  // left that list white with light-grey options on it. This tells the browser
+  // to render its own widgets (dropdowns, scrollbars, date pickers) dark.
+  'bg-[#16100d] text-ink-300 ring-1 ring-white/10 [color-scheme:dark]',
   '[&_h2]:text-white [&_strong]:text-ink-100',
   '[&_.label]:text-ink-300',
   '[&_.input]:border-white/15 [&_.input]:bg-white/[0.04] [&_.input]:text-ink-100 [&_.input]:placeholder-ink-500',
+  // Native dropdown list. color-scheme on an ancestor was not enough: the
+  // list is drawn from the <select>'s OWN computed styles, and index.css
+  // pins :root to color-scheme: light. So it goes on the select itself, and
+  // the options get an explicit colour pair -- Chrome and Edge both honour
+  // option background and text colour, which the ancestor approach relied on
+  // the browser to infer.
+  '[&_select]:[color-scheme:dark]',
+  '[&_option]:bg-[#1f1814] [&_option]:text-ink-100',
   '[&_.btn-secondary]:border-white/15 [&_.btn-secondary]:bg-white/[0.06] [&_.btn-secondary]:text-ink-100',
   '[&_.btn-secondary:hover]:bg-white/[0.12] [&_.btn-secondary:hover]:text-white',
   // The dialog's own header divider and close button.
@@ -155,7 +167,9 @@ const API_SURFACE = cn(
   // -mr matches the extra right padding WhatsAppPanel reserves for the
   // floating Exit control.
   '-m-4 -mr-12 min-h-full p-5 lg:-m-6 lg:-mr-14 lg:p-6',
-  'bg-[#16100d] text-ink-300',
+  // Same reason as API_DIALOG: native scrollbars and any select in the
+  // section itself should render dark too.
+  'bg-[#16100d] text-ink-300 [color-scheme:dark]',
   // Cards become translucent panels on the tint instead of solid white.
   '[&_.card]:border-white/10 [&_.card]:bg-white/[0.03] [&_.card]:shadow-none',
   // Tables: header band, hairline rows, readable body text.
@@ -174,6 +188,7 @@ const API_SURFACE = cn(
   '[&_.btn-ghost]:text-ink-300 [&_.btn-ghost:hover]:bg-white/10 [&_.btn-ghost:hover]:text-white',
   // Inputs and selects inside the surface's dialogs-in-place.
   '[&_.input]:border-white/15 [&_.input]:bg-white/[0.04] [&_.input]:text-ink-100',
+  '[&_select]:[color-scheme:dark] [&_option]:bg-[#1f1814] [&_option]:text-ink-100',
   '[&_.label]:text-ink-300',
 );
 
