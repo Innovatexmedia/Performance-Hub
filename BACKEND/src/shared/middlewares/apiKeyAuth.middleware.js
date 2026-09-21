@@ -1,27 +1,3 @@
-/**
- * authenticateApiKey — authentication for the PUBLIC API (/api/v1/**).
- *
- * The dashboard authenticates with a short-lived JWT in an Authorization
- * header plus a refresh cookie. A server-to-server caller can do neither: it
- * has no browser, no cookie jar, and no way to run a refresh loop. So the
- * public API authenticates with a long-lived API key instead.
- *
- * WHAT THIS DELIBERATELY SHARES WITH JWT AUTH
- * ───────────────────────────────────────────
- * It populates `req.user` with the SAME shape auth.middleware.js produces
- * ({ sub, tenantId, role, permissions }). Every downstream service reads
- * ctx.tenantId from there, so tenant isolation is enforced by the code that
- * already exists rather than by a parallel set of checks that could drift out
- * of sync with it. `req.apiKey` is added for logging and run attribution.
- *
- * WHAT IT DELIBERATELY DOES NOT DO
- * ────────────────────────────────
- * It never touches cookies, never issues tokens, and never falls back to JWT.
- * A route is either public-API or dashboard, never quietly both — an endpoint
- * that accepts either is an endpoint where a CSRF bug in one half becomes a
- * hole in the other.
- */
-
 import { apiKeyService } from '../../modules/apiKeys/apiKey.service.js';
 import { ROLES } from '../../modules/auth/constants/roles.js';
 
@@ -45,7 +21,6 @@ function extractApiKey(req) {
 }
 
 export const authenticateApiKey = async (req, res, next) => {
-  console.log('[MARKER] authenticateApiKey middleware reached for', req.method, req.originalUrl);
   const presented = extractApiKey(req);
 
   if (!presented) {

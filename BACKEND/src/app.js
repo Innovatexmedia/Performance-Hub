@@ -194,29 +194,7 @@ app.get('/', (req, res) => {
 // IP-keyed limit too would mean one customer's serverless platform, or two
 // customers behind one NAT, could exhaust a shared budget and rate-limit each
 // other out of an API they pay for.
-// Standalone marker, defined directly in app.js with no router import at
-// all. If THIS 404s in production while other routes work, the deployed
-// process is not running this file -- full stop, nothing left to check in
-// the route modules.
-app.get('/__marker_appjs_direct__', (req, res) => res.json({ marker: 'this app.js is running', mountLine: 'about to mount /api/v1' }));
-
 app.use('/api/v1', publicApiRoutes);
-console.log('[boot] publicApiRoutes typeof:', typeof publicApiRoutes, '-- is a function (Express router):', typeof publicApiRoutes === 'function');
-console.log('[boot] apiCampaignRoutes typeof:', typeof apiCampaignRoutes, '-- same reference as publicApiRoutes?', publicApiRoutes === apiCampaignRoutes);
-
-// Boot-time proof of what the public API router actually contains. Added
-// while diagnosing a production-only 404 on /api/v1 where the same commit
-// served the route locally: a request with a VALID key still fell through to
-// notFoundHandler, which only happens if the router mounted here has no
-// matching layer. This prints how many layers it has and their paths, so the
-// deployed process can be checked directly from its own logs.
-{
-  const layers = publicApiRoutes?.stack ?? [];
-  const paths = layers
-    .map((l) => (l.route ? `${Object.keys(l.route.methods).join(',').toUpperCase()} ${l.route.path}` : `use:${l.name}`))
-    .join(' | ');
-  console.log(`[boot] /api/v1 router: ${layers.length} layer(s) -- ${paths || '(none)'}`);
-}
 
 app.use('/api', generalApiRateLimit);
 

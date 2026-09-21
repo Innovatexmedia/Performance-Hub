@@ -23,11 +23,6 @@ import * as controller from './apiCampaign.controller.js';
 
 const router = Router();
 
-// TEMP MARKER — proves this exact file is the one mounted at /api/v1.
-// No auth, no params: if this 404s while other /api/v1 routes exist, the
-// module loaded here is not this file. Remove once the mismatch is found.
-router.get('/__marker_publicapi__', (req, res) => res.json({ marker: 'publicApi.routes.js is loaded' }));
-
 // Order matters: authenticate first so the limiter can key on the resolved
 // API key rather than on an IP.
 router.use(authenticateApiKey);
