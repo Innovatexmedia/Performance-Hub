@@ -128,6 +128,26 @@ const ERROR_ROWS: [string, string, string][] = [
  * deliberate surface rather than as the light UI with the lights switched
  * off, and it stays distinct from the app's own blue-grey ink palette.
  */
+/**
+ * API_DIALOG — the dark panel for dialogs opened from this section.
+ *
+ * Dialogs portal to document.body, so they sit outside the section's own
+ * surface and can't inherit it: every one of them opened as a white card on
+ * top of a dark page. Passed via Modal's surfaceClassName, which leaves every
+ * other dialog in the app exactly as it was.
+ */
+const API_DIALOG = cn(
+  'bg-[#16100d] text-ink-300 ring-1 ring-white/10',
+  '[&_h2]:text-white [&_strong]:text-ink-100',
+  '[&_.label]:text-ink-300',
+  '[&_.input]:border-white/15 [&_.input]:bg-white/[0.04] [&_.input]:text-ink-100 [&_.input]:placeholder-ink-500',
+  '[&_.btn-secondary]:border-white/15 [&_.btn-secondary]:bg-white/[0.06] [&_.btn-secondary]:text-ink-100',
+  '[&_.btn-secondary:hover]:bg-white/[0.12] [&_.btn-secondary:hover]:text-white',
+  // The dialog's own header divider and close button.
+  '[&>div]:border-white/10',
+  '[&_.modal-close:hover]:bg-white/10 [&_.modal-close:hover]:text-white',
+);
+
 const API_SURFACE = cn(
   // Negative margins cancel the panel's own padding so the tint runs edge to
   // edge. Inset, it read as a dark card dropped onto a light page -- the light
@@ -575,7 +595,7 @@ function ApiKeysPanel() {
         </Table>
       )}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="New API key">
+      <Modal surfaceClassName={API_DIALOG} open={showCreate} onClose={() => setShowCreate(false)} title="New API key">
         <Field label="Name">
           <Input
             value={name}
@@ -584,7 +604,7 @@ function ApiKeysPanel() {
             autoFocus
           />
         </Field>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-2 text-xs text-ink-400">
           Name it after the system that will use it. When something goes wrong, this is how you know which
           integration to look at — and which key is safe to revoke.
         </p>
@@ -596,7 +616,7 @@ function ApiKeysPanel() {
 
       {/* Not dismissible by clicking away: closing this dialog destroys the
           only copy of the secret, so it takes a deliberate button press. */}
-      <Modal open={!!justCreated} onClose={() => { /* intentionally inert */ }} title="Copy your API key now">
+      <Modal surfaceClassName={API_DIALOG} open={!!justCreated} onClose={() => { /* intentionally inert */ }} title="Copy your API key now">
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
           <div className="flex gap-2">
             <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-400" />
@@ -608,7 +628,7 @@ function ApiKeysPanel() {
         </div>
 
         <div className="mt-3 flex items-center gap-2">
-          <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 font-mono text-xs text-ink-100">
+          <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-emerald-300">
             {justCreated?.key}
           </code>
           <CopyButton value={justCreated?.key ?? ''} />
@@ -619,7 +639,7 @@ function ApiKeysPanel() {
         </div>
       </Modal>
 
-      <Modal open={!!confirmRevoke} onClose={() => setConfirmRevoke(null)} title="Revoke this API key?">
+      <Modal surfaceClassName={API_DIALOG} open={!!confirmRevoke} onClose={() => setConfirmRevoke(null)} title="Revoke this API key?">
         <p className="text-sm text-ink-600">
           Any application still using <code className="text-xs">{confirmRevoke?.prefix}…</code> will start
           getting 401 errors immediately. This cannot be undone — you'd need to create a new key and update
@@ -1668,8 +1688,8 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
         {detailTab === 'reference' && <IntegrationDocs campaign={selected} templateBody={selectedTemplateBody} />}
         {detailTab === 'logs' && <RunsPanel campaignId={selected.id} />}
 
-        <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete this API campaign?">
-          <p className="text-sm text-ink-600">
+        <Modal surfaceClassName={API_DIALOG} open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete this API campaign?">
+          <p className="text-sm text-ink-300">
             Any application still calling this endpoint will start getting <strong>404</strong> errors. Past
             runs and the messages already sent are not affected.
           </p>
@@ -1766,7 +1786,7 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
 
       {view === 'list' && campaigns.length > 0 && <RunsPanel />}
 
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create API campaign">
+      <Modal surfaceClassName={API_DIALOG} open={showCreate} onClose={() => setShowCreate(false)} title="Create API campaign">
         <Field label="Name">
           <Input
             value={form.name}
@@ -1787,12 +1807,12 @@ export function ApiCampaignsTab({ onBack }: { onBack?: () => void }) {
         </Field>
 
         {approvedTemplates.length === 0 && (
-          <p className="mt-2 text-xs text-amber-700">
+          <p className="mt-2 text-xs text-amber-300">
             No Meta-approved templates yet. Submit one for approval first — only approved templates can be sent.
           </p>
         )}
 
-        <p className="mt-3 text-xs text-ink-500">
+        <p className="mt-3 text-xs text-ink-400">
           No audience to pick here: an API campaign receives its recipients with every request. Once saved,
           you'll get the endpoint and ready-to-paste code examples.
         </p>

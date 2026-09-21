@@ -121,12 +121,21 @@ export function Modal({
   children,
   footer,
   size = 'md',
+  surfaceClassName,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  /** Extra classes for the dialog panel itself.
+   *
+   *  A dialog renders through a portal on document.body, so it sits outside
+   *  whatever section opened it and can't inherit that section's surface. A
+   *  page with its own theme -- the API Campaigns section, which is dark --
+   *  would otherwise always open a white dialog on top of itself. Optional,
+   *  so every existing caller keeps the default light panel. */
+  surfaceClassName?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl';
 }) {
   useEffect(() => {
@@ -139,12 +148,17 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink-950/40 p-4 backdrop-blur-sm animate-fade-in" onClick={onClose}>
       <div
-        className={cn('mt-[6vh] w-full rounded-2xl bg-white shadow-soft animate-slide-up', widths[size])}
+        // bg-white only when no surface was supplied. Appending a second
+        // background class does NOT override the first: with two conflicting
+        // utilities on one element, Tailwind's generated stylesheet order
+        // decides, not the order in this string -- and bg-white won, leaving
+        // a white panel with the caller's white text invisible on it.
+        className={cn('mt-[6vh] w-full rounded-2xl shadow-soft animate-slide-up', widths[size], surfaceClassName ?? 'bg-white')}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-ink-100 px-6 py-4">
           <h2 className="text-base font-semibold text-ink-900">{title}</h2>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700">
+          <button onClick={onClose} aria-label="Close dialog" className="modal-close rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700">
             <X size={18} />
           </button>
         </div>
