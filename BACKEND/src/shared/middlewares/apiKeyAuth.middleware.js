@@ -45,6 +45,7 @@ function extractApiKey(req) {
 }
 
 export const authenticateApiKey = async (req, res, next) => {
+  console.log('[MARKER] authenticateApiKey middleware reached for', req.method, req.originalUrl);
   const presented = extractApiKey(req);
 
   if (!presented) {
